@@ -124,15 +124,31 @@ uint16_t program_crc16(const uint8_t *d, uint32_t n)
     return c;
 }
 
-/* name is 20 bytes, NUL-padded, not necessarily NUL-terminated if all 20 are used.
- * packed: version, name[20], v[96] as little-endian int16, chord[6], crc16 (LE) of everything before it */
+/* Record versions. Entry [v-1] = how many parameter values a version-v record stores (ids 0..n-1). A later phase adds
+ * ONE entry here (e.g. { P_COUNT_PHASE2 }) and bumps PROGRAM_VERSION; older records then load with the defaults for the
+ * ids they lack. Tests may predefine PROGRAM_VERSION_TABLE. */
+#ifndef PROGRAM_VERSION_TABLE
+#define PROGRAM_VERSION_TABLE { P_COUNT_PHASE1 }
+#endif
+static const uint16_t program_nparams[PROGRAM_VERSION] = PROGRAM_VERSION_TABLE;
+#define PROGRAM_NCOUNT P_COUNT_PHASE1   /* ids with a PARAMS[] entry in this build: all of them are clamped on load */
+
+uint32_t program_packed_size(unsigned version)
+{
+    if (version < 1 || version > PROGRAM_VERSION) return 0;
+    return 1 + PROGRAM_NAME_LEN + 2u * program_nparams[version - 1] + 6 + 2;
+}
+
+/* name: 20 bytes, NUL-padded; a full 20-character name has no terminator, so consumers must bound reads to 20.
+ * packed: version (always the current one), name[20], v[nparams of that version] as LE int16, chord[6], crc16 (LE) of
+ * everything before it. */
 int program_pack(const program_t *p, uint8_t *buf, uint32_t max)
 {
-    uint32_t o = 0;
-    if (max < PROGRAM_PACKED_SIZE) return -1;
-    buf[o++] = p->version;
+    uint32_t o = 0, size = program_packed_size(PROGRAM_VERSION);
+    if (max < size) return -1;
+    buf[o++] = PROGRAM_VERSION;
     memcpy(buf + o, p->name, PROGRAM_NAME_LEN); o += PROGRAM_NAME_LEN;
-    for (unsigned i = 0; i < PROGRAM_VALUES; i++) {
+    for (unsigned i = 0; i < program_nparams[PROGRAM_VERSION - 1]; i++) {
         buf[o++] = (uint8_t)((uint16_t)p->v[i] & 0xFF);
         buf[o++] = (uint8_t)((uint16_t)p->v[i] >> 8);
     }
@@ -143,21 +159,30 @@ int program_pack(const program_t *p, uint8_t *buf, uint32_t max)
     return (int)o;
 }
 
+/* Accepts any known version 1..PROGRAM_VERSION whose length and CRC match; unknown/future versions, wrong lengths, bad
+ * CRC and a chord note > 127 are rejected (-1, *p untouched). Ids the stored version lacks get their PARAMS default; all
+ * loaded values are clamped; the saved crc field is kept in p->crc. */
 int program_unpack(program_t *p, const uint8_t *buf, uint32_t n)
 {
     uint32_t o = 0;
-    if (n != PROGRAM_PACKED_SIZE) return -1;
-    if (buf[0] != PROGRAM_VERSION) return -1;
+    unsigned ver;
+    program_t t;
+    if (n < 1) return -1;
+    ver = buf[0];
+    if (n != program_packed_size(ver)) return -1;
     uint16_t c = (uint16_t)(buf[n - 2] | (buf[n - 1] << 8));
     if (c != program_crc16(buf, n - 2)) return -1;
-    memset(p, 0, sizeof *p);
-    p->version = buf[o++];
-    memcpy(p->name, buf + o, PROGRAM_NAME_LEN); o += PROGRAM_NAME_LEN;
-    for (unsigned i = 0; i < PROGRAM_VALUES; i++) {
-        p->v[i] = (int16_t)(uint16_t)(buf[o] | (buf[o + 1] << 8)); o += 2;
+    program_init(&t);                              /* defaults for everything the record does not carry */
+    o = 1;
+    memcpy(t.name, buf + o, PROGRAM_NAME_LEN); o += PROGRAM_NAME_LEN;
+    for (unsigned i = 0; i < program_nparams[ver - 1]; i++) {
+        t.v[i] = (int16_t)(uint16_t)(buf[o] | (buf[o + 1] << 8)); o += 2;
     }
-    for (unsigned i = 0; i < P_COUNT_PHASE1; i++) p->v[i] = param_clamp((uint16_t)i, p->v[i]);
-    memcpy(p->chord, buf + o, 6); o += 6;
-    p->crc = c;
+    for (unsigned i = 0; i < PROGRAM_NCOUNT; i++) t.v[i] = param_clamp((uint16_t)i, t.v[i]);
+    for (int i = 0; i < 6; i++) { if (buf[o + i] > 127) return -1; }
+    memcpy(t.chord, buf + o, 6);
+    t.version = PROGRAM_VERSION;                   /* in memory it is a current-version program */
+    t.crc = c;
+    *p = t;
     return 0;
 }

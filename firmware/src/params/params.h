@@ -34,10 +34,12 @@ enum param_id {
 
 extern const param_t PARAMS[P_COUNT_PHASE1];
 
-#define PROGRAM_VERSION 1
+#ifndef PROGRAM_VERSION
+#define PROGRAM_VERSION 1                 /* current record version; bump together with a PROGRAM_VERSIONS entry */
+#endif
 #define PROGRAM_NAME_LEN 20
 #define PROGRAM_VALUES 96                 /* sized for phases 2-3 */
-#define PROGRAM_PACKED_SIZE (1 + PROGRAM_NAME_LEN + 2 * PROGRAM_VALUES + 6 + 2)
+#define PROGRAM_PACKED_MAX (1 + PROGRAM_NAME_LEN + 2 * PROGRAM_VALUES + 6 + 2)   /* upper bound for any version */
 
 typedef struct {
     uint8_t version;
@@ -51,6 +53,8 @@ void program_init(program_t *p);                                    /* every val
 int  program_pack(const program_t *p, uint8_t *buf, uint32_t max);  /* bytes written or -1 */
 int  program_unpack(program_t *p, const uint8_t *buf, uint32_t n);  /* 0 ok, -1 bad crc/version/size */
 int16_t param_clamp(uint16_t id, int32_t value);
+/* bytes of a packed record of this version (version, name, v[nparams] LE, chord, crc); 0 if the version is unknown */
+uint32_t program_packed_size(unsigned version);
 uint16_t program_crc16(const uint8_t *d, uint32_t n);               /* CRC-16/CCITT-FALSE */
 
 #endif
