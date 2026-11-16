@@ -10,5 +10,5 @@ OUT = ../build/unit
 unit:
 	@mkdir -p $(OUT)
 	@set -e; for t in $(TESTS); do \
-	  echo "== $$t"; $(CC) $(CFLAGS) -o $(OUT)/$$t unit/$$t.c; $(OUT)/$$t; \
+	  echo "== $$t"; $(CC) $(CFLAGS) -o $(OUT)/$$t unit/$$t.c -lm; $(OUT)/$$t; \
 	done
