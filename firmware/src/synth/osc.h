@@ -5,7 +5,15 @@
  * Levels: every output is Q15 with the waveform's nominal +-1 at OSC_ONE = 16384 (-6 dBFS). Saw, triangle, square
  * and noise peak at +-16384; a thin pulse (DC-free, width 5.35 %) reaches 1.893 x 16384 = 31015 < 32767. The four
  * outputs of one voice therefore sum to < 2^17 and six voices to < 2^20: the mixer has 11 bits of int32 headroom for
- * its levels and overdrive, and scales the voice to the bus itself. */
+ * its levels and overdrive, and scales the voice to the bus itself.
+ *
+ * Sub (controller's ruling, to be checked by ear): a divide-by-2 flip-flop clocked by VCO 1, as a hardware /2 on
+ * VCO 1's output would be. It flips on every VCO 1 cycle start: each natural wrap AND each sync restart. Free running
+ * it is a square exactly one octave below VCO 1. Under sync its period is two flips, whatever VCO 1 does in between:
+ * with VCO 1 between 1x and 2x VCO 2 there is one wrap plus one restart per VCO 2 cycle, so the sub is a square at
+ * VCO 2's frequency; when VCO 1 passes 2x VCO 2 a second natural wrap appears per cycle, the flip count per VCO 2
+ * cycle goes from even to odd and the sub jumps an octave (to VCO 2 / 2), and so on at every multiple: sweeping a
+ * synced VCO 1 makes the sub step between VCO 2 and VCO 2 / 2 (with a duty cycle that follows VCO 1). */
 #ifndef KNOBI_OSC_H
 #define KNOBI_OSC_H
 #include <stdint.h>
@@ -21,7 +29,7 @@ typedef struct {
     uint8_t sync;                         /* 1: VCO 1 restarts on every VCO 2 cycle */
     uint32_t noise;                       /* xorshift32 state, never 0 */
     /* derived by osc_set_pitch / osc_set_shape, and the sub / sync state (internal) */
-    uint32_t inv1, inv2;                  /* Q16 of 2^32 / inc, for the PolyBLEP distance t / dt without a divide */
+    uint32_t inv1, inv2;                  /* Q14 of 2^32 / inc, for the PolyBLEP distance t / dt without a divide */
     uint32_t w1, w2;                      /* pulse width as a Q32 phase offset (2^31 = square) */
     int32_t a1, a2, b2;                   /* Q30 amounts: VCO1 pulse, VCO2 pulse, VCO2 saw (1 - triangle) */
     uint32_t sync_tb;                     /* VCO 1 phase just before its last sync restart */

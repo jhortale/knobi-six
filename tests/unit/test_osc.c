@@ -263,19 +263,55 @@ static double bspline(double x)
     return x >= 2 ? 0 : x >= 1 ? (2 - x) * (2 - x) * (2 - x) / 6 : 2.0 / 3 - x * x + x * x * x / 2;
 }
 static double ramp(double p) { p -= floor(p); return 2 * p - 1; }
-static double naive_at(const osc_t *o, int vco, double t)   /* t in samples from the start (phases 0 at t = 0) */
+/* The naive waveforms on the oscillator's own phases, with VCO 1's restarts where osc_tick makes them: at every
+ * VCO 2 wrap whose sample had sync on (the sync switch may change at one sample, 'nt'). */
+typedef struct {
+    double dt1, dt2, p10, p20, a1, w1, a2, b2, w2;
+    double rt[4096], fl[4096];   /* restart times; sub flips up to and including each restart */
+    int nr;
+} naive_t;
+static void naive_init(naive_t *r, const osc_t *o, int sync0, int nt, int sync1, double horizon)
 {
-    double dt1 = o->inc1 / 4294967296.0, dt2 = o->inc2 / 4294967296.0;
+    r->dt1 = o->inc1 / 4294967296.0, r->dt2 = o->inc2 / 4294967296.0;
+    r->p10 = o->ph1 / 4294967296.0, r->p20 = o->ph2 / 4294967296.0;
+    r->a1 = o->a1 / 1073741824.0, r->w1 = o->w1 / 4294967296.0;
+    r->a2 = o->a2 / 1073741824.0, r->b2 = o->b2 / 1073741824.0, r->w2 = o->w2 / 4294967296.0;
+    r->nr = 0;
+    double t0 = 0, ph = r->p10, flips = 0;
+    for (int k = 1; r->nr < 4096; k++) {
+        double tw = (k - r->p20) / r->dt2;
+        if (tw > horizon) break;
+        int n = (int)floor(tw);
+        if (!(n < nt ? sync0 : sync1)) continue;
+        double before = ph + (tw - t0) * r->dt1;
+        flips += floor(before) + 1;
+        r->rt[r->nr] = tw, r->fl[r->nr] = flips, r->nr++;
+        t0 = tw, ph = 0;
+    }
+}
+static double naive_at(const naive_t *r, int vco, double t)
+{
     if (vco == 2) {
-        double p = t * dt2 - floor(t * dt2), tri = 1 - 4 * fabs(p - 0.5), b = o->b2 / 1073741824.0;
-        return tri + b * (ramp(p) - tri) - o->a2 / 1073741824.0 * ramp(p - o->w2 / 4294967296.0);
+        double p = r->p20 + t * r->dt2;
+        p -= floor(p);
+        double tri = 1 - 4 * fabs(p - 0.5);
+        return tri + r->b2 * (ramp(p) - tri) - r->a2 * ramp(p - r->w2);
     }
-    double p = o->sync ? (t - floor(t * dt2) / dt2) * dt1 : t * dt1;
-    if (vco == 3) {   /* the sub flips at every VCO 1 wrap and restart */
-        double flips = o->sync ? floor(t * dt2) * (1 + floor(dt1 / dt2)) + floor(p) : floor(p);
-        return fmod(flips, 2) ? -1 : 1;
+    int lo = 0, hi = r->nr;   /* the first restart after t */
+    while (lo < hi) { int m = (lo + hi) / 2; if (r->rt[m] <= t) lo = m + 1; else hi = m; }
+    double p = lo ? (t - r->rt[lo - 1]) * r->dt1 : r->p10 + t * r->dt1;
+    if (vco == 3) return fmod((lo ? r->fl[lo - 1] : 0) + floor(p), 2) ? -1 : 1;
+    return ramp(p) - r->a1 * ramp(p - r->w1);
+}
+static double bspline_at(const naive_t *r, int vco, double n)
+{
+    const int m = 16000;
+    double acc = 0;
+    for (int j = 0; j < m; j++) {
+        double tau = -2 + 4.0 * (j + 0.5) / m;
+        acc += bspline(tau) * naive_at(r, vco, n - tau);
     }
-    return ramp(p) - o->a1 / 1073741824.0 * ramp(p - o->w1 / 4294967296.0);
+    return acc * 4 / m;
 }
 static void bspline_exact(void)
 {
@@ -286,27 +322,80 @@ static void bspline_exact(void)
         { 1, 103.3, 84, 140, 200, 0, 127, 1 }, { 1, 70, 95, 255, 20, 0, 127, 1 }, { 1, 122, 111, 255, 250, 0, 127, 1 },
         { 3, 100.2, 57, 0, 127, 0, 127, 0 }, { 3, 64, 57, 0, 127, 0, 127, 1 }, { 3, 103.3, 84, 0, 127, 0, 127, 1 },
         { 3, 70, 95, 0, 127, 0, 127, 1 }, { 1, 120, 100, 255, 5, 0, 127, 1 }, { 3, 120, 100, 0, 127, 0, 127, 1 },
+        /* VCO 2 near the top: the last and next restart windows overlap (VCO 2 period 2.2..3 samples) */
+        { 1, 133, 130, 0, 127, 0, 127, 1 }, { 1, 133, 130, 255, 40, 0, 127, 1 }, { 3, 133, 130, 0, 127, 0, 127, 1 },
+        { 1, 127, 127, 255, 200, 0, 127, 1 }, { 1, 127, 135, 170, 90, 0, 127, 1 }, { 3, 127, 135, 0, 127, 0, 127, 1 },
+        { 2, 57, 135, 0, 127, 0, 127, 0 }, { 2, 57, 133, 0, 127, 254, 60, 0 },
     };
     double worst = 0;
-    for (unsigned k = 0; k < sizeof c / sizeof *c; k++) {
+    unsigned nc = sizeof c / sizeof *c;
+    static naive_t r;
+    for (unsigned k = 0; k < nc; k++) {
         osc_t o;
         setup(&o, c[k].n1, c[k].n2, c[k].s1, c[k].p1, c[k].s2, c[k].p2, c[k].sync);
+        naive_init(&r, &o, c[k].sync, 0, c[k].sync, 1210);
         int32_t out[4];
         for (int n = 0; n < 1200; n++) {
             osc_tick(&o, out);
             if (n < 4) continue;   /* the kernel reaches before the start */
-            double acc = 0;
-            const int m = 16000;
-            for (int j = 0; j < m; j++) {
-                double tau = -2 + 4.0 * (j + 0.5) / m;
-                acc += bspline(tau) * naive_at(&o, c[k].vco, n - tau);
-            }
-            double e = fabs(out[c[k].vco == 3 ? OSC_SUB : c[k].vco - 1] / (double)OSC_ONE - acc * 4 / m);
+            double e = fabs(out[c[k].vco == 3 ? OSC_SUB : c[k].vco - 1] / (double)OSC_ONE - bspline_at(&r, c[k].vco, n));
+            if (getenv("OSC_DEBUG") && e > 0.001) printf("  case %u n %d err %.5f\n", k, n, e);
             if (e > worst) worst = e;
         }
     }
-    printf("bspline_exact: saw, pulse, blends, triangle, sync, sub (18 cases): worst deviation %.6f of full scale\n", worst);
+    printf("bspline_exact: saw, pulse, blends, triangle, sync, sub, VCO 2 at the top (%u cases): worst deviation %.6f"
+           " of full scale\n", nc, worst);
     CHECK(worst < 0.001);
+
+    /* LOW FREQ VCO 2 (0.5 and 0.255 Hz) with sync on: VCO 2 starts just before a wrap, VCO 1 anywhere */
+    static const struct { int vco; double n1, n2; int s1, p1; } lf[] = {
+        { 1, 60, -50, 0, 127 }, { 1, 60, -60, 255, 50 }, { 3, 60, -60, 0, 127 }, { 1, 100, -55, 120, 200 },
+    };
+    worst = 0;
+    for (unsigned k = 0; k < sizeof lf / sizeof *lf; k++) {
+        osc_t o;
+        setup(&o, lf[k].n1, lf[k].n2, lf[k].s1, lf[k].p1, 0, 127, 1);
+        o.ph2 = 0u - o.inc2 * 300 - o.inc2 / 3;   /* a wrap at sample 300.33 */
+        o.ph1 = 0x12345678u;
+        naive_init(&r, &o, 1, 0, 1, 1210);
+        int32_t out[4];
+        for (int n = 0; n < 600; n++) {
+            osc_tick(&o, out);
+            if (n < 4) continue;
+            double e = fabs(out[lf[k].vco == 3 ? OSC_SUB : 0] / (double)OSC_ONE - bspline_at(&r, lf[k].vco, n));
+            if (e > worst) worst = e;
+        }
+    }
+    printf("bspline_exact: LOW FREQ VCO 2 with sync (4 cases): worst deviation %.6f\n", worst);
+    CHECK(worst < 0.001);
+
+    /* The sync switch flipped at one sample while a restart window is open. Turned off right after a restart, or on
+     * right after a free wrap: exact. Flipped at the sample of a wrap: the two samples before it predicted the
+     * other case (a switch cannot be foreseen); exact everywhere else, and bounded there. */
+    static const struct { int vco, s1, p1, from, to, at; } tg[] = {   /* at: switch at the wrap's sample + at */
+        { 1, 0, 127, 1, 0, 1 }, { 1, 255, 60, 0, 1, 1 }, { 3, 0, 127, 1, 0, 1 }, { 3, 0, 127, 0, 1, 1 },
+        { 1, 0, 127, 1, 0, 0 }, { 1, 255, 60, 0, 1, 0 }, { 3, 0, 127, 1, 0, 0 }, { 3, 0, 127, 0, 1, 0 },
+    };
+    double near = 0;
+    worst = 0;
+    for (unsigned k = 0; k < sizeof tg / sizeof *tg; k++) {
+        osc_t o;
+        setup(&o, 103.3, 84, tg[k].s1, tg[k].p1, 0, 127, tg[k].from);
+        int nt = (int)floor(5 / (o.inc2 / 4294967296.0)) + tg[k].at;   /* VCO 2's 5th wrap */
+        naive_init(&r, &o, tg[k].from, nt, tg[k].to, 1210);
+        int32_t out[4];
+        for (int n = 0; n < 600; n++) {
+            if (n == nt) o.sync = (uint8_t)tg[k].to;
+            osc_tick(&o, out);
+            if (n < 4) continue;
+            double e = fabs(out[tg[k].vco == 3 ? OSC_SUB : 0] / (double)OSC_ONE - bspline_at(&r, tg[k].vco, n));
+            if (!tg[k].at && n >= nt - 2 && n < nt) { if (e > near) near = e; }
+            else if (e > worst) worst = e;
+        }
+    }
+    printf("bspline_exact: sync switched in a window (8 cases): worst deviation %.6f; the 2 samples before an"
+           " unforeseeable switch %.4f\n", worst, near);
+    CHECK(worst < 0.001 && near < 0.01);
 }
 
 /* hard sync: the alias level against the naive sync and against a free-running VCO 1 at the same frequency */
@@ -450,6 +539,10 @@ static void bench(void)
         { "blend + blend", 100, 60, 190, 60, 0, 60, 67 },
         { "sync saw, VCO2 C4", 0, 127, 0, 127, 1, 79, 60 },
         { "sync pulse, VCO2 C6", 255, 60, 254, 60, 1, 103, 84 },
+        { "pulse+pulse, note 127", 255, 60, 254, 60, 0, 127, 127 },
+        { "WORST pulse+pulse+sync 127/127", 255, 60, 254, 60, 1, 127, 127 },
+        { "pulse+pulse+sync 127/120", 255, 60, 254, 60, 1, 127, 120 },
+        { "pulse+pulse+sync 135/130", 255, 60, 254, 60, 1, 135, 130 },
     };
     for (unsigned i = 0; i < sizeof c / sizeof *c; i++) {
         osc_t o;
@@ -460,7 +553,7 @@ static void bench(void)
         clock_t t0 = clock();
         for (long k = 0; k < n; k++) { osc_tick(&o, out); sink += out[0] + out[1] + out[2] + out[3]; }
         double ns = (double)(clock() - t0) / CLOCKS_PER_SEC * 1e9 / n;
-        printf("bench: %-24s %.2f ns per voice-sample (host)\n", c[i].name, ns);
+        printf("bench: %-32s %.2f ns per voice-sample (host)\n", c[i].name, ns);
     }
 }
 
