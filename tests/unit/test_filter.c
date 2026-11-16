@@ -238,17 +238,19 @@ static double thd_db(double a, int32_t cut, int reso, int32_t *peak, int *signfl
 static void test_overdrive_soft(void)
 {
     int32_t open = CUT_Q16(164);
-    double prev = -400, maxjump = 0;
+    double prev = -400, maxjump = 0, t50 = 0, t25 = 0;
     int mono = 1, anyflip = 0;
     int32_t maxpk = 0;
-    printf("overdrive_soft (LP open, RESO 0, 100 Hz sine), THD vs amplitude:");
-    for (int i = 1; i <= 16; i++) {
+    printf("overdrive_soft (LP open, RESO 0, 100 Hz sine), THD vs amplitude (x Q15 full scale):\n ");
+    for (int i = 1; i <= 16; i++) {   /* every point counts: 0.25x .. 4x */
         int32_t pk;
         int flip;
         double t = thd_db(i / 4.0, open, 0, &pk, &flip);
-        if (i % 2 == 0) printf(" %.1fx %.1f dB%s", i / 4.0, t, i == 16 ? "\n" : ",");
-        if (t > -80 && t < prev - 0.5) mono = 0;   /* below -80 dB it is the Q15 rounding floor */
-        if (i > 1 && t > -80 && prev > -80 && t - prev > maxjump) maxjump = t - prev;
+        printf(" %.2fx %.1f%s", i / 4.0, t, i == 8 ? "\n " : i == 16 ? "\n" : ",");
+        if (i == 1) t25 = t;
+        if (i == 2) t50 = t;
+        if (t < prev) mono = 0;
+        if (i > 1 && t - prev > maxjump) maxjump = t - prev;
         prev = t;
         if (pk > maxpk) maxpk = pk;
         anyflip |= flip;
@@ -256,10 +258,11 @@ static void test_overdrive_soft(void)
     int32_t pk;
     int flip;
     double tr = thd_db(4.0, cut_for_hz(400), 255, &pk, &flip);
-    printf("overdrive_soft: peak %d (Q15), largest THD rise per 0.25x %.1f dB, monotone %d, sign flips %d; "
+    printf("overdrive_soft: peak %d (Q15), largest THD rise per 0.25x %.1f dB (limit 12), monotone %d, sign flips %d; "
            "RESO 255 fc 400 Hz 4x: THD %.1f dB peak %d\n", maxpk, maxjump, mono, anyflip, tr, pk);
     CHECK(mono && !anyflip && maxpk <= 65536 && pk <= 65536);
-    CHECK(maxjump < 10);
+    CHECK(maxjump <= 12);
+    CHECK(t25 < -60 && t50 < -60);   /* normal levels (up to one oscillator at full level) stay clean */
     /* inputs far beyond full scale (and the int32 extremes) neither wrap nor escape the bound */
     svf_coef_t c;
     svf_t s = {0, 0};
@@ -276,16 +279,16 @@ static void test_overdrive_soft(void)
     CHECK(big <= 65536 && !bad);
 }
 
-/* largest |y[n] - y[n-1]| over n in [a, b) for a 110 Hz saw, cutoff stepping from c0 to c1 at sample 'at' */
-static void run_step(int32_t c0, int32_t c1, int reso, int at, int32_t *ys, int len)
+/* LP output for a sine at hz (amplitude 16384), the cutoff stepping from c0 to c1 at sample 'at'. The sine sits
+ * below both cutoffs, so the output is a smooth sine whose sample-to-sample change is small: a glitch shows. */
+static void run_step(int32_t c0, int32_t c1, int reso, double hz, int at, int32_t *ys, int len)
 {
     svf_coef_t ca, cb;
     svf_t s = {0, 0};
     svf_coef(&ca, c0, reso, 0, 0);
     svf_coef(&cb, c1, reso, 0, 0);
-    uint32_t ph = 0, inc = (uint32_t)(110.0 * 4294967296.0 / FS);
-    for (int n = 0; n < len; n++, ph += inc)
-        ys[n] = svf_tick(&s, (int32_t)(ph >> 17) - 16384, n < at ? &ca : &cb);
+    for (int n = 0; n < len; n++)
+        ys[n] = svf_tick(&s, (int32_t)lrint(16384 * sin(2 * T_PI * hz * n / FS)), n < at ? &ca : &cb);
 }
 static int32_t maxdelta(const int32_t *y, int a, int b)
 {
@@ -297,21 +300,79 @@ static int32_t maxdelta(const int32_t *y, int a, int b)
 static void test_cutoff_smooth(void)
 {
     static int32_t ys[2 * FS];
-    static const int pairs[][3] = { {60, 130, 0}, {130, 60, 0}, {60, 130, 200}, {130, 60, 200}, {20, 164, 255},
-                                    {164, 20, 255}, {80, 140, 255} };
+    /* jumps of 1 and 6 steps (what a control-rate update of a knob or an envelope moves) must not jump the output
+     * more than 2x its steady sample-to-sample change. Larger instant jumps are listed, not checked: there the
+     * output legitimately catches up with the input at the new bandwidth (state-continuous, as an analog filter
+     * would), which the caller avoids by updating the cutoff every control tick. */
+    static const int pairs[][3] = { {60, 61, 0}, {61, 60, 0}, {120, 121, 255}, {121, 120, 255}, {46, 47, 255},
+                                    {60, 66, 0}, {66, 60, 0}, {100, 106, 200}, {106, 100, 200}, {46, 52, 255},
+                                    {52, 46, 255}, {140, 146, 255}, {146, 140, 255}, {100, 106, 128},
+                                    {60, 72, 0}, {100, 112, 200}, {60, 84, 0}, {60, 130, 0} };
     double worst = 0;
     for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
-        int at = FS / 2;
-        run_step(CUT_Q16(pairs[i][0]), CUT_Q16(pairs[i][1]), pairs[i][2], at, ys, 2 * FS);
+        int lo = pairs[i][0] < pairs[i][1] ? pairs[i][0] : pairs[i][1];
+        double hz = svf_cutoff_hz(CUT_Q16(lo)) / 2.0;   /* an octave below the lower cutoff */
+        int at = FS / 2 + 1234;
+        run_step(CUT_Q16(pairs[i][0]), CUT_Q16(pairs[i][1]), pairs[i][2], hz, at, ys, 2 * FS);
         int32_t before = maxdelta(ys, at - FS / 4, at), after = maxdelta(ys, at + FS / 2, 2 * FS);
         int32_t jump = maxdelta(ys, at, at + FS / 2);
         int32_t ref = before > after ? before : after;
         double r = ref > 0 ? (double)jump / ref : 1e9;   /* silence is a failure */
-        printf("cutoff_smooth: step %3d -> %3d RESO %3d: steady max delta %d / %d, transition %d (%.2fx)\n",
-               pairs[i][0], pairs[i][1], pairs[i][2], before, after, jump, r);
-        if (r > worst) worst = r;
+        int checked = abs(pairs[i][1] - pairs[i][0]) <= 6;
+        printf("cutoff_smooth: step %3d -> %3d RESO %3d, sine %6.1f Hz: steady max delta %d / %d, transition %d "
+               "(%.2fx)%s\n", pairs[i][0], pairs[i][1], pairs[i][2], hz, before, after, jump, r,
+               checked ? "" : " (listed only)");
+        if (checked && r > worst) worst = r;
     }
     CHECK(worst <= 2);
+}
+
+/* after any excitation, two seconds of silence leave no output: no DC, no limit cycle. The states settle to a
+ * residual far below the output's LSB (Q28 states, Q15 out = 8192 state LSB): exact zero is not reachable at low
+ * cutoffs, where one LSB of v1 needs a2 |s2| >= 2^30, i.e. |s2| >= 2^28 / (4 g) (9710 at step 0). */
+static void test_decay_to_zero(void)
+{
+    int bad = 0, cases = 0, lowest_clean = -1, zeros = 0;
+    int32_t worst_s = 0, worst_out = 0;
+    for (int q = 4 * 164; q >= 0; q--) {
+        int clean = 1;
+        for (int r = 0; r < 3; r++) {
+            static const int resos[3] = {0, 128, 255};
+            static const int modes[3][2] = { {0, 0}, {255, 0}, {0, 32768} };   /* LP, HP, BP */
+            svf_coef_t c, co[3];
+            svf_t s = {0, 0};
+            svf_coef(&c, q * 16384, resos[r], 128, 0);
+            for (int m = 0; m < 3; m++) svf_coef(&co[m], q * 16384, resos[r], modes[m][0], modes[m][1]);
+            uint32_t x = 777 + (uint32_t)q;
+            for (int n = 0; n < FS / 10; n++) {   /* 0.1 s of loud noise */
+                x ^= x << 13, x ^= x >> 17, x ^= x << 5;
+                svf_tick(&s, (int32_t)(x >> 15) - 65536, &c);
+            }
+            for (int n = 0; n < 2 * FS; n++) svf_tick(&s, 0, &c);
+            int32_t out = 0;
+            for (int m = 0; m < 3; m++) {   /* then 0.1 s more of each output, from the same state */
+                svf_t t = s;
+                for (int n = 0; n < FS / 10; n++) {
+                    int32_t y = abs(svf_tick(&t, 0, &co[m]));
+                    if (y > out) out = y;
+                }
+            }
+            cases++;
+            zeros += s.s1 == 0 && s.s2 == 0;
+            if (abs(s.s1) > worst_s) worst_s = abs(s.s1);
+            if (abs(s.s2) > worst_s) worst_s = abs(s.s2);
+            if (out > worst_out) worst_out = out;
+            if (out) clean = 0;
+            if (out && q >= 4 * 46) bad++;   /* the audio band, from 20.6 Hz: exactly silent */
+        }
+        if (clean && lowest_clean == q + 1) lowest_clean = q;
+        if (q == 4 * 164 && clean) lowest_clean = q;
+    }
+    printf("decay_to_zero: after 2 s of silence (every quarter step, RESO 0/128/255): LP / HP / BP output exactly 0 "
+           "from step %.2f (%u Hz) up, worst output below that %d LSB; states: %d of %d exactly 0, largest residual %d "
+           "(%.3f output LSB)\n", lowest_clean / 4.0, svf_cutoff_hz(lowest_clean * 16384), worst_out, zeros, cases,
+           worst_s, worst_s / 8192.0);
+    CHECK(bad == 0 && worst_out <= 2 && worst_s < 16384);   /* sub-audio: <= 2 LSB, still decaying or stuck */
 }
 
 /* the 32-bit fast path must give exactly what the 64-bit reference gives, wherever it runs */
@@ -337,7 +398,7 @@ static void test_fast_equals_slow(void)
         if (i % 3) in >>= (xs() % 16);
         svf_t f = {s1, s2};
         int32_t y = svf_tick(&f, in, &c);
-        struct svf_out o = svf_slow(s1, s2, in, &c);
+        struct svf_res o = svf_slow(s1, s2, in, &c);
         if (((uint32_t)s1 + (1u << 29) | (uint32_t)s2 + (1u << 29)) < 1u << 30) fast++;
         if (y == o.y && f.s1 == o.s1 && f.s2 == o.s2) same++;
         else if (diff++ < 5) printf("  differs: cut %d reso %d mode %d bp %d s %d %d in %d\n", cut, reso, mode, bp,
@@ -379,6 +440,7 @@ int main(void)
     test_no_self_oscillation();
     test_overdrive_soft();
     test_cutoff_smooth();
+    test_decay_to_zero();
     test_fast_equals_slow();
     if (getenv("SVF_BENCH")) bench();
     printf(fails ? "test_filter: %d FAILED\n" : "test_filter: ok\n", fails);

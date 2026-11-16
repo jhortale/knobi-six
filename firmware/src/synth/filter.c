@@ -3,11 +3,11 @@
  *
  * Ported from the ANALOG engine (João Hortale, smk37-analog, branch analog-engine, web/synth/analog.c, MIT): the
  * zero-delay-feedback (TPT, Zavalishin / Simper) SVF with its 32-bit fast path svf_tick and the exact fallback
- * svf_slow, the soft clip soft / soft_shoulder (input, band-pass node, output), recip_q30 and coef_at's
+ * svf_slow, the soft clip soft / soft_shoulder (band-pass node, output), recip_q30 and coef_at's
  * coefficients, the cutoff table interpolation and reso_k's exponential Q map; and its exp2 polynomial
  * (web/synth/fixed.c, fm_exp2_fixed). New here: the 165-step semitone cutoff table, the damping floor at low cutoffs,
- * the band-pass output and its crossfade with the MODE output, a slow path with only 32 x 32 products, and the
- * Newton step of recip_q30 in 32 x 32 products.
+ * the input drive polynomial, the band-pass output and its crossfade with the MODE output, a slow path with only
+ * 32 x 32 products, and the Newton step of recip_q30 in 32 x 32 products.
  *
  * Fixed point: the filter domain is Q28 (2^28 = Q15 32768 = the soft-clip knee); g Q28, k Q28, a1 / a2 Q30, the
  * output gains Q15. Per sample: only 32 x 32 -> 64 products, no division. Per svf_coef call (control rate): one
@@ -19,6 +19,7 @@
 #define SVF_KNEE INT32_C(268435456)        /* 2^28: Q28 nominal full scale, the soft-clip knee */
 #define SVF_Q24 INT32_C(16777216)
 #define SVF_Q30 INT32_C(1073741824)
+#define SVF_HALF31 (INT64_C(1) << 30)          /* rounds the >> 31 of the band-pass sum (a floor leaves a DC limit cycle) */
 #define SVF_RESO_STEP 371326               /* log2(50) / 255 in Q24: k = 2 * 50^(-reso / 255), Q 0.5 .. 25 */
 /* Damping floor: k >= ALPHA / (pi fc), i.e. the ring of the resonance decays at least ALPHA = 15 neper / s (an
  * impulse falls by 130 dB a second), whatever RESO. It only acts below ~120 Hz, where RESO 255's Q 25 would ring for
@@ -102,12 +103,34 @@ SVF_HOT int32_t svf_soft(int32_t x)
     return svf_soft_shoulder(x);
 }
 
-/* Q15 input -> Q28, clamped to +-2^17 (4 x Q15 full scale) first so the shift cannot overflow (+-2^30) */
-SVF_HOT int32_t svf_in(int32_t in)
+/* Input drive (the mixer overdrive): Q15 in, Q28 out. An odd polynomial with no linear zone, so saturation grows
+ * gradually from the lowest levels instead of switching on at a knee: with A = |x| / 32768 (Q15 full scale = 1),
+ *   P(A) = A - 0.0012 A^2 - 0.007 A^3 - 0.005 A^5,   flat at P(2.429) = 1.899 for A >= 2.429 (where P' = 0).
+ * THD of a sine: -75 dB at 0.25 x, -64 at 0.5 x (OSC_ONE: one oscillator at full level), -49 at 1 x, -32 at 1.5 x,
+ * -12 at 4 x, rising by <= 12 dB per 0.25 x (the A^2 term keeps the bottom from rising 12 dB per doubling like a pure
+ * cubic would). Gain at 0.5 x: -0.02 dB. P is monotone, |P(A)| <= A, same sign, and the cap 1.899 x 2^28 < 2^29 - 2^16
+ * keeps svf_tick's input bound. Fixed point: u = A in Q29 (A < 2.43, < 2^30.3), A^2 Q26, A^4 Q20, the sum Q30. */
+#define SVF_DRIVE_AM 79594                 /* 2.429 x 32768: the top of the polynomial, Q15 */
+#define SVF_DRIVE_CAP 509712821            /* P(2.429) x 2^28 */
+#define SVF_DRIVE_K2 10307922              /* 0.0012 x 2^33 */
+#define SVF_DRIVE_K3 481036337             /* 0.007 x 2^36 */
+#define SVF_DRIVE_K5 5368709               /* 0.005 x 2^30 */
+SVF_HOT int32_t svf_mulh(int32_t a, int32_t b)
 {
-    if (in > 131072) in = 131072;
-    if (in < -131072) in = -131072;
-    return in * 8192;
+    return (int32_t)(((int64_t)a * b) >> 32);
+}
+SVF_HOT int32_t svf_drive(int32_t in)
+{
+    uint32_t a = in < 0 ? 0u - (uint32_t)in : (uint32_t)in;
+    int32_t y = SVF_DRIVE_CAP;
+    if (a < SVF_DRIVE_AM) {
+        int32_t q = (int32_t)a * 8192, u = q * 2;   /* Q28, Q29 */
+        int32_t a2 = svf_mulh(u, u), a4 = svf_mulh(a2, a2);
+        int32_t p = svf_mulh(u, SVF_DRIVE_K2) + svf_mulh(a2, SVF_DRIVE_K3) +
+                    (int32_t)(((int64_t)a4 * SVF_DRIVE_K5) >> 20);
+        y = q - (int32_t)(((int64_t)q * p) >> 30);
+    }
+    return in < 0 ? -y : y;
 }
 /* Q28 -> Q15, rounded (floor would leave a -1 LSB tail on a decayed negative ring) */
 SVF_HOT int32_t svf_out(int32_t y)
@@ -115,28 +138,29 @@ SVF_HOT int32_t svf_out(int32_t y)
     return (y + 4096) >> 13;
 }
 
-/* One TPT SVF sample, the reference arithmetic (64-bit sums of 32 x 32 products, saturating to int32): input soft
- * clip; band-pass v1 = a1 s1 + a2 (x - s2), soft-clipped at twice the knee (the resonance limit: it bounds the loop
+/* One TPT SVF sample, the reference arithmetic (64-bit sums of 32 x 32 products, saturating to int32): input drive;
+ * band-pass v1 = a1 s1 + a2 (x - s2) (the >> 31 rounded), soft-clipped at twice the knee (the resonance limit: it bounds the loop
  * at any RESO like an overdriven analog core); low-pass v2 = s2 + g v1 (exact for the clipped v1); high-pass
  * x - k v1 - v2; y = lp v2 + hp hp + bp v1, soft-clipped. lp + hp = x - k v1: the notch at MODE 128. Used when the
  * states are large or the output overflows; svf_tick below is the fast path and agrees with it bit for bit. */
-struct svf_out {
+struct svf_res {
     int32_t y, s1, s2;
 };
-SVF_COLD struct svf_out svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_coef_t *c)
+SVF_COLD struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_coef_t *c)
 {
-    int32_t x = svf_soft(svf_in(in));
+    int32_t x = svf_drive(in);
     /* |a1 s1| < 2^61, |a2 x|, |a2 s2| < 2^60 (a2 = g / (1 + g (g + k)) <= 1/2): the sum fits, and >> 31 fits int32 */
-    int32_t v1 = 2 * svf_soft(svf_sat32(((int64_t)c->a1 * s1 + (int64_t)c->a2 * x - (int64_t)c->a2 * s2) >> 31));
+    int32_t v1 = 2 * svf_soft(svf_sat32(((int64_t)c->a1 * s1 + (int64_t)c->a2 * x - (int64_t)c->a2 * s2 +
+                                                     SVF_HALF31) >> 31));
     int32_t v2 = svf_sat32(s2 + (((int64_t)c->g * v1) >> 28));
     int32_t hp = svf_sat32((int64_t)x - (((int64_t)c->k * v1) >> 28) - v2);
     int64_t y = ((int64_t)v2 * c->lp + (int64_t)hp * c->hp + (int64_t)v1 * c->bp) >> 15;
-    struct svf_out o = {svf_out(svf_soft(svf_sat32(y))), svf_sat32(2 * (int64_t)v1 - s1), svf_sat32(2 * (int64_t)v2 - s2)};
+    struct svf_res o = {svf_out(svf_soft(svf_sat32(y))), svf_sat32(2 * (int64_t)v1 - s1), svf_sat32(2 * (int64_t)v2 - s2)};
     return o;
 }
 
-/* The same sample in 32-bit arithmetic. Inside the gate |s1|, |s2| < 2^29, and |x| <= 2^29 - 65536 after the input
- * clip, so x - s2 fits. For the linear SVF (D = 1 + g (g + k), 0 <= k <= 2, any g >= 0; 1 / D <= 1, 2 g / D <= 1,
+/* The same sample in 32-bit arithmetic. Inside the gate |s1|, |s2| < 2^29, and |x| <= 1.899 x 2^28 < 2^29 - 65536 after
+ * the input drive, so x - s2 fits. For the linear SVF (D = 1 + g (g + k), 0 <= k <= 2, any g >= 0; 1 / D <= 1, 2 g / D <= 1,
  * g^2 / D < 1, (g + k) / D <= 2):
  *   v1 = (s1 + g (x - s2)) / D            |g v1| <= |s1| / 2 + |x - s2| < 1.25 x 2^30
  *   2 v1 - s1 = (2 / D - 1) s1 + 2 g (x - s2) / D        <= |s1| + |x - s2| < 1.5 x 2^30
@@ -155,8 +179,8 @@ int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c)
 {
     int32_t s1 = f->s1, s2 = f->s2;
     if (__builtin_expect(((uint32_t)s1 + (1u << 29) | (uint32_t)s2 + (1u << 29)) < 1u << 30, 1)) {
-        int32_t x = svf_soft(svf_in(in_q15));
-        int32_t v1 = 2 * svf_soft((int32_t)(((int64_t)c->a1 * s1 + (int64_t)c->a2 * (x - s2)) >> 31));
+        int32_t x = svf_drive(in_q15);
+        int32_t v1 = 2 * svf_soft((int32_t)(((int64_t)c->a1 * s1 + (int64_t)c->a2 * (x - s2) + SVF_HALF31) >> 31));
         int32_t gv = (int32_t)(((int64_t)c->g * v1) >> 28), v2 = s2 + gv;
         int32_t hp = (int32_t)((uint32_t)x - (uint32_t)(int32_t)(((int64_t)c->k * v1) >> 28) - (uint32_t)v2);
         int64_t y = ((int64_t)v2 * c->lp + (int64_t)hp * c->hp + (int64_t)v1 * c->bp) >> 15;
@@ -166,7 +190,7 @@ int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c)
             return svf_out(svf_soft((int32_t)y));
         }
     }
-    struct svf_out o = svf_slow(s1, s2, in_q15, c);
+    struct svf_res o = svf_slow(s1, s2, in_q15, c);
     f->s1 = o.s1;
     f->s2 = o.s2;
     return o.y;

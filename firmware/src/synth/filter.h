@@ -4,8 +4,9 @@
  * band-pass; RESONANCE never self-oscillates; the input and the band-pass node saturate softly. Integers only.
  *
  * Levels: input and output are Q15 like the oscillators (osc.h: OSC_ONE = 16384 is a waveform's +-1). Unity gain in
- * the pass band. The input is linear up to +-32768 (two oscillators at full level), then a soft shoulder rises to
- * +-65536 at 3 x 32768 and stays there: high mixer levels overdrive softly instead of wrapping. The output is
+ * the pass band. The input drive is an odd polynomial that saturates gradually (no linear zone, no knee): THD -64 dB at
+ * +-16384 (one oscillator at full level), -49 dB at +-32768, rising <= 12 dB per 0.25 x full scale to -12 dB at 4 x;
+ * it flattens at +-62226 from +-79594 up: high mixer levels overdrive softly instead of wrapping. The output is
  * bounded by +-65536 whatever the input, RESONANCE or state (so a voice's VCA input has 1 bit over Q15 full scale).
  *
  * Cutoff: cutoff_q16 is the FILTER FREQ parameter (0..164) plus modulation, Q16 (65536 = one FILTER FREQ step),
