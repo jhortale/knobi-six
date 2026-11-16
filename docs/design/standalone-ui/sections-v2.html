@@ -1,0 +1,136 @@
+<style>
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.cap{font-size:12.5px;max-width:300px;margin-top:6px;line-height:1.4}
+.lcd{width:300px;height:300px;box-sizing:border-box;position:relative;overflow:hidden;border-radius:4px;border:6px solid #0c0c0c;
+     background:#1d1e22;font-family:"Arial Rounded MT Bold","Helvetica Neue",Arial,sans-serif;color:#f4f4f4;text-transform:uppercase}
+.wood{position:absolute;top:0;bottom:0;width:8px;background:linear-gradient(90deg,#5a2a14,#8a4a26 50%,#5a2a14)}
+.wood.l{left:0}.wood.r{right:0}
+.inner{position:absolute;top:0;bottom:0;left:8px;right:8px;padding:6px 7px;box-sizing:border-box}
+.h{font-weight:800;font-size:11.5px;letter-spacing:.04em;text-align:center}
+.rule{height:2px;background:#2f6be0;margin:2px 0 7px}
+.k{width:30px;height:30px;border-radius:50%;background:radial-gradient(circle at 38% 32%,#4a4b50,#141416 65%);box-shadow:0 2px 3px #000;position:relative;margin:0 auto}
+.k::after{content:"";position:absolute;width:4px;height:4px;border-radius:50%;background:#fff;left:50%;top:50%;transform:translate(-50%,-50%) rotate(var(--r,0deg)) translateY(-10px)}
+.kl{font-size:7.5px;font-weight:700;text-align:center;margin-top:4px}
+.g{display:grid;row-gap:7px}
+.c2{grid-template-columns:repeat(2,1fr)}.c3{grid-template-columns:repeat(3,1fr)}.c4{grid-template-columns:repeat(4,1fr)}.c5{grid-template-columns:repeat(5,1fr)}
+.seg{display:inline-block;background:#120606;border:1px solid #000;border-radius:2px;padding:1px 5px;color:#ff2a1a;font:italic 700 20px/1 "DIN Condensed","Arial Narrow",monospace;letter-spacing:.08em;text-shadow:0 0 6px #ff2a1a88}
+.led{display:inline-block;width:5px;height:5px;border-radius:50%;background:#3c0f0b;vertical-align:middle;margin-right:3px}
+.led.on{background:#ff3524;box-shadow:0 0 5px #ff3524}
+.btn{display:block;margin:0 auto;width:20px;height:10px;border-radius:2px;background:#2a0a07;border:1px solid #000}
+.btn.on{background:#ff4a2a;box-shadow:0 0 6px #ff4a2a}
+.s{font-size:7.5px;font-weight:700}
+.side{font-size:7px;font-weight:800;color:#2f6be0;writing-mode:vertical-rl;transform:rotate(180deg);text-align:center}
+.list{font-size:7px;font-weight:700;line-height:1.6}
+.foot{position:absolute;left:0;right:0;bottom:0;height:16px;border-top:2px solid #2f6be0;display:grid;grid-template-columns:repeat(4,1fr);font-size:7.5px;font-weight:700;align-items:center;text-align:center}
+</style>
+
+<h2>All sections, same panel language</h2>
+<p class="subtitle">Each screen = one or two panel sections, laid out like the real panel. Knobs map to the encoders in reading order; red buttons = pads (lit when on); red LED lists = one encoder steps through the choices. Bottom blue strip says what the 4 faders do on that screen.</p>
+
+<div class="row">
+
+<!-- MIXER + FILTER -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div style="display:grid;grid-template-columns:96px 1fr;gap:8px">
+<div><div class="h">MIXER</div><div class="rule"></div>
+<div class="g c2"><div><div class="k" style="--r:40deg"></div><div class="kl">vco 1</div></div><div><div class="k" style="--r:10deg"></div><div class="kl">vco 2</div></div>
+<div><div class="k" style="--r:-60deg"></div><div class="kl">sub octave</div></div><div><div class="k" style="--r:-140deg"></div><div class="kl">noise</div></div></div></div>
+<div><div class="h">FILTER</div><div class="rule"></div>
+<div class="g c2"><div><div class="k" style="--r:30deg"></div><div class="kl">frequency</div></div><div><div class="k" style="--r:-50deg"></div><div class="kl">resonance</div></div>
+<div><div class="k" style="--r:-130deg"></div><div class="kl">lp · notch · hp</div></div>
+<div><div class="btn"></div><div class="kl">bp</div><div class="s" style="text-align:center;margin-top:4px"><span class="led on"></span>half <span class="led"></span>full</div><div class="kl">track</div></div></div></div>
+</div>
+<div class="foot"><div>frequency</div><div>resonance</div><div>mode</div><div>env amt</div></div>
+</div></div>
+<div class="cap"><b>Mixer + Filter.</b> 8 encoders = the 8 knobs. BP is a pad; key TRACK cycles off / half / full on its LEDs.</div></div>
+
+<!-- ENVELOPES -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div class="h">ENVELOPES</div><div class="rule"></div>
+<div style="display:grid;grid-template-columns:10px 1fr;gap:4px">
+<div class="side">filter</div>
+<div class="g c5"><div><div class="k" style="--r:-120deg"></div><div class="kl">attack</div></div><div><div class="k" style="--r:-20deg"></div><div class="kl">decay</div></div><div><div class="k" style="--r:40deg"></div><div class="kl">sustain</div></div><div><div class="k" style="--r:-40deg"></div><div class="kl">release</div></div><div><div class="k" style="--r:50deg"></div><div class="kl">amount</div></div></div>
+</div>
+<div style="height:8px"></div>
+<div style="display:grid;grid-template-columns:10px 1fr;gap:4px">
+<div class="side">loudness</div>
+<div class="g c5"><div><div class="k" style="--r:-140deg"></div><div class="kl">attack</div></div><div><div class="k" style="--r:0deg"></div><div class="kl">decay</div></div><div><div class="k" style="--r:90deg"></div><div class="kl">sustain</div></div><div><div class="k" style="--r:-10deg"></div><div class="kl">release</div></div><div><div class="k" style="--r:110deg"></div><div class="kl">amount</div></div></div>
+</div>
+<div class="s" style="display:flex;justify-content:space-around;margin-top:10px"><span><span class="btn on" style="display:inline-block"></span> velocity → filter</span><span><span class="btn" style="display:inline-block"></span> velocity → amp</span></div>
+<div class="foot"><div>attack</div><div>decay</div><div>sustain</div><div>release</div></div>
+</div></div>
+<div class="cap"><b>Envelopes.</b> Two rows like the panel. Encoders edit the selected row (SELECT switches FILTER ↔ LOUDNESS); faders = A/D/S/R of that row; AMOUNT on the 5th position.</div></div>
+
+<!-- LFO + X-MOD -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div class="h">LFO</div><div class="rule"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 70px;align-items:start">
+<div><div class="k" style="--r:20deg"></div><div class="kl">frequency</div><div class="btn on" style="margin-top:4px"></div><div class="kl">lfo sync</div></div>
+<div class="list"><span class="led on"></span>sine<br><span class="led"></span>sawtooth<br><span class="led"></span>rev saw<br><span class="led"></span>square<br><span class="led"></span>random</div>
+<div><div class="k" style="--r:-30deg"></div><div class="kl">amount</div></div>
+<div class="g c2" style="row-gap:4px"><div><div class="btn on"></div><div class="kl">vco1</div></div><div><div class="btn"></div><div class="kl">vco2</div></div><div><div class="btn"></div><div class="kl">pw</div></div><div><div class="btn"></div><div class="kl">amp</div></div><div><div class="btn on"></div><div class="kl">f freq</div></div><div><div class="btn"></div><div class="kl">f mode</div></div></div>
+</div>
+<div class="h" style="margin-top:6px">X-MOD</div><div class="rule"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1.6fr">
+<div><div class="k" style="--r:40deg"></div><div class="kl">filter env</div></div>
+<div><div class="k" style="--r:-20deg"></div><div class="kl">vco 2</div></div>
+<div class="g c3" style="row-gap:4px"><div><div class="btn on"></div><div class="kl">vco1</div></div><div><div class="btn on"></div><div class="kl">shape1</div></div><div><div class="btn"></div><div class="kl">pw1</div></div><div><div class="btn"></div><div class="kl">f freq</div></div><div><div class="btn"></div><div class="kl">f mode</div></div></div>
+</div>
+</div></div>
+<div class="cap"><b>LFO + X-MOD.</b> Destinations are pads that light up, exactly the panel's button rows. Shape is one encoder stepping the LED list.</div></div>
+
+<!-- AFTERTOUCH + MISC -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div class="h">AFTERTOUCH</div><div class="rule"></div>
+<div style="display:grid;grid-template-columns:70px 1fr">
+<div><div class="k" style="--r:30deg"></div><div class="kl">amount</div></div>
+<div class="g c3" style="row-gap:4px"><div><div class="btn"></div><div class="kl">vco1</div></div><div><div class="btn"></div><div class="kl">vco2</div></div><div><div class="btn on"></div><div class="kl">lfo amt</div></div><div><div class="btn"></div><div class="kl">amp</div></div><div><div class="btn on"></div><div class="kl">f freq</div></div><div><div class="btn"></div><div class="kl">f mode</div></div></div>
+</div>
+<div class="s" style="color:#9aa0aa;margin:4px 0 2px;text-align:center">from pad pressure &amp; mod wheel</div>
+<div class="h" style="margin-top:6px">MISC PARAMETERS</div><div class="rule"></div>
+<div class="g c4"><div><div class="k" style="--r:10deg"></div><div class="kl">detune</div></div><div><div class="k" style="--r:-60deg"></div><div class="kl">pan spread</div></div>
+<div><div class="list" style="text-align:center"><span class="led on"></span>2 <span class="led"></span>7 <span class="led"></span>12</div><div class="kl">whl range</div></div>
+<div><div class="list" style="text-align:center"><span class="led"></span>low <span class="led on"></span>last</div><div class="kl">key mode</div></div></div>
+<div class="g c3" style="margin-top:8px"><div><div class="k" style="--r:0deg"></div><div class="kl">prgm vol</div></div><div><div class="btn"></div><div class="kl">unison</div></div><div><div class="k" style="--r:-90deg"></div><div class="kl">portamento</div></div></div>
+</div></div>
+<div class="cap"><b>Aftertouch + Misc.</b> SMK-37 pads send pressure, so aftertouch is real. Unison and portamento live here (the panel's bottom-left row).</div></div>
+
+<!-- EFFECTS -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div class="h">EFFECTS</div><div class="rule"></div>
+<div style="display:grid;grid-template-columns:1fr 1.4fr 1fr;align-items:center;gap:4px">
+<div><div class="btn on"></div><div class="kl">on/off</div><div class="s" style="text-align:center;margin-top:6px"><span class="led on"></span>a <span class="led"></span>b</div><div class="kl">effect</div></div>
+<div style="text-align:center"><span class="seg">PH3</span><div class="kl">type</div><div style="height:6px"></div><span class="seg">bbd</span></div>
+<div><div class="k" style="--r:-20deg"></div><div class="kl">type</div></div>
+</div>
+<div class="g c4" style="margin-top:12px">
+<div><div class="k" style="--r:0deg"></div><div class="kl">mix</div></div>
+<div><div class="btn on"></div><div class="kl">clk sync</div></div>
+<div style="text-align:center"><span class="seg" style="font-size:16px">25</span><div class="kl">param 1</div></div>
+<div style="text-align:center"><span class="seg" style="font-size:16px">50</span><div class="kl">param 2</div></div></div>
+<div class="s" style="color:#9aa0aa;text-align:center;margin-top:10px">types depend on cpu left over: chorus, phaser, bbd delay first</div>
+</div></div>
+<div class="cap"><b>Effects.</b> Two slots A/B with red 7-segment type names and values, as on the panel. Which effect types fit depends on the CPU budget — mono out, so chorus/delay are the useful ones.</div></div>
+
+<!-- ARP + CLOCK + PROGRAM -->
+<div><div class="lcd"><div class="wood l"></div><div class="wood r"></div><div class="inner">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+<div><div class="h">CLOCK</div><div class="rule"></div>
+<div style="text-align:center"><span class="seg">128</span><div class="kl">bpm</div></div>
+<div class="g c2" style="margin-top:6px"><div><div class="btn on"></div><div class="kl">tap tempo</div></div>
+<div class="list"><span class="led"></span>half<br><span class="led"></span>qtr<br><span class="led on"></span>8th<br><span class="led"></span>16th</div></div></div>
+<div><div class="h">ARPEGGIATOR</div><div class="rule"></div>
+<div class="g c2"><div><div class="btn on"></div><div class="kl">on/off</div><div class="list" style="text-align:center;margin-top:4px"><span class="led on"></span>1 <span class="led"></span>2 <span class="led"></span>3</div><div class="kl">octaves</div></div>
+<div class="list"><span class="led"></span>up<br><span class="led"></span>down<br><span class="led on"></span>up/down<br><span class="led"></span>random<br><span class="led"></span>assign</div></div></div>
+</div>
+<div class="h" style="margin-top:8px">PROGRAM</div><div class="rule"></div>
+<div style="display:flex;align-items:center;justify-content:space-around">
+<div style="text-align:center"><span class="seg">0</span><div class="kl">bank</div></div>
+<div style="text-align:center"><span class="seg">06</span><div class="kl">program</div></div>
+<div><div class="btn on" style="width:26px;height:14px"></div><div class="kl">write</div></div>
+<div><div class="btn"></div><div class="kl">globals</div></div></div>
+</div></div>
+<div class="cap"><b>Arp + Clock + Program.</b> BPM and bank/program on red displays; pads 1–10 work like the panel's 0–9 program buttons; WRITE saves.</div></div>
+
+</div>
+<p class="subtitle" style="margin-top:12px">Each of these is one screen; the pads (or SELECT) step through them in panel order. Does the set feel complete — anything from the panel you'd drop or want added?</p>
