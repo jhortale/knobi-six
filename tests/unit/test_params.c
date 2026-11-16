@@ -74,7 +74,7 @@ static void pack_roundtrip(void)
         int n = program_pack(&a, buf, sizeof buf);
         CHECK(n == (int)program_packed_size(PROGRAM_VERSION));
         CHECK(program_unpack(&b, buf, (uint32_t)n) == 0);
-        CHECK(memcmp(a.name, b.name, 20) == 0 && memcmp(a.v, b.v, sizeof a.v) == 0 && memcmp(a.chord, b.chord, 6) == 0);
+        CHECK(memcmp(a.name, b.name, 20) == 0 && memcmp(a.v, b.v, 2 * P_COUNT_PHASE1) == 0 && memcmp(a.chord, b.chord, 6) == 0);
         CHECK(b.version == PROGRAM_VERSION);
     }
     program_t a; uint8_t small[10]; program_init(&a);
