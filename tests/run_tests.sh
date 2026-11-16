@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
-# SMK BASE's host tests (no hardware). Run from the repo root after building (the Pro last: the tests use its build/
+# KNOBI-SIX's host tests (no hardware). Run from the repo root after building (the Pro last: the tests use its build/
 # intermediates; the Elite and MKE-P37 packages are checked when they are there):
 #   MODEL=elite sh build.sh; MODEL=mke sh build.sh; sh build.sh
 #   sh tests/run_tests.sh
@@ -16,7 +16,7 @@ CC="${CC:-cc} -O1 -Wall -Wno-unused-function"
 fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
 
-[ -f build/smk37-base.fwsc ] || { echo "run ./build.sh first"; exit 1; }
+[ -f build/knobi-six.fwsc ] || { echo "run ./build.sh first"; exit 1; }
 
 run "the app on the host: the default script" sh tests/run_host.sh
 run "every kind of control once: keys, a button, an encoder, a pad, a fader, a wheel, an outer key" sh tests/run_host.sh tests/scripts/diag.txt
@@ -48,8 +48,8 @@ for m in 1 2; do
 done
 $CC -DBOARD_SMK37=1 -o "$OUT/ldr_test_smk" tests/ldr_test.c
 run "update loader, SMK-37: app area 0x4000-0x9CFFF, protected ranges untouched" "$OUT/ldr_test_smk" "$OUT/smk_old.fwsc" "$OUT/smk_new.fwsc"
-for m in ":SMK-37 Pro_925" "-elite:SMK-37 Elite_925" "-mke:MKE-P37_925"; do
-    for f in build/smk37-base*${m%%:*}.fwsc; do
+for m in ":SMK-37 Pro_956" "-elite:SMK-37 Elite_956" "-mke:MKE-P37_956"; do
+    for f in build/knobi-six*${m%%:*}.fwsc; do
         [ -f "$f" ] || continue
         case "$f" in *-elite*|*-mke*) [ -n "${m%%:*}" ] || continue ;; esac
         run "package $f: layout, identity ${m#*:}, the loader marker" python3 tests/smk_pkg_test.py "$f" "${m#*:}"

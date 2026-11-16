@@ -6,7 +6,7 @@ The fake device is the one in web/test_web.mjs: identity on the handshake,
 then "device asks, host answers" reads of the logical image. Run from the repo root:
   python3 tests/install_test.py
 Also checks logical_image/product_of against web/fm1pkg.js (needs node, web/ and
-build/smk37-base.fwsc, skipped otherwise: there is no web installer here; from genkigenki/sloop-fm1 smk37), the SMK-37 Pro identities, and the 20 / 36 block
+build/knobi-six.fwsc, skipped otherwise: there is no web installer here; from genkigenki/sloop-fm1 smk37), the SMK-37 Pro identities, and the 20 / 36 block
 deinterleave against the stock SMK-37 Pro packages (a directory named by SMK_STOCK_DIR, skipped when unset)."""
 import io
 import queue
@@ -363,21 +363,21 @@ def smk():
             image, n = I.deinterleave(raw)
             ok(not I.package_damage(image) and I.product_of(raw) == "SMK-37 Pro_" + old.stem[-3:],
                f"stock {old.name}: {n} blocks, identity {I.product_of(raw)}, CRCs ok")
-    clean = ROOT / "build/smk37-base.fwsc"
+    clean = ROOT / "build/knobi-six.fwsc"
     if clean.exists():
         raw = clean.read_bytes()
         image, n = I.deinterleave(raw)
-        ok(not I.package_damage(image) and I.product_of(raw) == "SMK-37 Pro_925",
+        ok(not I.package_damage(image) and I.product_of(raw) == "SMK-37 Pro_956",
            f"package {clean.name} parses: {n} blocks, {I.product_of(raw)}")
 
 
 def against_js():
-    clean = ROOT / "build/smk37-base.fwsc"
-    for f in sorted((ROOT / "build").glob("smk37-base*.fwsc")):   # (every package built)
+    clean = ROOT / "build/knobi-six.fwsc"
+    for f in sorted((ROOT / "build").glob("knobi-six*.fwsc")):   # (every package built)
         if f.exists():
             ok(I.LOADER_MARK in f.read_bytes(), f"{f.name} carries the Felucca loader marker")
     if not shutil.which("node") or not clean.exists() or not (ROOT / "web/fm1pkg.js").exists():
-        print("logical image vs fm1pkg.js: skipped (needs node, web/fm1pkg.js and build/smk37-base.fwsc; no web/ here)")
+        print("logical image vs fm1pkg.js: skipped (needs node, web/fm1pkg.js and build/knobi-six.fwsc; no web/ here)")
         return
     js = ("import { logicalImage, productOf } from %r; import { readFileSync } from 'node:fs';"
           "const p = readFileSync(process.argv[1]); process.stderr.write(productOf(p));"

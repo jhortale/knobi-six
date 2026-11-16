@@ -1,0 +1,45 @@
+# KNOBI-SIX: device build + host tests on every push to phase1 and on demand; uploads the package, map and
+# disassembly. (release.yml publishes tagged releases.) Toolchain and SDK as in release.yml.
+name: build
+
+on:
+  push:
+    branches: [phase1]
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python packages
+        run: python3 -m pip install --break-system-packages Pillow || sudo apt-get install -y python3-pil
+
+      - name: JieLi toolchain (pkgman.jieliapp.com)
+        run: sh tools/get_toolchain.sh
+
+      - name: JieLi AC79 SDK
+        run: |
+          for i in 1 2 3; do                     # (gitee.com drops a clone now and then: try again)
+            git clone --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
+                https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK && break
+            rm -rf ~/fw-AC79_AIoT_SDK
+            sleep 20
+          done
+          test -d ~/fw-AC79_AIoT_SDK
+
+      - name: Build (Pro)
+        run: ./build.sh
+
+      - name: Host tests
+        run: sh tests/run_tests.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knobi-six-pro
+          path: |
+            build/*.fwsc
+            build/app.map
+            build/app.dis
+          if-no-files-found: error

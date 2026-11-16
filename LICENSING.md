@@ -1,6 +1,6 @@
 # Licensing
 
-SMK BASE, like the [Dinghy](https://github.com/zvenson/dinghy) it comes from, is free software under the GNU General
+KNOBI-SIX, built on fc79's [smk37-base](https://github.com/fc79/smk37-base) (SMK BASE), like the [Dinghy](https://github.com/zvenson/dinghy) it comes from, is free software under the GNU General
 Public License, version 3 only (`GPL-3.0-only`, full text in `LICENSE`). You may use, study, change and share it. If you give someone a firmware built from it, give them its
 complete source under the same licence too.
 
@@ -14,7 +14,7 @@ complete source under the same licence too.
 | The update loader's screen: `firmware/loader/ldr_screen.c`, `tests/ldr_screen_test.c` | Copyright (C) 2026 zvenson (from OberVave, the Firmware Hub's look); the idea, a loader that draws, its 5 x 7 letters and the order of things from [Skiff](https://github.com/illuminus5/skiff) by illuminus5, GPL-3.0 |
 | From OberVave: the storage (blobs, slots), `LCD_IDLE`, the SMK-37 wiring of `platform.c`, `store.h`, the pad event queue in `smk_input.h`, `tests/smk_flash_test.c`, `tests/run_tests.sh`, the CI workflow | Copyright (C) 2026 zvenson |
 | [Dinghy](https://github.com/zvenson/dinghy): its app (`dinghy.c`, from which `firmware/src/app.c` comes), the wiring `platform.c`, the host mode `tests/`, `docs/API.md` and `docs/RULES.md` | zvenson |
-| SMK BASE: `firmware/src/app.c` (Dinghy's app for the SMK-37, with the controls on the screen), the pad changes in `firmware/hal/smk_input.h` (re-arm, peak, crosstalk, velocity), `SMK_MASTER_FROM_APP`, `fl_slice_ram` and the sliced saves in `firmware/hal/fm1_flash.h` and `platform.c` (from ciapibox, fc79's FM-1 groovebox, GPL-3.0), the blob records (`blobs_load` / `blobs_save`), the host's `expect` lines, `tools/backup/`, `tests/smk_pad_test.c`, `tests/scripts/diag.txt`, `midi.txt`, `README.md`, `docs/CHANGES.md`, `docs/BACKUP.md`; the changes listed in `docs/CHANGES.md` | Copyright (C) 2026 fc79 |
+| SMK BASE (fc79's smk37-base, KNOBI-SIX's base): `firmware/src/app.c` (Dinghy's app for the SMK-37, with the controls on the screen), the pad changes in `firmware/hal/smk_input.h` (re-arm, peak, crosstalk, velocity), `SMK_MASTER_FROM_APP`, `fl_slice_ram` and the sliced saves in `firmware/hal/fm1_flash.h` and `platform.c` (from ciapibox, fc79's FM-1 groovebox, GPL-3.0), the blob records (`blobs_load` / `blobs_save`), the host's `expect` lines, `tools/backup/`, `tests/smk_pad_test.c`, `tests/scripts/diag.txt`, `midi.txt`, `README.md`, `docs/CHANGES.md`, `docs/BACKUP.md`; the changes listed in `docs/CHANGES.md` | Copyright (C) 2026 fc79 |
 
 ## Third-party material
 
@@ -27,9 +27,9 @@ complete source under the same licence too.
 ## The logo
 
 Dinghy's logo (the designburg signet, all rights reserved, not under the GPL) is not in this repository: it marks
-Dinghy itself, and a fork uses its own. SMK BASE has none.
+Dinghy itself, and a fork uses its own. SMK BASE and KNOBI-SIX have none.
 
 ## Trademarks
 
-"Felucca" and "Hügelton Instruments" are names of Hügelton Instruments; "M-VAVE", "FM-1", "SMK-37" and "MKE-P37"
-belong to their owners. Dinghy and SMK BASE are not made or endorsed by them.
+"Felucca" and "Hügelton Instruments" are names of Hügelton Instruments; "M-VAVE", "FM-1", "SMK-37", "MKE-P37" and "OB-6"
+belong to their owners. Dinghy, SMK BASE and KNOBI-SIX are not made or endorsed by them.

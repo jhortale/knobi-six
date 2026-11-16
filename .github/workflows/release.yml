@@ -1,4 +1,4 @@
-# SMK BASE: build the packages on GitHub, run the host tests, and on a tag vX.Y publish the release with a build
+# KNOBI-SIX: build the packages on GitHub, run the host tests, and on a tag vX.Y publish the release with a build
 # attestation (actions/attest-build-provenance): the Firmware Hub shows "Built from source" for exactly these files.
 # The JieLi toolchain comes from pkgman.jieliapp.com (tools/get_toolchain.sh), the AC79 SDK from gitee.com, as in
 # sloopDX's and OberVave's workflows. Run by hand (workflow_dispatch) for a test build without a release.
@@ -55,20 +55,20 @@ jobs:
           MODEL=elite sh build.sh --release "$V"
           MODEL=mke sh build.sh --release "$V"
           sh build.sh --release "$V"
-          ls -l build/smk37-base-"$V"*.fwsc
-          (cd build && sha256sum smk37-base-"$V"*.fwsc > SHA256SUMS)
+          ls -l build/knobi-six-"$V"*.fwsc
+          (cd build && sha256sum knobi-six-"$V"*.fwsc > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
-          name: smk37-base-fwsc
-          path: build/smk37-base*.fwsc
+          name: knobi-six-fwsc
+          path: build/knobi-six*.fwsc
           if-no-files-found: error
 
       - name: Attest the packages (tags only)
         if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: build/smk37-base-[0-9]*.fwsc
+          subject-path: build/knobi-six-[0-9]*.fwsc
 
       - name: Release (tags only)
         if: github.ref_type == 'tag'
@@ -76,6 +76,6 @@ jobs:
         with:
           # the release builds, not the dev ones; no comment inside the list: it would become part of the pattern
           files: |
-            build/smk37-base-[0-9]*.fwsc
+            build/knobi-six-[0-9]*.fwsc
             build/SHA256SUMS
           generate_release_notes: true

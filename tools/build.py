@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
-"""Build SMK BASE (on Dinghy, Felucca / SLOOP's platform) for the M-Vave SMK-37: the app, the update loader and an
+"""Build KNOBI-SIX (on Dinghy, Felucca / SLOOP's platform) for the M-Vave SMK-37: the app, the update loader and an
 installable .fwsc package.
 
   tools/build.py [--release X.Y[-suffix]] [--model pro|elite|mke]
 
-Outputs in build/: app.bin (app), loader/ota.bin (update loader), smk37-base.fwsc (package). See README.md for the
+Outputs in build/: app.bin (app), loader/ota.bin (update loader), knobi-six.fwsc (package). See README.md for the
 toolchain and the SDK.
 
 -DBOARD_SMK37=1 for the app and the loader, the SMK flash layout (fm1pkg_make.py, app slot 0x97400), identity
-SMK-37 Pro_925. --model elite / mke (or MODEL=): the same build under the SMK-37 Elite's or the MKE-P37's model name
+SMK-37 Pro_956. --model elite / mke (or MODEL=): the same build under the SMK-37 Elite's or the MKE-P37's model name
 (identity, loader and update record; -DSMK_MODEL), so M-Vave's updater still takes that unit's factory package:
-smk37-base-elite.fwsc, -mke.fwsc. A release changes only the version on the screen, never the identity.
+knobi-six-elite.fwsc, -mke.fwsc. A release changes only the version on the screen, never the identity.
 
 The JieLi toolchain is Linux x86-64 only. JIELI_TOOLCHAIN points at it; on
 macOS (or with JIELI_DOCKER=1) each tool runs in a linux/amd64 container.
@@ -58,10 +58,10 @@ BOARD = "smk37"                     # the only board here (the platform's FM-1 c
 BOARD_PREFIX = {"smk37": "SMK-37 Pro_"}   # identity: prefix + IDENT
 BOARD_DEFS = {"smk37": ["-DBOARD_SMK37=1"]}
 MODELS = {"pro": "SMK-37 Pro", "elite": "SMK-37 Elite", "mke": "MKE-P37"}   # smk37: one keyboard, three names
-DATA_FAMILY = "SMKBASE"             # the SMK store's owner tag (store.h): 1..7 of A-Z 0-9. A firmware of yours: its own
-SCREEN_NAME = "SMK BASE"            # the update loader's screen (ldr_screen.c): the name and its colour (RGB565)
+DATA_FAMILY = "KNOBI6"              # the SMK store's owner tag (store.h): 1..7 of A-Z 0-9; KNOBI-SIX's own (docs/IDENTITY.md)
+SCREEN_NAME = "KNOBI-SIX"            # the update loader's screen (ldr_screen.c): the name and its colour (RGB565)
 SCREEN_COLOUR = 0xB47F              # the app's lilac, #B48CFF
-IDENT = "925"                       # SMK BASE, every build: free in the FM-1 Firmware Hub's catalog (2026-11-03). 9NN:
+IDENT = "956"                       # KNOBI-SIX, every build: free in the Firmware Hub catalog (2026-11-16), see docs/IDENTITY.md. 9NN:
                                     # the installers' resume wants _9NN
 PRODUCT = "SMK-37 Pro_" + IDENT
 VERSION = None                      # APP_VER for release builds
@@ -199,6 +199,7 @@ def build_app():
                                ("common/bin/objdump", "-d", elf),
                                ("common/bin/objdump", "-d", "-j", ".ram_text", elf))
     (OUT / "app.dis").write_text(dis)
+    (OUT / "app.map").write_text(syms)   # the symbol table (objdump -t): what the linker placed where
 
     def symv(name):
         return int(re.search(r"^([0-9a-f]+) .*\s" + name + r"$", syms, re.M).group(1), 16)
@@ -316,13 +317,13 @@ def main():
         BOARD_PREFIX[BOARD] = BOARD_PREFIX[BOARD].replace(MODELS["pro"], MODELS[model])
         suffix += "-" + model
     PRODUCT = BOARD_PREFIX[BOARD] + IDENT
-    name = f"smk37-base{suffix}.fwsc"
+    name = f"knobi-six{suffix}.fwsc"
     if a.release:                   # one digit each (X.Y; a .Z only in the text)
         m = re.fullmatch(r"(\d)\.(\d)(\.\d)?(-[A-Za-z0-9]+)?", a.release)
         if not m:
             raise SystemExit(f"--release {a.release}: use X.Y, X.Y.Z or X.Y-suffix, one digit each")
         VERSION = m[1] + "." + m[2] + (m[3] or "")
-        name = f"smk37-base-{a.release}{suffix}.fwsc"
+        name = f"knobi-six-{a.release}{suffix}.fwsc"
     fm1pkg_make.SDK = a.sdk
     for rel, sha in SDK_SHA256.items():          # fail early without the SDK
         if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:
