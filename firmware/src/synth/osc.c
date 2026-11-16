@@ -130,7 +130,9 @@ static int32_t osc_side(uint32_t u)
     if (u >= 2u * OSC_Q24) return 0;
     uint32_t v = u >> 8;   /* Q16 */
     if (v >= 65536u) {
-        uint32_t w = 131072u - v, w2 = (w * w) >> 16, w4 = (w2 * w2) >> 16;
+        uint32_t w = 131072u - v;
+        w -= w >> 16;   /* u = 1 exactly gives w = 2^16: 65535, so w * w stays below 2^32 */
+        uint32_t w2 = (w * w) >> 16, w4 = (w2 * w2) >> 16;
         return (int32_t)((w4 * 5461u) >> 16) << 8;   /* /12 */
     }
     uint32_t v2 = (v * v) >> 16, v3 = (v2 * v) >> 16, v4 = (v2 * v2) >> 16;
@@ -170,7 +172,9 @@ static int32_t osc_blamp_p(uint32_t u)
     if (u >= 2u * OSC_Q24) return 0;
     uint32_t v = u >> 8;   /* Q16, 32-bit multiplies as in osc_side */
     if (v >= 65536u) {
-        uint32_t w = 131072u - v, w2 = (w * w) >> 16, w4 = (w2 * w2) >> 16, w5 = (w4 * w) >> 16;
+        uint32_t w = 131072u - v;
+        w -= w >> 16;   /* as in osc_side */
+        uint32_t w2 = (w * w) >> 16, w4 = (w2 * w2) >> 16, w5 = (w4 * w) >> 16;
         return (int32_t)((w5 * 546u) >> 16) << 8;   /* /120 */
     }
     uint32_t v2 = (v * v) >> 16, v4 = (v2 * v2) >> 16, v5 = (v4 * v) >> 16;

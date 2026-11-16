@@ -96,6 +96,42 @@ static void setup(osc_t *o, double n1, double n2, int s1, int p1, int s2, int p2
     o->sync = (uint8_t)sync;
 }
 
+/* osc_side and osc_blamp_p against the exact polynomials: every u (Q24 samples) within 512 of 1 sample (the branch
+ * boundary), the ends 0 and 2, and the whole range in steps of 61 */
+static double side_exact(double u)
+{
+    return u >= 2 ? 0 : u >= 1 ? pow(2 - u, 4) / 12 : 1 - 4 * u / 3 + 2 * u * u * u / 3 - pow(u, 4) / 4;
+}
+static double blamp_exact(double u)
+{
+    return u >= 2 ? 0 : u >= 1 ? pow(2 - u, 5) / 120 : 7.0 / 30 - u / 2 + u * u / 3 - pow(u, 4) / 12 + pow(u, 5) / 40;
+}
+static void step_polynomials(void)
+{
+    double ws = 0, wb = 0, ws_edge = 0, wb_edge = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t lo = pass ? 0 : OSC_Q24 - 512, hi = pass ? 2u * OSC_Q24 + 64 : OSC_Q24 + 512, step = pass ? 61 : 1;
+        for (uint32_t u = lo; u <= hi; u += step) {
+            double x = u / 16777216.0;
+            double es = fabs(osc_side(u) / 16777216.0 - side_exact(x));
+            double eb = fabs(osc_blamp_p(u) / 16777216.0 - blamp_exact(x));
+            if (pass) { if (es > ws) ws = es; if (eb > wb) wb = eb; }
+            else { if (es > ws_edge) ws_edge = es; if (eb > wb_edge) wb_edge = eb; }
+        }
+    }
+    static const uint32_t ends[] = { 0, 1, 2u * OSC_Q24 - 1, 2u * OSC_Q24, 2u * OSC_Q24 + 1, 0xffffffffu };
+    for (unsigned i = 0; i < sizeof ends / sizeof *ends; i++) {
+        double x = ends[i] / 16777216.0;
+        double es = fabs(osc_side(ends[i]) / 16777216.0 - side_exact(x));
+        double eb = fabs(osc_blamp_p(ends[i]) / 16777216.0 - blamp_exact(x));
+        if (es > ws_edge) ws_edge = es;
+        if (eb > wb_edge) wb_edge = eb;
+    }
+    printf("step_polynomials: side worst error %.2e (u = 1 +- 512 and the ends %.2e), blamp_p %.2e (%.2e)\n",
+           ws, ws_edge, wb, wb_edge);
+    CHECK(ws < 1e-4 && ws_edge < 1e-4 && wb < 1e-4 && wb_edge < 1e-4);
+}
+
 static void pitch_a4(void)
 {
     osc_t o;
@@ -559,6 +595,7 @@ static void bench(void)
 
 int main(void)
 {
+    step_polynomials();
     pitch_a4();
     vco1_shape_ends();
     vco2_shape_points();
