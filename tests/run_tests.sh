@@ -16,6 +16,8 @@ CC="${CC:-cc} -O1 -Wall -Wno-unused-function"
 fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
 
+run "unit tests (tests/unit/test_*.c)" make -s -C tests unit
+
 [ -f build/knobi-six.fwsc ] || { echo "run ./build.sh first"; exit 1; }
 
 run "the app on the host: the default script" sh tests/run_host.sh
