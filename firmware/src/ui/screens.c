@@ -49,7 +49,7 @@ static const wdg_t SCR_PLAY_W[] = {
     {W_NAME, 104, 21, 125, 16, 0, 0, 0},
     {W_VOICES, 104, 44, 125, 10, 0, 0, 0},
     {W_TITLE, 7, 64, 226, 19, 0, 0, "FILTER"},
-    KNOB(7, 87, 56, 0, "FREQUENCY"), KNOB(63, 87, 56, 1, "RESONANCE"), KNOB(119, 87, 56, 2, "MODE"),
+    KNOB(7, 87, 56, 0, "FREQ"), KNOB(63, 87, 56, 1, "RESO"), KNOB(119, 87, 56, 2, "MODE"),
     KNOB(175, 87, 58, 3, "ENV AMT"),
     {W_TITLE, 7, 133, 226, 19, 0, 0, "PERFORMANCE"},
     PAD(7, 158, 56, 22, 0, 2, "SYNC"), PAD(63, 158, 56, 22, 1, 2, "UNISON"), PAD(119, 158, 56, 22, 2, 2, "ARP"),
@@ -60,9 +60,9 @@ static const wdg_t SCR_PLAY_W[] = {
 static const wdg_t SCR_VCO_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 111, 19, 0, 0, "VCO 1"}, {W_TITLE, 122, 17, 111, 19, 0, 0, "VCO 2"},
-    KNOB(7, 41, 56, 0, "FREQUENCY"), KNOB(63, 41, 55, 1, "SHAPE"), KNOB(7, 87, 56, 2, "PW"),
+    KNOB(7, 41, 56, 0, "FREQ"), KNOB(63, 41, 55, 1, "SHAPE"), KNOB(7, 87, 56, 2, "PW"),
     PAD(63, 95, 55, 22, 2, 2, "SYNC"),
-    KNOB(122, 41, 55, 3, "FREQUENCY"), KNOB(177, 41, 56, 4, "FINE"), KNOB(122, 87, 55, 5, "SHAPE"),
+    KNOB(122, 41, 55, 3, "FREQ"), KNOB(177, 41, 56, 4, "FINE"), KNOB(122, 87, 55, 5, "SHAPE"),
     KNOB(177, 87, 56, 6, "PW"),
     PAD(122, 137, 55, 22, 3, 2, "LOW FREQ"), PAD(177, 137, 56, 22, 4, 2, "KEYBOARD"),
     PADHINT(204), FOOTER, END};
@@ -70,15 +70,15 @@ static const wdg_t SCR_MIX_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 111, 19, 0, 0, "MIXER"}, {W_TITLE, 122, 17, 111, 19, 0, 0, "FILTER"},
     KNOB(7, 41, 56, 0, "VCO 1"), KNOB(63, 41, 55, 1, "VCO 2"), KNOB(7, 87, 56, 2, "SUB OCT"), KNOB(63, 87, 55, 3, "NOISE"),
-    KNOB(122, 41, 55, 4, "FREQUENCY"), KNOB(177, 41, 56, 5, "RESONANCE"), KNOB(122, 87, 55, 6, "MODE"),
+    KNOB(122, 41, 55, 4, "FREQ"), KNOB(177, 41, 56, 5, "RESO"), KNOB(122, 87, 55, 6, "MODE"),
     PAD(177, 95, 56, 22, 2, 2, "BP"), PAD(122, 137, 111, 22, 3, 2, "KEY TRACK %"),
     PADHINT(204), FOOTER, END};
 static const wdg_t SCR_ENV_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "ENVELOPES"},
     {W_ROWSEL, 7, 40, 226, 11, 0, 0, 0},
-    KNOB(7, 56, 45, 0, "ATTACK"), KNOB(52, 56, 45, 1, "DECAY"), KNOB(97, 56, 45, 2, "SUSTAIN"),
-    KNOB(142, 56, 45, 3, "RELEASE"), KNOB(187, 56, 46, 4, "AMOUNT"),
+    KNOB(7, 56, 45, 0, "ATK"), KNOB(52, 56, 45, 1, "DEC"), KNOB(97, 56, 45, 2, "SUS"),
+    KNOB(142, 56, 45, 3, "REL"), KNOB(187, 56, 46, 4, "AMOUNT"),
     {W_ENVG, 17, 101, 206, 50, 0, 0, 0},
     PAD(7, 159, 75, 22, 2, 2, "VEL > FILTER"), PAD(82, 159, 75, 22, 3, 2, "VEL > AMP"), PAD(157, 159, 76, 22, 4, 2, "ROW"),
     {W_HINT, 7, 194, 226, 9, 0, 0, "SCALE: FILTER / LOUDNESS"},
@@ -86,14 +86,14 @@ static const wdg_t SCR_ENV_W[] = {
 static const wdg_t SCR_LFO_W[] = {
     HEADER,
     {W_TITLE, 7, 16, 226, 19, 0, 0, "LFO"}, {W_ROWLED, 192, 19, 41, 9, 0, 0, 0},
-    {W_KNOB, 7, 40, 56, 52, 0, 0, "FREQUENCY"}, {W_ENCBTN, 63, 40, 56, 52, 1, 0, "SYNC"},
+    {W_KNOB, 7, 40, 56, 52, 0, 0, "FREQ"}, {W_ENCBTN, 63, 40, 56, 52, 1, 0, "SYNC"},
     {W_LIST, 119, 39, 56, 53, 2, 0, "SHAPE"}, {W_KNOB, 175, 40, 58, 52, 3, 0, "AMOUNT"},
     PAD(7, 95, 37, 22, 2, 0, "VCO1"), PAD(44, 95, 37, 22, 3, 0, "VCO2"), PAD(81, 95, 38, 22, 4, 0, "PW"),
-    PAD(119, 95, 38, 22, 5, 0, "AMP"), PAD(157, 95, 38, 22, 6, 0, "F FREQ"), PAD(195, 95, 38, 22, 7, 0, "F MODE"),
+    PAD(119, 95, 38, 22, 5, 0, "AMP"), PAD(157, 95, 38, 22, 6, 0, "F FRQ"), PAD(195, 95, 38, 22, 7, 0, "F MOD"),
     {W_TITLE, 7, 119, 226, 19, 0, 0, "X-MOD"}, {W_ROWLED, 192, 122, 41, 9, 0, 1, 0},
     KNOB(7, 142, 56, 4, "FILT ENV"), KNOB(63, 142, 56, 5, "VCO 2"),
     PAD(119, 142, 38, 20, 2, 1, "VCO1"), PAD(157, 142, 38, 20, 3, 1, "SHAPE1"), PAD(195, 142, 38, 20, 4, 1, "PW1"),
-    PAD(119, 164, 38, 20, 5, 1, "F FREQ"), PAD(157, 164, 38, 20, 6, 1, "F MODE"), PAD(195, 164, 38, 20, 7, 1, "BP"),
+    PAD(119, 164, 38, 20, 5, 1, "F FRQ"), PAD(157, 164, 38, 20, 6, 1, "F MOD"), PAD(195, 164, 38, 20, 7, 1, "BP"),
     {W_HINT, 7, 196, 226, 9, 0, 0, "SCALE: PADS LFO / X-MOD"},
     PADHINT(207), FOOTER, END};
 static const wdg_t SCR_AT_W[] = {
@@ -101,9 +101,9 @@ static const wdg_t SCR_AT_W[] = {
     {W_TITLE, 7, 16, 226, 19, 0, 0, "AFTERTOUCH"}, {W_ROWLED, 192, 19, 41, 9, 0, 0, 0},
     KNOB(7, 38, 56, 0, "AMOUNT"),
     PAD(63, 38, 56, 20, 2, 0, "VCO1"), PAD(119, 38, 56, 20, 3, 0, "VCO2"), PAD(175, 38, 58, 20, 4, 0, "LFO AMT"),
-    PAD(63, 60, 56, 20, 5, 0, "AMP"), PAD(119, 60, 56, 20, 6, 0, "F FREQ"), PAD(175, 60, 58, 20, 7, 0, "F MODE"),
+    PAD(63, 60, 56, 20, 5, 0, "AMP"), PAD(119, 60, 56, 20, 6, 0, "F FRQ"), PAD(175, 60, 58, 20, 7, 0, "F MOD"),
     {W_TITLE, 7, 84, 226, 19, 0, 0, "MISC"}, {W_ROWLED, 192, 87, 41, 9, 0, 1, 0},
-    KNOB(7, 107, 56, 1, "DETUNE"), KNOB(63, 107, 56, 2, "SPREAD"), KNOB(119, 107, 56, 3, "BEND %"),
+    KNOB(7, 107, 56, 1, "DETUNE"), KNOB(63, 107, 56, 2, "SPREAD"), KNOB(119, 107, 56, 3, "BEND % ST"),
     {W_LIST, 175, 107, 58, 63, 4, 0, "KEY MODE"},
     KNOB(7, 153, 56, 5, "PRG VOL"), KNOB(63, 153, 56, 6, "PORTA RT"),
     PAD(119, 153, 56, 20, 2, 1, "UNISON"), PAD(119, 175, 56, 20, 3, 1, "VOX %"),
@@ -253,7 +253,8 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: return scr_val(id);
     case W_PAD: return scr_val(id) | (w->b == 2 || w->b == row) << 16;
     case W_ROWLED: case W_ROWSEL: return row;
-    case W_HVAL: return (int32_t)((uint32_t)ctl_last_id << 16 ^ ((uint32_t)ctl_last_v & 0xFFFFu)) ^ (scr_oct + 2) << 12;
+    case W_HVAL: return (int32_t)(((uint32_t)ctl_last_v & 0xFFFFu) | (uint32_t)(scr_oct + 2) << 16 |      /* v 0..15, octave 16..18, */
+                         ((uint32_t)ctl_last_id & 0xFFu) << 19 | ((uint32_t)ctl_last_id >> 13) << 27);   /* id 19..29 */
     case W_VOICES:
         for (i = 0; i < NVOICE; i++) h |= (uint32_t)(scr_s->voice[i].busy != 0) << i;
         return (int32_t)h;
@@ -270,8 +271,8 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
         return (int32_t)((uint32_t)ctl_wr | (uint32_t)ctl_wr_dest << 2 | (uint32_t)ctl_manual << 12 |
                          (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16);
     case W_DIAG:
-        for (i = 0; i < 4u; i++) h = h * 131u + fm1_in.fader[i];
-        return (int32_t)(h * 1031u + fm1_in.wheel[0] * 7u + fm1_in.wheel[1] * 65599u);
+        for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
+        return (int32_t)(h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u);
     }
     return 0;
 }

@@ -198,10 +198,11 @@ static void app_main(void)
         if (dirty && !eng_active() && !ctl_wr && fm1_ms - t_change > 2000u) {   /* 2 s after the last change, when silent
                                                                                     (an erase stalls the sound) */
             now.seq = set.seq;
-            globals_save(&now);                 /* (the other blob of the two; now.seq the saved one's) */
-            set = saved = now;
-            t_saved = fm1_ms;
-            set_saves++;
+            if (globals_save(&now) == 0) {      /* (the other blob of the two; now.seq the saved one's) */
+                set = saved = now;
+                t_saved = fm1_ms;
+                set_saves++;
+            } else t_change = fm1_ms;           /* failed: still dirty, try again in 2 s (not every pass) */
         }
     }
 }

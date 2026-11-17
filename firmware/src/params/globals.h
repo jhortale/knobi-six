@@ -35,8 +35,8 @@ typedef struct {
 void globals_default(globals_t *g);
 void globals_load(globals_t *g);                  /* the newer good record of the two blobs; none good (nothing saved, a
                                                    * bad CRC, another version, a value out of range): the defaults */
-void globals_save(globals_t *g);                  /* main loop, while silent: g->seq + 1 into the other blob (g->seq is
-                                                   * then the saved one's) */
+int globals_save(globals_t *g);                   /* main loop, while silent: g->seq + 1 into the other blob (g->seq is
+                                                   * then the saved one's); 0 saved, -1 failed (g untouched: try again) */
 void globals_pack(const globals_t *g, uint8_t *b);   /* GLOBALS_BYTES, the CRC16 last */
 int glob_vel_curve(int curve, int v);             /* 0..127 -> 0..127; 0 stays 0, 1..127 never 0 */
 int glob_at_curve(int curve, int v);              /* 0..127 -> 0..127; 0 -> 0, 127 -> 127 */

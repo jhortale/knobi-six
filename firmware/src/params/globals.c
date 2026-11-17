@@ -60,7 +60,7 @@ void globals_load(globals_t *g)
     else if (gb) *g = b, globals_at = 1;
 }
 
-void globals_save(globals_t *g)
+int globals_save(globals_t *g)
 {
     uint8_t b[GLOBALS_BYTES];
     globals_t t = *g;
@@ -69,7 +69,9 @@ void globals_save(globals_t *g)
     if (blob_save(GLOBALS_BLOB + (globals_at ^ 1u), b, sizeof b) == 0) {   /* the other blob: a cut save leaves this one */
         globals_at ^= 1u;
         g->seq = t.seq;
+        return 0;
     }
+    return -1;
 }
 
 #endif
