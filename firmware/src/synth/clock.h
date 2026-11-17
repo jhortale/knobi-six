@@ -48,9 +48,10 @@
  * counts the ticks the clock has ENTERED (never going back), a start (clk_t.starts, start_ticks) included: switching to
  * OUT starts the clock at step 0, which enters tick 0. The poll then sends 0xFA and at once tick 0's 0xF8 (a slave
  * takes the first 0xF8 after 0xFA as its downbeat: our step 0), then one 0xF8 for each tick entered, so a slave's
- * steps fall with ours, not a tick (1/24 beat) behind; 0xFC when OUT is left. clock_restart under OUT is passed on:
- * it is a start like any other, so the poll re-sends 0xFA with the new tick 0's 0xF8 and the slaves restart with us
- * (Task 6's arp start with ARP BEAT SYNC off). Owed ticks beyond CLOCK_OUT_OWED (a main-loop stall) are dropped, not
+ * steps fall with ours, not a tick (1/24 beat) behind; 0xFC when OUT is left. clock_restart under OUT would be passed
+ * on (a start like any other: the poll re-sends 0xFA with the new tick 0's 0xF8), but nothing calls it there: engine.c's
+ * arp start never restarts a clock that slaves follow (final review 1: a DAW would jump to its bar start on every
+ * chord). Owed ticks beyond CLOCK_OUT_OWED (a main-loop stall) are dropped, not
  * sent in a burst. SLAVE THRU: the main loop echoes what comes in. tests/unit/test_clock.c midi_clock_out runs a
  * sender into this same clock as a receiver: every step of the receiver within one block after the sender's.
  *
@@ -63,8 +64,8 @@
  * listed): step i starts at frame c->at[i] of the block (0..frames-1, ascending: sample resolution) and is step number
  * c->step[i] since the start (bit 0: the short step of a swing pair). The renderer may split its block at those frames
  * (synth_render takes any frame count). clock_restart(c) puts the internal clock back to step 0 at once (the next
- * clock_tick fires a step at frame 0): an arp that starts free (ARP BEAT SYNC off) restarts the clock; with BEAT SYNC
- * on it waits for the next step event instead. It does nothing on an external clock (the master owns the phase).
+ * clock_tick fires a step at frame 0): an arp that starts free (ARP BEAT SYNC off) restarts the clock (not under OUT:
+ * engine.c); with BEAT SYNC on it waits for the next step event instead. It does nothing on an external clock (the master owns the phase).
  *
  * LFO sync: clock_quarter_inc(c) is the tempo as Q32 quarter notes per frame (0: none known), for mod.c
  * lfo_sync_inc. */

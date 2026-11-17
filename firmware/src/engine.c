@@ -19,7 +19,7 @@
  * the arpeggiator, which runs there too (synth/arp.h; eng_arp, CPU0, never CPU1): with ARP ON a key event goes to
  * arp_key, not to the synth; eng_render splits the block at each step's frame (arp_step: the note starts on that sample)
  * and at the arp note's gate end (arp_run); a pattern start with ARP BEAT SYNC off (EV_ARPSYNC, the global) restarts the
- * clock; the clock not running (an external clock absent or stopped) silences it; HOLD, ALL NOTES OFF, PANIC and program
+ * clock (never under MIDI CLOCK OUT: eng_arp_start); the clock not running (an external clock absent or stopped) silences it; HOLD, ALL NOTES OFF, PANIC and program
  * loads reach it too. Its MIDI out ring (eng_arp.out[], out_w) is read by the main loop (ui/midi_map.c).
  * The main loop reads what the clock publishes, one aligned word each:
  * eng_clk_ticks (ticks entered, 24 a quarter, never going back), eng_clk_starts / eng_clk_start_ticks (restarts to
@@ -282,8 +282,10 @@ static int eng_active(void) { return eng_voices; }   /* voices sounding after th
 /* ---- consumer (audio interrupt) */
 /* an arp pattern starts (a key into an empty one, a relatch, ARP ON with keys held): ARP BEAT SYNC off, the clock
  * restarts (step 0 at this block's frame 0: the events drain before clock_tick; an external clock: ignored, the next
- * step); on, the next step of the division */
-static void eng_arp_start(void) { if (!eng_arp_sync_on) clock_restart(&eng_clk); }
+ * step); on, the next step of the division. Under MIDI CLOCK = OUT never a restart (final review 1): it would send the
+ * slaves 0xFA and jump a DAW or drum machine to its bar start on every chord; the arp waits for the next step of the
+ * division, as with BEAT SYNC on (the internal grid, the slaves' and the TAP LED untouched) */
+static void eng_arp_start(void) { if (!eng_arp_sync_on && eng_clk.mode != CLK_MIDI_OUT) clock_restart(&eng_clk); }
 static void eng_drain(void)
 {
     uint32_t r = eng_qr, w = eng_qw;

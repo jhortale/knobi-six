@@ -102,7 +102,8 @@ keys: UNISON stacks each one, portamento glides between them, chord memory plays
   pressed when none is held starts a new pattern (**relatch**: the new chord replaces the old); a key pressed while one
   is still held is **added** to it. HOLD off: the keys not held leave it.
 - **Start**: the first key of a new pattern (or a relatch) starts it from its first note: ARP BEAT SYNC OFF, at once
-  (the clock restarts: under MIDI CLOCK OUT, receivers get a new 0xFA); ON, on the clock's next step.
+  (the clock restarts); ON, on the clock's next step. Under MIDI CLOCK OUT always on the next step, as ON: the clock
+  never restarts there, so a DAW or drum machine following it never jumps back to its bar start on a new chord.
 - **No clock, no arp**: following a MIDI clock that is absent or stopped, the arp is silent and its note released; it
   plays on when the clock runs again.
 - ARP off: the arp's note stops and the keys still held sound as played. ALL NOTES OFF (CC 123), a program change
@@ -196,7 +197,7 @@ every 30 s (flash wear). What each does:
 | SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
 | AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
 | MIDI CLOCK | OFF / OUT / IN / THRU / IN NO S/S (OFF) | Arp + Clock pad 3. OFF: the internal clock (BPM); OUT: the same, sent as MIDI clock (0xFA with the downbeat's 0xF8 when chosen and on every restart, then 24 0xF8 a beat, 0xFC when left); IN: follows a MIDI clock (start / continue / stop obeyed; none arriving, or stopped: the clock and the arpeggiator wait); THRU: IN, and what arrives is sent on; IN NO S/S: follows the clock bytes alone (start / stop ignored). USB only (the SMK-37 has no MIDI jack: no CLOCK PORT). [MIDI.md](MIDI.md) |
-| ARP BEAT SYNC | OFF / ON (OFF) | Arp + Clock pad 4: a new arp pattern starts on the clock's next step (ON) or at once, restarting the clock (OFF) |
+| ARP BEAT SYNC | OFF / ON (OFF) | Arp + Clock pad 4: a new arp pattern starts on the clock's next step (ON) or at once, restarting the clock (OFF; under MIDI CLOCK OUT the next step, as ON) |
 | DUAL CORE | OFF / ON (OFF) | only in a `KNOBI_CPU1=1` build (never a release; [API.md](API.md) "Second core"): Globals pad 7; ON renders half the voices on the second core (the same sound, bit for bit). Saved in a blob of its own (a default build keeps the other globals as they are) |
 
 Under the pads, the Globals screen's **diagnostics**: `CPU 65% PEAK 80%  VOX 6/6  SHED 0` (the audio block's load,

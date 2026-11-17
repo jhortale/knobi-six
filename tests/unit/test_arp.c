@@ -330,6 +330,34 @@ static void step_frame_exact(void)
     CHECK(first <= 2u && gate_off_ok);
 }
 
+/* final review 1: under MIDI CLOCK = OUT an arp start never restarts the clock (a slave would jump to its bar start on
+ * every chord): no clock_restart, so no extra 0xFA from clock_out_poll; the pattern waits for the next step of the
+ * division, as with ARP BEAT SYNC on (here off, the default). OUT's own start (step 0 at frame 0) is the only 0xFA */
+static void out_no_restart(void)
+{
+    clk_out_t o;
+    uint8_t b[3u + CLOCK_OUT_OWED];
+    uint32_t fa = 0, starts, first = ~0u, i, n, k;
+    eng_init();
+    eng_arp_sync(0);
+    eng_clock_mode(CLK_MIDI_OUT);
+    eng_param(P_ARP_ON, 1);
+    clock_out_init(&o);
+    for (k = 0; k < 100u; k++) {                                          /* 100 blocks: the key at block 10 */
+        if (k == 10u) eng_note(60, 100);
+        memset(&OUT[2u * k * BLK], 0, 2u * BLK * sizeof OUT[0]);
+        eng_render(&OUT[2u * k * BLK], BLK);
+        n = clock_out_poll(&o, CLK_MIDI_OUT, eng_clk_mode, eng_clk_starts, eng_clk_start_ticks, eng_clk_ticks, b, sizeof b);
+        for (i = 0; i < n; i++) fa += b[i] == 0xFAu;
+    }
+    starts = eng_clk.starts;
+    for (i = 0; i < 100u * BLK; i++) if (OUT[2u * i] || OUT[2u * i + 1u]) { first = i; break; }
+    printf("out_no_restart: MIDI CLOCK OUT, BEAT SYNC off: a key at frame 2560: clock starts %u, 0xFA sent %u, the "
+           "first sound at frame %u (the next quarter at 22050)\n", (unsigned)starts, (unsigned)fa, first);
+    CHECK(starts == 1u && fa == 1u);
+    CHECK(first >= 22050u && first <= 22052u);
+}
+
 /* the engine's paths: a key never sounds directly with the arp on; HOLD from the panel latches the arp, not the synth;
  * all notes off, program load, panic, ARP off: nothing left held; MIDI out ring carries the arp's notes */
 static void engine_paths(void)
@@ -415,6 +443,7 @@ int main(void)
     midi_out_ring();
     ext_clock_silent();
     step_frame_exact();
+    out_no_restart();
     engine_paths();
     if (fails) { printf("test_arp: %d FAILED\n", fails); return 1; }
     printf("test_arp: all passed\n");

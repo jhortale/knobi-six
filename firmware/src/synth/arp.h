@@ -27,8 +27,9 @@
  * pressed while at least one is still held is appended. HOLD off: the keys not held leave the pattern.
  * A start: a key into an empty pattern, or a relatch: arp_key (and arp_set turning ARP ON with keys held) return 1 and
  * the pattern plays from its first note at the next step. ARP BEAT SYNC (the global) decides when that step comes: off,
- * engine.c restarts the clock (clock_restart: step 0 at once; an external clock owns the phase: the next step); on, the
- * next step of the division (the reference: "quantizes arp start to the current division").
+ * engine.c restarts the clock (clock_restart: step 0 at once; an external clock owns the phase: the next step; MIDI
+ * CLOCK OUT: never a restart, the next step, so the slaves get no 0xFA); on, the next step of the division (the
+ * reference: "quantizes arp start to the current division").
  *
  * Silence: arp_silence (the clock not running: an external clock absent or stopped, reference 5) releases the note
  * sounding now and puts the pattern back to its start, keys kept (they play again when the clock runs). arp_clear
