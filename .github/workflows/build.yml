@@ -42,7 +42,7 @@ jobs:
           for s in chord worst; do
             DINGHY_PERF=1 sh tests/run_host.sh tests/scripts/$s.txt | grep '^perf' || echo "$s: no hardware counter here"
           done
-          sudo apt-get install -y -qq valgrind >/dev/null
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq valgrind >/dev/null
           sh tests/cpu_host.sh tests/scripts/chord.txt 200 5000
           sh tests/cpu_host.sh tests/scripts/worst.txt 200 6000
 
