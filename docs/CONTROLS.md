@@ -215,3 +215,11 @@ The OB-6 globals not here: the clock port (USB only), the sequencer jack, altern
 ports and program dumps (later, with SysEx). MIDI CLOCK and ARP BEAT SYNC are on the Arp + Clock screen (pads 3 and 4); they
 are globals all the same. The record grew with them (version 2): a version-1 record (Phase 1's) still loads, the two at
 OFF; a firmware from before them reads the new record as none (its defaults).
+
+Going back to Phase 1 and up again (a known limit, final review; nothing is installed on a keyboard today): the globals
+live in two blobs, written in turn, and the newer record (a higher sequence number) wins at boot. Phase 1 reads a
+version-2 record as missing, so after a downgrade it starts from its defaults, or from an older Phase-1 record still in
+the other blob. If it then saves, its record may carry a lower sequence number than a version-2 record left in the
+other blob (Phase 1 counted from its defaults); after upgrading again Phase 2 picks that stale version-2 record, the
+globals as they were before the downgrade, over Phase 1's newer one. Nothing breaks, but the globals changed under
+Phase 1 are lost: set them again after such a round trip.

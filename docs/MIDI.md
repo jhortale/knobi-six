@@ -51,6 +51,14 @@ the sound; [CONTROLS.md](CONTROLS.md)). A MIDI note on or off counts as playing 
 says: a sequencer or keyboard sending notes without a 3 s pause (on a channel this unit ignores, too) postpones the
 save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhile, short of a power cut.
 
+With **MIDI CLOCK = OUT** running, the autosave still happens at the first 3 s of quiet (the clock running is not
+playing). Its flash erase holds the interrupts off for about 50 ms (docs/RULES.md), so the 0xF8 stream pauses that
+long: ~2.4 ticks at 120 BPM. The clock itself runs in the audio interrupt, so it stops for the same time and goes on
+from where it was (no 0xFA, no burst of ticks): a slave stays in step with us, but both fall ~50 ms behind the wall
+clock, and the slave's tempo estimate sees one long tick gap (a hiccup; a DAW recording against our clock would show
+it). No code change for this; to avoid it, let the save happen before a take (3 s of quiet after changing a global,
+the octave or the program).
+
 ## Sent
 
 Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with LOCAL ON, ARP ON and PARAM TX = CC, the keys feed

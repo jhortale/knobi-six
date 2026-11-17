@@ -31,11 +31,12 @@ checks only that the default build has **CPU1 absent** (`CPU1: absent (KNOBI_CPU
 the update loader `ota.bin` is **byte for byte** the base's. The loader is the one part that cannot be emulated and
 threatens the update path; the app and package are no longer compared.
 
-Pre-existing, not from Phase 2: a small DC offset remains on the output for asymmetric loud material (the report
-attributes it to the existing limiter, not the distortion). Test
-`dist_max_chord` (Task 7) measured, over 10 s on the loud pulses + sync chord, **-64.7 dBFS at distortion 32 and
--68 dBFS at 0** (with distortion at 127: -105.4 dBFS; init chord -96.6). The same figure at amount 0 and 32 shows the distortion
-is not its source; noted so it is not blamed on 2B.
+Not shown to be from the distortion: a small DC offset remains on the output for asymmetric loud material (the report
+attributes it to the existing limiter). Test `dist_max_chord` (Task 7) measured, over 10 s on the loud pulses + sync
+chord, **-64.7 dBFS at distortion 32 and -68 dBFS at 0** (with distortion at 127: -105.4 dBFS; init chord -96.6). The
+offset is there with the distortion at 0, so it is not the distortion's own; but it is 3.3 dB higher at 32 than at 0,
+so it is not shown that the distortion has no part in it either (nor that it predates Phase 2: no Phase 1 figure for
+this material was taken). Noted so it is looked at, not blamed or cleared without a measurement.
 
 ### What only the device can confirm
 
