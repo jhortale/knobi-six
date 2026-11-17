@@ -33,6 +33,13 @@ typedef struct { int32_t g, a1, a2, k, lp, hp, bp; } svf_coef_t;
 /* cutoff_q16: filter FREQ param + modulations, in param units Q16; mode 0..255 LP->notch->HP; bp 0..32768 Norm->BP */
 void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_mix);
 int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c);
+/* The per-sample coefficient path, for audio-rate X-Mod into F FREQ / F MODE / Norm<->BP only (the voice uses
+ * svf_coef at control rate otherwise): kres = svf_reso_k(RESONANCE), computed at control rate; mode 0..255 and bp_mix
+ * as svf_coef's. No division, no exp2: a table g (as svf_coef), the damping floor from a table, a table-seeded
+ * reciprocal with one Newton step. Against svf_coef: g exact, k within 0.05 % (2 % at the floor's cap, below 2.4 Hz),
+ * a1 / a2 within 1e-5, the gains within 1 LSB (test_filter coef_fast_matches). */
+int32_t svf_reso_k(int reso);             /* k = 1 / Q of RESONANCE 0..255 before the damping floor, Q28 */
+void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix);
 #ifdef DINGHY_HOST
 uint32_t svf_cutoff_hz(int32_t cutoff_q16);   /* the cutoff the coefficients realise, rounded to whole Hz */
 #endif

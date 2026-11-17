@@ -409,6 +409,72 @@ static void test_fast_equals_slow(void)
     CHECK(diff == 0);
 }
 
+/* svf_coef_fast (the per-sample path for audio-rate X-Mod) against svf_coef: the reciprocal over its whole domain,
+ * every coefficient on random settings, the output of a modulated filter, and the cost of both */
+static double rel(double a, double b) { return b == 0 ? fabs(a) : fabs(a / b - 1); }
+static void test_coef_fast_matches(void)
+{
+    double er = 0;
+    for (uint32_t d = 1u << 24; d < 1u << 31 && d >= 1u << 24; d += 1 + (d >> 12)) {
+        double e = rel(svf_recip_fast(d), svf_recip_q30(d));
+        if (e > er) er = e;
+    }
+    srand(7);
+    double eg = 0, ek = 0, ekcap = 0, ea1 = 0, ea2 = 0;
+    int dgain = 0;
+    for (int n = 0; n < 200000; n++) {
+        int32_t cut = rand() % (SVF_CUT_MAX + 1);
+        int reso = rand() % 256, mode = rand() % 256;
+        int32_t bp = rand() % 3 == 0 ? 0 : rand() % 32769;
+        svf_coef_t a, b;
+        svf_coef(&a, cut, reso, mode, bp);
+        svf_coef_fast(&b, cut, svf_reso_k(reso), mode, bp);
+        if (rel(b.g, a.g) > eg) eg = rel(b.g, a.g);
+        /* the floor table is interpolated: 0.05 % between steps, up to 2 % at its cap's kink (step 8.7, 2.4 Hz) */
+        double kr = rel(b.k, a.k);
+        if (cut >= 9 << 16 && kr > ek) ek = kr;
+        if (kr > ekcap) ekcap = kr;
+        if (rel(b.a1, a.a1) > ea1) ea1 = rel(b.a1, a.a1);
+        if (rel(b.a2, a.a2) > ea2) ea2 = rel(b.a2, a.a2);
+        int dg = abs(b.lp - a.lp) + abs(b.hp - a.hp);
+        if (abs(b.bp - a.bp) > a.bp * kr + 2) dg += 100;   /* bp = b max(k, 1): follows k, floors */
+        if (dg > dgain) dgain = dg;
+    }
+    /* a saw through a filter whose cutoff a 300 Hz sine sweeps +-40 steps per sample, both paths */
+    svf_t s1 = {0, 0}, s2 = {0, 0};
+    double se = 0, sy = 0;
+    for (int n = 0; n < FS; n++) {
+        int32_t cut = CUT_Q16(90 + 40 * sin(2 * T_PI * 300 * n / FS));
+        int32_t x = (int32_t)((n * 223 % 32768) - 16384);
+        svf_coef_t a, b;
+        svf_coef(&a, cut, 200, 60, 8000);
+        svf_coef_fast(&b, cut, svf_reso_k(200), 60, 8000);
+        int32_t y1 = svf_tick(&s1, x, &a), y2 = svf_tick(&s2, x, &b);
+        se += (double)(y1 - y2) * (y1 - y2), sy += (double)y1 * y1;
+    }
+    double snr = 10 * log10(sy / (se + 1e-9));
+    printf("coef_fast_matches: recip %.1e; g %.1e k %.1e (%.1e below 2.4 Hz) a1 %.1e a2 %.1e; lp/hp %d LSB; swept output "
+           "differs by %.1f dB below the signal\n", er, eg, ek, ekcap, ea1, ea2, dgain, snr);
+    CHECK(er < 2e-7 && eg == 0 && ek < 1e-3 && ekcap < 2e-2 && ea1 < 1e-3 && ea2 < 1e-3 && dgain <= 2 && snr > 60);
+    /* cost */
+    svf_coef_t c;
+    volatile uint32_t sink = 0;
+    const long total = 5000000;
+    clock_t t0 = clock();
+    for (long i = 0; i < total; i++) {
+        svf_coef_fast(&c, (int32_t)((i * 40503) & 0x7fffff) + (20 << 16), 0x1234567, (int)(i & 255), (int32_t)(i & 32767));
+        sink += (uint32_t)c.a1;
+    }
+    double nf = 1e9 * (double)(clock() - t0) / CLOCKS_PER_SEC / total;
+    t0 = clock();
+    for (long i = 0; i < total; i++) {
+        svf_coef(&c, (int32_t)((i * 40503) & 0x7fffff) + (20 << 16), 100, (int)(i & 255), (int32_t)(i & 32767));
+        sink += (uint32_t)c.a1;
+    }
+    double ns = 1e9 * (double)(clock() - t0) / CLOCKS_PER_SEC / total;
+    printf("coef_fast_matches: host cost svf_coef_fast %.2f ns, svf_coef %.2f ns per call (%d)\n", nf, ns, sink != 1);
+}
+
 static void bench(void)
 {
     svf_coef_t c;
@@ -442,6 +508,7 @@ int main(void)
     test_cutoff_smooth();
     test_decay_to_zero();
     test_fast_equals_slow();
+    test_coef_fast_matches();
     if (getenv("SVF_BENCH")) bench();
     printf(fails ? "test_filter: %d FAILED\n" : "test_filter: ok\n", fails);
     return fails != 0;

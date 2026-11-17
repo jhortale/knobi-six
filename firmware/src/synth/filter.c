@@ -218,6 +218,12 @@ static int32_t svf_g(int32_t cut)
     return g;
 }
 
+int32_t svf_reso_k(int reso)
+{
+    reso = (int)svf_clamp(reso, 0, 255);
+    return (int32_t)svf_exp2(SVF_Q24 - reso * SVF_RESO_STEP, 28);
+}
+
 void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_mix)
 {
     int32_t cut = svf_clamp(cutoff_q16, 0, SVF_CUT_MAX);
@@ -226,7 +232,7 @@ void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_
     int32_t b = svf_clamp(bp_mix, 0, 32768);
     int32_t g = svf_g(cut);
     /* k = 1 / Q: RESO's exponential map, raised to the damping floor ALPHA / (pi fc) at low cutoffs, at most 2 */
-    int32_t k = (int32_t)svf_exp2(SVF_Q24 - reso * SVF_RESO_STEP, 28);
+    int32_t k = svf_reso_k(reso);
     int32_t lf = SVF_FLOOR_C + (99 * 65536 - cut) * 64 / 3;   /* log2 of the floor, Q24: semitones / 12 */
     int32_t kf = lf >= SVF_Q24 ? 2 * SVF_KNEE : (int32_t)svf_exp2(lf, 28);
     if (k < kf) k = kf;
@@ -238,6 +244,79 @@ void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_
     /* MODE: 0 LP, 128 notch (LP + HP), 255 HP; linear either side. Then the crossfade with the band-pass, whose gain
      * is max(k, 1): 0 dB at the peak for Q <= 1, Q above (the LP's resonant peak). */
     int32_t lp = mode <= 128 ? 32768 : (255 - mode) * 32768 / 127;
+    int32_t hp = mode <= 128 ? mode * 256 : 32768;
+    c->lp = (lp * (32768 - b)) >> 15;
+    c->hp = (hp * (32768 - b)) >> 15;
+    c->bp = (int32_t)(((int64_t)b * (k > SVF_KNEE ? k : SVF_KNEE)) >> 28);
+}
+
+/* ---- the per-sample coefficient path (audio-rate X-Mod into the filter) ----
+ * svf_coef_fast gives svf_coef's coefficients without its division and exp2 calls: g from svf_gtab as svf_coef does
+ * (the same interpolation, bit for bit), the damping floor from svf_ktab (its value at every step where it can win,
+ * interpolated linearly: <= 0.05 % off the exp2, 2 % at the cap's kink near step 8.7), a1 from svf_recip_fast (a 33-entry seed table interpolated, one
+ * Newton step: relative error < 1e-7), the MODE gains with a multiply for svf_coef's division by 127 (<= 1 LSB).
+ * Every coefficient stays inside the ranges svf_tick's bounds assume (k <= 2, 1 / D <= 1, g / D <= 1/2: the
+ * reciprocal is within 1e-7 of exact against margins of 2^-15). */
+
+/* the damping floor k = ALPHA / (pi fc), Q28, capped at 2, at FILTER FREQ steps 0..80; from step 80 up it is below
+ * RESO 255's k (0.04) and never wins. Generated with svf_coef's own expression (svf_exp2 of SVF_FLOOR_C + ...). */
+static const int32_t svf_ktab[81] = {
+    536870912, 536870912, 536870912, 536870912, 536870912, 536870912, 536870912, 536870912,
+    536870912, 527294872, 497700070, 469766318, 443400368, 418514206, 395024813, 372853780,
+    351927095, 332174949, 313531406, 295934233, 279324725, 263647436, 248850035, 234883159,
+    221700184, 209257103, 197512406, 186426890, 175963547, 166087474, 156765703, 147967116,
+    139662362, 131823718, 124425017, 117441579, 110850092, 104628551, 98756203, 93213445,
+    87981773, 83043737, 78382851, 73983558, 69831181, 65911859, 62212508, 58720789,
+    55425046, 52314275, 49378101, 46606722, 43990886, 41521868, 39191425, 36991779,
+    34915590, 32955929, 31106254, 29360394, 27712523, 26157137, 24689050, 23303361,
+    21995443, 20760934, 19595712, 18495889, 17457795, 16477964, 15553127, 14680197,
+    13856261, 13078568, 12344525, 11651680, 10997721, 10380467, 9797856, 9247944,
+    8728897,
+};
+#define SVF_KTAB_TOP (80 * 65536)
+
+/* 2^35 / (32 + i), i = 0..32: Q30 of 1 / m at m = 1 + i / 32 */
+static const uint32_t svf_rtab[33] = {
+    1073741824, 1041204193, 1010580540, 981706811, 954437177, 928641578, 904203641, 881018933,
+    858993459, 838042399, 818089009, 799063683, 780903145, 763549742, 746950834, 731058263,
+    715827883, 701219150, 687194767, 673720360, 660764199, 648296950, 636291451, 624722516,
+    613566757, 602802428, 592409282, 582368447, 572662306, 563274399, 554189329, 545392673,
+    536870912,
+};
+
+/* 2^54 / d for d Q24 in [1, 128) (svf_recip_q30's domain), without a division: d = m 2^e with m in [1, 2), 1 / m from
+ * the table (linear interpolation, error <= 2.5e-4), one Newton step x (2 - m x) (error ~6e-8), then >> e. */
+SVF_HOT uint32_t svf_recip_fast(uint32_t d)
+{
+    unsigned e = 0;
+    if (d >= 1u << 28) d >>= 4, e += 4;
+    if (d >= 1u << 26) d >>= 2, e += 2;
+    if (d >= 1u << 25) d >>= 1, e += 1;
+    uint32_t i = (d - (1u << 24)) >> 19, fr = (d >> 3) & 0xffff;    /* 5-bit index, 16-bit fraction */
+    int32_t x = (int32_t)svf_rtab[i] - (int32_t)(((uint64_t)(svf_rtab[i] - svf_rtab[i + 1]) * fr) >> 16);   /* Q30 */
+    int32_t err = (int32_t)(SVF_Q30 - (int64_t)(((uint64_t)d * (uint32_t)x) >> 24));            /* 1 - m x, Q30 */
+    x += (int32_t)(((int64_t)x * err) >> 30);
+    return (uint32_t)x >> e;
+}
+
+void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix)
+{
+    int32_t cut = svf_clamp(cutoff_q16, 0, SVF_CUT_MAX);
+    int32_t g = svf_g(cut), k = kres;
+    if (cut < SVF_KTAB_TOP) {
+        unsigned i = (unsigned)cut >> 16;
+        int32_t kf = svf_ktab[i] - (int32_t)(((int64_t)(svf_ktab[i] - svf_ktab[i + 1]) * (cut & 0xffff)) >> 16);
+        if (k < kf) k = kf;
+    }
+    uint32_t d = (uint32_t)SVF_Q24 + (uint32_t)(((int64_t)g * (g + k)) >> 32);
+    c->g = g;
+    c->k = k;
+    c->a1 = (int32_t)svf_recip_fast(d);
+    c->a2 = (int32_t)(((int64_t)g * c->a1) >> 28);
+    mode = mode < 0 ? 0 : mode > 255 ? 255 : mode;
+    int32_t b = svf_clamp(bp_mix, 0, 32768);
+    /* (255 - mode) * 32768 / 127 as (255 - mode) * 264208 >> 10 (264208 = 2^25 / 127 rounded up; <= 1 LSB high) */
+    int32_t lp = mode <= 128 ? 32768 : ((255 - mode) * 264208) >> 10;
     int32_t hp = mode <= 128 ? mode * 256 : 32768;
     c->lp = (lp * (32768 - b)) >> 15;
     c->hp = (hp * (32768 - b)) >> 15;
