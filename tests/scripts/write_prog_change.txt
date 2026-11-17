@@ -1,0 +1,41 @@
+# A program change while WRITE is armed or committing (probe "wr" 1 or 2) is ignored: it does not replace the edit
+# buffer, which is what WRITE stores. The edit: FILTER FREQ (param 14) 100 on program 0 (init's is 164). BT (WRITE)
+# arms; MIDI program change 1 (and 2 on bank 0 with CC 32): nothing loads; the program digit (K3, ONES) only moves the
+# destination to 1; ENTER commits, a program change during the fade is ignored too; program 1 holds the edit, which is
+# still in play. After the WRITE, a program change loads as usual.
+50 btn 12
+100 expect 0 set 14 100
+150 expect 100 param 14
+200 btn 11
+250 expect 1 wr
+250 expect 0 wrdest
+300 midi 0xC0 1 0
+350 expect 1 prgreq
+350 expect 0 prog
+350 expect 100 param 14
+400 midi 0xB0 32 0
+410 midi 0xC0 2 0
+450 expect 2 prgreq
+450 expect 0 prog
+450 expect 100 param 14
+500 enc 3 1
+550 expect 1 wrdest
+550 expect 0 prog
+550 expect 100 param 14
+600 pad 3 100
+602 midi 0xC0 3 0
+604 expect 2 wr
+610 pad 3 0
+612 expect 3 prgreq
+612 expect 100 param 14
+900 expect 0 wr
+900 expect 1 writes
+900 expect 1 prog
+900 expect 100 param 14
+900 expect 100 stored 1 14
+900 expect 164 stored 3 14
+# no WRITE: program change 3 loads program 3 (init: FILTER FREQ 164)
+1000 midi 0xC0 3 0
+1050 expect 3 prog
+1050 expect 164 param 14
+1200 end

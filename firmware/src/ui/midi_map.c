@@ -64,12 +64,13 @@ static void midi_cc_send(uint16_t id, int32_t v)
     midi_send(0xB0u | controls_tx_ch(), cc, x);
 }
 
-/* program change: program prog (0..99) of bank (CC 32's, -1: the current program's) */
+/* program change: program prog (0..99) of bank (CC 32's, -1: the current program's). Ignored under MANUAL and while a
+ * WRITE is armed or committing (ctl_wr != 0): the edit buffer is what WRITE stores, a load must not replace it */
 static void ctl_program_change(int32_t bank, int32_t prog)
 {
     ctl_prg_bank = bank, ctl_prg_req = prog;
     if (bank < 0) bank = ctl_prog / 100;
-    if (ctl_manual || bank >= (int32_t)PROG_BANKS || prog < 0 || prog > 99) return;
+    if (ctl_manual || ctl_wr != 0 || bank >= (int32_t)PROG_BANKS || prog < 0 || prog > 99) return;
     ctl_prog_select(bank * 100 + prog);
 }
 

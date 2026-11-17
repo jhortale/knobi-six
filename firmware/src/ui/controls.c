@@ -266,8 +266,9 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
 {
     static program_t p;
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
+    if (ctl_wr != 0) { ctl_prog_want = n; return; }   /* (not under a WRITE, armed or committing: it stores the edit as
+                                                       * it is; MIDI program change is ignored then, midi_map.c) */
     ctl_prog = n, ctl_manual = 0, ctl_want_factory = 0, ctl_restore_ask = -1;
-    if (ctl_wr == 2) { ctl_prog_want = n; return; }   /* (not under a WRITE: it saves the edit as it was) */
     ctl_notice = prog_load((uint32_t)n, &p) == -2 ? NT_BROKEN : NT_NONE;   /* (never written: the factory program,
                                                         * else init; broken: init, and the notice says so) */
     ctl_prog_want = eng_program(&p) ? n : -1;
@@ -493,7 +494,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) ctl_set(edit, x, ctl_pad_value(x, ctl_glob[x & 0xFFu]), 1);
         else if (B_IS_ACT(x)) ctl_action(screen, x & 0xFFu);
     }
-    if (ctl_prog_want >= 0 && ctl_wr != 2) {          /* a load the engine could not take yet */
+    if (ctl_prog_want >= 0 && ctl_wr == 0) {          /* a load the engine could not take yet */
         if (ctl_want_factory) ctl_restore_factory(ctl_prog_want);
         else ctl_prog_select(ctl_prog_want);
     }

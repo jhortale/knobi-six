@@ -110,7 +110,8 @@ would be lost) brings factory program N back into the edit buffer, to keep with 
   already sound with the new program (its filter, levels, shapes glide to it in ~6 ms; its envelope rates at once).
 - **WRITE** (pad 2, or BT on any screen): arms (the pad blinks; the digits now pick the destination, nothing loads);
   **ENTER** (pad 3) stores the sound as it is (the program in play with its edits) there, and that program is then the
-  one in play. WRITE again cancels. Storing rewrites the program's 16 KB slot, whose erase stops the chip for some
+  one in play. WRITE again cancels. While WRITE is armed or storing, a MIDI program change is ignored: the edit
+  stays what WRITE stores (`tests/scripts/write_prog_change.txt`). Storing rewrites the program's 16 KB slot, whose erase stops the chip for some
   200 ms: the sound fades out (10 ms), goes silent while the flash works, and fades back in (10 ms). A deliberate
   dropout, never a click (`tests/scripts/write_held.txt`, `tests/wav_check.py`). The status line under the pads says
   WRITE TO b-tt?, STORED or WRITE FAILED. A power loss during a store loses nothing already stored: the 7 slots of 74
