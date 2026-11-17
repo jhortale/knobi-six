@@ -554,6 +554,53 @@ static void cpu_guard_recovers(void)
     CHECK(p0 >= 89 && p0 <= 90 && p1 >= 30 && p1 <= 36 && p2 <= 5 && eng_load == 0);
 }
 
+/* Task 5: the clock through the queue. P_BPM / P_CLK_DIV edits reach it (and a program load sets them), a step a beat
+ * at 120 BPM, LFO SYNC follows its tempo (FREQUENCY 100: a quarter-note cycle), MIDI CLOCK = IN: not running without a
+ * clock, running after 0xFA + ticks (and the tempo followed), stopped by 0xFC */
+static void clock_in_engine(void)
+{
+    program_t p;
+    uint32_t steps0, steps1, inc_q, inc_60;
+    int bpm_ok, div_ok, prog_ok, run_none, run_on, run_stop, bpm10;
+    eng_init();
+    eng_param(P_LFO_SYNC, 1);
+    render(BLK);
+    inc_q = eng_synth.lfo.inc;                  /* 120 BPM, a quarter a cycle: 2 Hz */
+    steps0 = eng_clk.steps;
+    render(173u * BLK);                         /* 44288 frames: 2 more beats at 120 */
+    steps1 = eng_clk.steps;
+    eng_param(P_BPM, 60), eng_param(P_CLK_DIV, CLK_DIV_16TH);
+    render(BLK);
+    inc_60 = eng_synth.lfo.inc;
+    bpm_ok = eng_clk.bpm == 60 && eng_synth.prog.v[P_BPM] == 60 && eng_edit.v[P_BPM] == 60;
+    div_ok = eng_clk.div == CLK_DIV_16TH;
+    program_init(&p);
+    p.v[P_BPM] = 200, p.v[P_CLK_DIV] = CLK_DIV_32ND;
+    eng_program(&p);
+    render(BLK);
+    prog_ok = eng_clk.bpm == 200 && eng_clk.div == CLK_DIV_32ND;
+    eng_clock_mode(CLK_MIDI_IN);
+    render(BLK);
+    run_none = eng_clk_run;
+    eng_midi_rt(0xFA);
+    for (uint32_t t = 0, next = 0; t < 60u * 919u; t += BLK) {   /* 120 BPM: a tick every 918.75 frames (x 4: 3675) */
+        while (next <= t * 4u) eng_midi_rt(0xF8), next += 3675u;
+        render(BLK);
+    }
+    run_on = eng_clk_run, bpm10 = eng_clk_bpm10;
+    eng_midi_rt(0xFC);
+    render(BLK);
+    run_stop = eng_clk_run;
+    printf("clock_in_engine: 120 BPM: %u steps in 2 beats; LFO SYNC 120 -> %.3f Hz, 60 -> %.3f Hz; BPM edit %d, DIV %d, "
+           "program %d; MIDI IN: no clock run %d, clock run %d at %d.%d BPM, 0xFC run %d\n", steps1 - steps0,
+           inc_q * 44100.0 / 4294967296.0, inc_60 * 44100.0 / 4294967296.0, bpm_ok, div_ok, prog_ok, run_none, run_on,
+           bpm10 / 10, bpm10 % 10, run_stop);
+    CHECK(steps1 - steps0 == 2u);
+    CHECK(inc_q > 2u * 97380u && inc_q < 2u * 97400u && inc_60 > 97380u && inc_60 < 97400u);
+    CHECK(bpm_ok && div_ok && prog_ok);
+    CHECK(!run_none && run_on && !run_stop && bpm10 > 1150 && bpm10 < 1250);
+}
+
 int main(void)
 {
     voice_worst_case_bounded();
@@ -569,6 +616,7 @@ int main(void)
     fade_and_tune();
     cpu_guard_sheds();
     cpu_guard_recovers();
+    clock_in_engine();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;

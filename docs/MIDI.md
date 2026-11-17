@@ -1,8 +1,8 @@
 # KNOBI-SIX MIDI
 
 USB MIDI. The code: `firmware/src/ui/midi_map.c`. Globals (GLOBE screen, see [CONTROLS.md](CONTROLS.md)):
-**MIDI CH** ALL (default) or 1..16, **PARAM TX** OFF / CC (default CC), **PARAM RX** OFF / CC (default CC). NRPN and
-SysEx come later.
+**MIDI CH** ALL (default) or 1..16, **PARAM TX** OFF / CC (default CC), **PARAM RX** OFF / CC (default CC); **MIDI
+CLOCK** (Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN and SysEx come later.
 
 ## Received (on MIDI CH; ALL = every channel)
 
@@ -23,6 +23,23 @@ SysEx come later.
 | CC 4 | foot controller: ignored in phase 1 (the reference lists it as received but not what it does) |
 | the CCs below | with PARAM RX = CC: sets the parameter (0..127 over its range; bipolar: 64 = 0). Not sent back |
 
+### MIDI clock in (any channel setting; the global MIDI CLOCK)
+
+The global **MIDI CLOCK** (Clock screen, pad 3; [CONTROLS.md](CONTROLS.md)) decides. OFF and OUT ignore incoming clock.
+IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
+
+| Byte | IN / THRU | IN NO S/S |
+| --- | --- | --- |
+| 0xF8 clock (24 a quarter note) | moves the clock one tick; the tempo is measured over the last beat (24 ticks), so it locks within a beat or two | the same; the first tick after a silence starts from the downbeat |
+| 0xFA start | the next 0xF8 is the downbeat: step 0 there | ignored |
+| 0xFB continue | runs on from where it stopped | ignored |
+| 0xFC stop | stopped: no steps (the arpeggiator waits) | ignored |
+
+No 0xF8 for 0.25 s (more than three ticks at 30 BPM, the slowest tempo) and the clock is not running: per the OB-6,
+with the clock set to follow and none present, the arpeggiator does not run. Ticks again: it runs on (unless stopped).
+Steps fall on the ticks received (the audio takes the queue at each 5.8 ms block: within one block). THRU sends every
+clock byte received straight on. The program's BPM is kept (and TAP still sets it) but not used while following.
+
 ### The autosave and MIDI notes
 
 The globals, the octave and the program last loaded are saved once nothing has been played for 3 s (an erase stalls
@@ -35,6 +52,10 @@ save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhi
 Keys: note on / off on MIDI CH (ALL = channel 1). With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
 goes out as its CC on the same channel, only when the 7-bit value changes (a 0..255 parameter moving one step may stay
 on the same CC value). Edits received over MIDI are not echoed.
+
+MIDI clock, with the global MIDI CLOCK = OUT: 0xFA when OUT is chosen (the clock restarts on a downbeat then), 24 0xF8 a
+quarter note at the clock's BPM (sent from the main loop: within a few ms of their time), 0xFC when another setting is
+chosen. THRU: the clock bytes received, as they come. BPM and DIVISION have no CC (NRPN later).
 
 ## The CC map
 

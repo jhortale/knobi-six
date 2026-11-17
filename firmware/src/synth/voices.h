@@ -87,6 +87,7 @@ struct synth {
     uint16_t calm;                        /* blocks in a row where one more voice fits (synth_guard) */
     uint32_t sheds;                       /* the CPU guard's sheds since init (each lowered the limit) */
     float dcx[2], dcy[2];                 /* the bus DC blocker: last input, last output, L R */
+    uint32_t clk_qinc;                    /* the clock's tempo, Q32 quarter notes a frame (synth_clock; 0 none) */
 };
 
 void synth_init(synth_t *s);
@@ -101,6 +102,9 @@ void synth_panic(synth_t *s);                       /* every voice silent now, k
 void synth_all_notes_off(synth_t *s);               /* every note released (envelopes release), HOLD unchanged */
 void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times PROGRAM VOLUME, smoothed */
 void synth_tune(synth_t *s, int cents);             /* master transpose + tune, -1250..+1250 cents, both VCOs */
+void synth_clock(synth_t *s, uint32_t quarter_inc); /* the clock's tempo for LFO SYNC (clock.h clock_quarter_inc; the
+                                                     * engine, every block): a synced LFO runs at a note value of it
+                                                     * (mod.h lfo_sync_inc); 0 = none known: free running */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
 /* The render seam (Phase 2: part of the voices can render on the second core). Each control period synth_render runs

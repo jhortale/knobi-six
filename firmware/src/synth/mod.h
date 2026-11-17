@@ -8,7 +8,8 @@
  * SAW (rising 0 -> +1), REV SAW (+1 -> 0) and SQUARE (+1 for the first half cycle, then 0) are >= 0. RANDOM is a
  * sample and hold, one new uniform value per cycle; at FREQUENCY 254 (and only there: the increment equals LFO_INC_TOP)
  * it takes a new value on every lfo_tick, i.e. white noise at the tick rate (the hidden 6th shape). LFO SYNC: when
- * synced and a clock increment is given (phase 2's clock: Q32 cycles per sample), the LFO runs at that increment
+ * synced and a clock increment is given (lfo_sync_inc from the clock's tempo: Q32 cycles per sample), the LFO runs at
+ * that increment
  * (capped just below LFO_INC_TOP, so a synced LFO never turns into noise); clock_inc 0 or SYNC off = free running.
  * Key reset: lfo_key(first_key_down = 1) restarts the phase at 0 (and RANDOM draws a new value at the next tick);
  * lfo_key(0), a key pressed while others are held, does nothing. The reset applies with SYNC on and off (ruling: the
@@ -88,6 +89,12 @@ typedef struct { uint32_t ph, inc, rnd; int32_t held; uint8_t keyed; } lfo_t;   
 void lfo_init(lfo_t *l, uint32_t seed);                                       /* phase 0, FREQUENCY 100, free */
 void lfo_set(lfo_t *l, int freq_param, int synced, uint32_t clock_inc);      /* 0.022..500 Hz */
 void lfo_key(lfo_t *l, int first_key_down);                                   /* reset on first key only */
+/* LFO SYNC's rate (Task 5; the reference leaves the mapping open): FREQUENCY 0..254 picks one of 16 note values,
+ * index FREQUENCY x 16 / 255, as cycles a quarter note: 1/16 (4 bars), 1/8, 1/4 (a bar), 1/3, 1/2, 2/3, 1 (a quarter:
+ * FREQUENCY 96..111, the default 100 among them), 4/3, 3/2, 2, 3, 4, 6, 8, 12, 16. quarter_inc: the clock's tempo, Q32
+ * quarter notes a frame (clock.h clock_quarter_inc); 0 (no tempo known) gives 0, which lfo_set takes as free running */
+#define LFO_SYNC_QTR_P 96
+uint32_t lfo_sync_inc(int freq_param, uint32_t quarter_inc);
 int32_t lfo_tick(lfo_t *l, int shape, uint32_t frames);                       /* Q15; sine/random bipolar, saw/rev saw/square >= 0; random at max rate = noise */
 /* total depth: initial amount + mod wheel + (aftertouch if AT->LFO AMT), Q15; negative AT amount inverts */
 int32_t lfo_depth(int initial, int wheel_0_127, int32_t at_q15, int at_to_lfoamt);

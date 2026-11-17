@@ -11,10 +11,10 @@
 #define GLOB_DUAL_MIN
 #define GLOB_DUAL_MAX
 #endif
-/*                                   CH  POT TX RX  TRANSP TUNE VEL LOCAL STEREO SUS AT (DUAL) */
-const int8_t GLOB_MIN[G_COUNT] = {   0,  0,  0, 0,   -12,  -50,  0,  0,    0,     0,  0 GLOB_DUAL_MIN};
-const int8_t GLOB_MAX[G_COUNT] = {  16,  2,  1, 1,    12,   50,  7,  1,    1,     1,  3 GLOB_DUAL_MAX};
-const int8_t GLOB_DEF[G_COUNT] = {   0,  POT_RELATIVE, 1, 1, 0, 0, 0, 1,  0,     0,  0 GLOB_DUAL_MIN};
+/*                                   CH  POT TX RX  TRANSP TUNE VEL LOCAL STEREO SUS AT  CLOCK ARPSYNC (DUAL) */
+const int8_t GLOB_MIN[G_COUNT] = {   0,  0,  0, 0,   -12,  -50,  0,  0,    0,     0,  0,   0,    0 GLOB_DUAL_MIN};
+const int8_t GLOB_MAX[G_COUNT] = {  16,  2,  1, 1,    12,   50,  7,  1,    1,     1,  3,   4,    1 GLOB_DUAL_MAX};
+const int8_t GLOB_DEF[G_COUNT] = {   0,  POT_RELATIVE, 1, 1, 0, 0, 0, 1,  0,     0,  0,   0,    0 GLOB_DUAL_MIN};
 
 #ifndef GLOBALS_PURE
 #include "store_prog.h"
@@ -29,7 +29,7 @@ void globals_pack(const globals_t *g, uint8_t *b)
     unsigned o = 0, i;
     uint16_t c;
     b[o++] = GLOBALS_VERSION;
-    for (i = 0; i < G_COUNT_V1; i++) b[o++] = (uint8_t)g->v[i];
+    for (i = 0; i < G_COUNT_V2; i++) b[o++] = (uint8_t)g->v[i];
     b[o++] = (uint8_t)g->oct;
     b[o++] = (uint8_t)(g->last_prog & 0xFFu);
     b[o++] = (uint8_t)(g->last_prog >> 8);
@@ -39,14 +39,18 @@ void globals_pack(const globals_t *g, uint8_t *b)
     b[o++] = (uint8_t)(c >> 8);
 }
 
-static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record */
+static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record (version 2, or 1: the rest defaults) */
 {
     uint8_t b[GLOBALS_BYTES];
-    unsigned o = 1, i;
-    if (blob_load(blob, b, sizeof b) || b[0] != GLOBALS_VERSION ||
-        program_crc16(b, GLOBALS_BYTES - 2u) != (uint16_t)(b[GLOBALS_BYTES - 2u] | b[GLOBALS_BYTES - 1u] << 8))
+    unsigned o = 1, i, n = GLOBALS_BYTES, nv = G_COUNT_V2;
+    if (blob_load(blob, b, GLOBALS_BYTES) == 0) {
+        if (b[0] != GLOBALS_VERSION) return -1;
+    } else if (blob_load(blob, b, GLOBALS_BYTES_V1) == 0 && b[0] == 1u) n = GLOBALS_BYTES_V1, nv = G_COUNT_V1;
+    else return -1;
+    if (program_crc16(b, n - 2u) != (uint16_t)(b[n - 2u] | b[n - 1u] << 8))
         return -1;
-    for (i = 0; i < G_COUNT_V1; i++) {
+    for (i = 0; i < G_COUNT; i++) t->v[i] = GLOB_DEF[i];   /* (what a version-1 record lacks) */
+    for (i = 0; i < nv; i++) {
         t->v[i] = (int8_t)b[o++];
         if (t->v[i] < GLOB_MIN[i] || t->v[i] > GLOB_MAX[i]) return -1;
     }

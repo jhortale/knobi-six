@@ -50,7 +50,14 @@ static void synth_xmod(synth_t *s)
 
 static void synth_lfo_set(synth_t *s)
 {
-    lfo_set(&s->lfo, s->prog.v[P_LFO_FREQ], s->prog.v[P_LFO_SYNC], 0);
+    lfo_set(&s->lfo, s->prog.v[P_LFO_FREQ], s->prog.v[P_LFO_SYNC],
+            s->prog.v[P_LFO_SYNC] ? lfo_sync_inc(s->prog.v[P_LFO_FREQ], s->clk_qinc) : 0);
+}
+void synth_clock(synth_t *s, uint32_t quarter_inc)
+{
+    if (quarter_inc == s->clk_qinc) return;
+    s->clk_qinc = quarter_inc;
+    if (s->prog.v[P_LFO_SYNC]) synth_lfo_set(s);
 }
 
 /* the context every voice reads at this tick, from the smoothed values */

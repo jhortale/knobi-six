@@ -9,7 +9,7 @@
 enum param_kind { PK_KNOB, PK_SWITCH, PK_SELECT };
 
 enum param_section {
-    PS_VCO1, PS_VCO2, PS_MIXER, PS_FILTER, PS_FENV, PS_LENV, PS_LFO, PS_XMOD, PS_AFTERTOUCH, PS_MISC, PS_COUNT
+    PS_VCO1, PS_VCO2, PS_MIXER, PS_FILTER, PS_FENV, PS_LENV, PS_LFO, PS_XMOD, PS_AFTERTOUCH, PS_MISC, PS_CLOCK, PS_COUNT
 };
 
 typedef struct {
@@ -29,8 +29,8 @@ enum param_id {
     P_AT_AMT, P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE,
     P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_ON, P_PORTA_MODE, P_PORTA_RATE, P_UNISON_ON, P_UNISON_VOICES,
     P_COUNT_PHASE1,
-    /* Phase 2/3 values, reserved: a program stores and carries them (record version 2), nothing reads them yet (no
-     * PARAMS entry, no screen, no sound). Units are the OB-6's own (docs/FACTORY_BANK.md, tools/ob6_import.py):
+    /* Phase 2/3 values, reserved: a program stores and carries them (record version 2); nothing reads them (no
+     * PARAMS entry, no screen, no sound) until a task makes one live (P_IS_LIVE below: P_BPM and P_CLK_DIV, Task 5). Units are the OB-6's own (docs/FACTORY_BANK.md, tools/ob6_import.py):
      * FX types as the OB-6 lists them (A 0..9: off bbd ddl cho FL1 FL2 PH1 PH2 PH3 rin; B 0..13: those, then HAL rOO
      * PLA SPr), P1 0..255, P2 / mix 0..127, the delay sync division 0..10 (1 2d 2 4d 4 4t 8d 8 8t 16d 16), the clock
      * division 0..9 (half qtr 8th 8thD 8thS 8thT 16th 16thS 16thT 32nd), arp mode 0..4 (up down up+down random
@@ -46,6 +46,16 @@ enum param_id {
 extern const int16_t PARAMS_RESERVED[P_RESERVED_N][3];
 
 extern const param_t PARAMS[P_COUNT_PHASE1];
+
+/* The live ids: what the synth, the clock and the panel use. Phase 1's (PARAMS) and the reserved ids a later task made
+ * live, each with an entry of its own (PARAMS_LIVE2; its range and default the same as PARAMS_RESERVED's, so a record
+ * of version 2 carries them already, no new record version): P_BPM 30..250 (default 120), P_CLK_DIV the 10 divisions
+ * (default QTR): the clock (Task 5, synth/clock.h). Everything that takes "a param" (the queue, the panel, the screens)
+ * takes a live id; the other reserved ids are only stored. */
+#define P_IS_LIVE(id) ((id) < P_COUNT_PHASE1 || (id) == P_BPM || (id) == P_CLK_DIV)
+#define P_LIVE2_N 2
+extern const param_t PARAMS_LIVE2[P_LIVE2_N];
+const param_t *param_get(uint16_t id);                     /* a live id's entry, else 0 */
 
 #ifndef PROGRAM_VERSION
 #define PROGRAM_VERSION 2                 /* current record version; bump together with a PROGRAM_VERSION_TABLE entry

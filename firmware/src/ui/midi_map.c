@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX MIDI mapping (docs/MIDI.md): our own CC map, one CC per continuous (knob) parameter, in and out, and the
- * channel messages. Included by app.c after ui/controls.c; tests/unit/test_controls.c includes the map with
- * CONTROLS_PURE.
+ * channel messages, and MIDI clock in (ctl_midi_rt). Included by app.c after ui/controls.c; tests/unit/test_controls.c
+ * includes the map with CONTROLS_PURE.
  *
  * In (controls_midi, main loop; the channel: global MIDI CH, 0 = ALL): notes (velocity; note-off velocity ignored),
  * channel pressure (aftertouch, with the bottom pads': the higher), pitch bend (added to the pitch wheel's), CC 1 mod
@@ -74,11 +74,22 @@ static void ctl_program_change(int32_t bank, int32_t prog)
     ctl_prog_select(bank * 100 + prog);
 }
 
+/* MIDI clock in (0xF8 clock, FA start, FB continue, FC stop; any channel setting): to the clock when the global MIDI
+ * CLOCK follows one (IN, SLAVE THRU, IN-no-start-stop), echoed out under SLAVE THRU; ignored under OFF and OUT */
+static void ctl_midi_rt(uint32_t st)
+{
+    int m = ctl_glob[G_MIDI_CLOCK];
+    if (!CLOCK_EXTERNAL(m)) return;
+    eng_midi_rt(st);
+    if (m == CLK_MIDI_THRU) midi_send(st, 0, 0);
+}
+
 void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
 {
     uint32_t ty = st & 0xF0u;
     int id;
-    if (st >= 0xF0u || st < 0x80u) return;              /* (system messages: clock is phase 2) */
+    if (st >= 0xF8u) { ctl_midi_rt(st); return; }     /* realtime: the clock */
+    if (st >= 0xF0u || st < 0x80u) return;              /* (other system messages: not ours) */
     if (ctl_glob[G_MIDI_CH] && (st & 15u) != ctl_glob[G_MIDI_CH] - 1u) return;
     d1 &= 127u, d2 &= 127u;
     switch (ty) {

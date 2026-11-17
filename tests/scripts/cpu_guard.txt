@@ -6,7 +6,7 @@
 # 68 % < 70 %), so the limit climbs back after ~1 s and stays: one shed, no oscillation.
 50 btn 12
 100 btn 10
-150 expect 8 screen
+150 expect 9 screen
 200 cpu 15789
 200 midi 0x90 48 100
 200 midi 0x90 53 100

@@ -313,6 +313,50 @@ static void globals_bad_crc_defaults(void)
     CHECK(crc_bad && range_bad && ver_bad && prog_bad);
 }
 
+/* Task 5: MIDI CLOCK and ARP BEAT SYNC join the record (version 2). A version-1 record (what Phase 1 saved: 11 values)
+ * still loads, the new globals at their defaults (MIDI CLOCK OFF, ARP BEAT SYNC OFF); a version-2 record keeps them; out
+ * of range: the defaults */
+static void globals_v1_record(void)
+{
+    uint8_t raw[1 + 11 + 1 + 2 + 4 + 2];
+    globals_t h, d, g;
+    uint16_t c;
+    unsigned o = 0, i;
+    int v1_ok, v2_ok, range_bad;
+    globals_default(&d);
+    CHECK(d.v[G_MIDI_CLOCK] == 0 && d.v[G_ARP_SYNC] == 0 && GLOB_MAX[G_MIDI_CLOCK] == 4 && GLOB_MAX[G_ARP_SYNC] == 1);
+    memset(f_blob, 0xFF, sizeof f_blob);
+    raw[o++] = 1;                               /* version 1: MIDI CH 7, POT JUMP, ... AT CURVE 2 */
+    for (i = 0; i < 11u; i++) raw[o++] = (uint8_t)(i == G_MIDI_CH ? 7 : i == G_POT_MODE ? POT_JUMP : i == G_AT_CURVE ? 2 :
+                                                   i == G_TUNE ? (uint8_t)-9 : GLOB_DEF[i]);
+    raw[o++] = (uint8_t)-1;                     /* octave -1 */
+    raw[o++] = 33, raw[o++] = 0;                /* last program 33 */
+    raw[o++] = 5, raw[o++] = 0, raw[o++] = 0, raw[o++] = 0;   /* seq 5 */
+    c = program_crc16(raw, o);
+    raw[o++] = (uint8_t)(c & 0xFFu), raw[o++] = (uint8_t)(c >> 8);
+    blob_save(0, raw, sizeof raw);
+    globals_load(&h);
+    v1_ok = h.v[G_MIDI_CH] == 7 && h.v[G_POT_MODE] == POT_JUMP && h.v[G_AT_CURVE] == 2 && h.v[G_TUNE] == -9 &&
+            h.oct == -1 && h.last_prog == 33 && h.seq == 5 && h.v[G_MIDI_CLOCK] == 0 && h.v[G_ARP_SYNC] == 0;
+    h.v[G_MIDI_CLOCK] = 3, h.v[G_ARP_SYNC] = 1;
+    globals_save(&h);                           /* (version 2, into blob 1) */
+    globals_load(&g);
+    v2_ok = g.v[G_MIDI_CLOCK] == 3 && g.v[G_ARP_SYNC] == 1 && g.v[G_MIDI_CH] == 7 && g.seq == 6 &&
+            f_get32(f_blob[1] + 4) == GLOBALS_BYTES;
+    memset(f_blob, 0xFF, sizeof f_blob);
+    g.v[G_MIDI_CLOCK] = 5;                      /* out of range, the CRC right */
+    {
+        uint8_t b[GLOBALS_BYTES];
+        globals_pack(&g, b);
+        blob_save(0, b, sizeof b);
+    }
+    globals_load(&h);
+    range_bad = !memcmp(&h, &d, sizeof h);
+    printf("globals_v1_record: a version-1 record loads (new globals OFF) %d; version 2 keeps MIDI CLOCK / ARP BEAT SYNC "
+           "%d; MIDI CLOCK 5 -> defaults %d\n", v1_ok, v2_ok, range_bad);
+    CHECK(v1_ok && v2_ok && range_bad);
+}
+
 /* the velocity and aftertouch curves: 0 is linear; every curve rises with its input, keeps 0 at 0 and never turns a
  * played note (1..127) into 0 (a note-off) */
 static void response_curves(void)
@@ -341,8 +385,8 @@ static void response_curves(void)
 
 #if KNOBI_CPU1
 /* Phase 2 Task 3 (test_store_cpu1.c: this file with KNOBI_CPU1): the DUAL CORE global, in a blob of its own
- * (GLOBALS_DUAL_BLOB). The version-1 record in blobs 0 / 1 is byte for byte what a default build saves (globals_pack
- * packs the first G_COUNT_V1 in both builds, and blob 2 is the only other blob written): a default build's record
+ * (GLOBALS_DUAL_BLOB). The record in blobs 0 / 1 (version 2 since Task 5) is byte for byte what a default build saves
+ * (globals_pack packs the first G_COUNT_V2 in both builds, and blob 2 is the only other blob written): a default build's record
  * reads back whole here (DUAL CORE off, no blob 2), this build's reads back whole there (the same bytes); swapping
  * the builds keeps the globals both ways. DUAL CORE's blob missing, broken or out of range: OFF */
 static void globals_dual_blob(void)
@@ -410,6 +454,7 @@ int main(void)
     globals_roundtrip();
     globals_cut_save();
     globals_bad_crc_defaults();
+    globals_v1_record();
 #if KNOBI_CPU1
     globals_dual_blob();
 #endif

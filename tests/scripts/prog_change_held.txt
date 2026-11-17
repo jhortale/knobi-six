@@ -53,7 +53,7 @@
 # MANUAL (Program screen pad 4): the program shows as -1, MIDI program change is ignored; turning a digit loads
 3600 btn 10
 3650 btn 2
-3700 expect 7 screen
+3700 expect 8 screen
 3750 pad 4 100
 3760 pad 4 0
 3800 expect -1 prog

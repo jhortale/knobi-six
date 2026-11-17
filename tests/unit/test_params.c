@@ -151,10 +151,35 @@ static void packed_size(void)
     CHECK(PROGRAM_PACKED_MAX <= 256);
 }
 
+/* Task 5: P_BPM and P_CLK_DIV are live: an entry each (param_get), in the clock section, with the reserved range and
+ * default (a version-2 record already carries them: no new record version), the reference's ranges (BPM 30..250, the
+ * 10 divisions); every phase-1 id is live and is PARAMS's own entry; the other reserved ids are not live yet */
+static void clock_params_live(void)
+{
+    const param_t *b = param_get(P_BPM), *d = param_get(P_CLK_DIV);
+    int others = 0;
+    CHECK(b && d);
+    if (!b || !d) return;
+    CHECK(b->id == P_BPM && b->kind == PK_KNOB && b->min == 30 && b->max == 250 && b->def == 120 && b->section == PS_CLOCK);
+    CHECK(d->id == P_CLK_DIV && d->kind == PK_SELECT && d->min == 0 && d->max == 9 && d->def == 1 && d->labels);
+    CHECK(PS_CLOCK < PS_COUNT);
+    for (unsigned i = 0; i < 2; i++) {
+        const param_t *x = i ? d : b;
+        CHECK(x->min == PARAMS_RESERVED[x->id - P_COUNT_PHASE1][0] && x->max == PARAMS_RESERVED[x->id - P_COUNT_PHASE1][1] &&
+              x->def == PARAMS_RESERVED[x->id - P_COUNT_PHASE1][2]);
+    }
+    CHECK(!strcmp(d->labels[0], "HALF") && !strcmp(d->labels[4], "8TH S") && !strcmp(d->labels[9], "32ND"));
+    for (unsigned i = 0; i < P_COUNT_PHASE1; i++) CHECK(P_IS_LIVE(i) && param_get((uint16_t)i) == &PARAMS[i]);
+    for (unsigned i = P_COUNT_PHASE1; i < P_COUNT_RESERVED + 2u; i++)
+        others += (i != P_BPM && i != P_CLK_DIV) && (P_IS_LIVE(i) || param_get((uint16_t)i));
+    CHECK(others == 0);
+}
+
 int main(void)
 {
     ids_dense(); defaults_in_range(); bipolar_set(); lfo_dests_are_switches(); ranges_from_reference();
     pack_roundtrip(); unpack_rejects_corrupt(); unpack_version_and_length(); older_version_gets_defaults(); packed_size();
+    clock_params_live();
     printf(fails ? "test_params: %d FAILED\n" : "test_params: ok\n", fails);
     return fails != 0;
 }

@@ -1,0 +1,67 @@
+# Phase 2 Task 5: the clock (synth/clock.h) on the Clock screen (7: from Play, > six times). Ids: param 80 = BPM,
+# 81 = CLOCK DIV, 32 = LFO SYNC; glob 11 = MIDI CLOCK (0 OFF, 1 OUT, 2 IN, 3 SLAVE THRU, 4 IN no start / stop).
+# Probes: "clkbpm" / "clkdiv" / "clkmode" what the clock (engine.c eng_clk) has applied, "clkrun" it runs (an external
+# clock: arriving and started), "bpm10" the tempo it follows x 10, "lfoinc" the LFO's increment (Q32 cycles a frame).
+# Top pads: 2 TAP, 3 MIDI CLOCK (cycles), 4 ARP BEAT SYNC.
+100 expect 0 scrcheck
+1100 btn 3
+1110 btn 3
+1120 btn 3
+1130 btn 3
+1140 btn 3
+1150 btn 3
+1200 expect 7 screen
+1200 expect 120 clkbpm
+# tap tempo: 4 taps 400 ms apart -> 150 BPM, into the program (param 80) and the clock; the 3rd tap changes nothing
+1300 pad 2 100
+1310 pad 2 0
+1700 pad 2 100
+1710 pad 2 0
+2100 pad 2 100
+2110 pad 2 0
+2200 expect 120 param 80
+2500 pad 2 100
+2510 pad 2 0
+2600 expect 150 param 80
+2600 expect 150 clkbpm
+# K3: the division +5 -> 16TH (6)
+2650 enc 2 5
+2700 expect 6 param 81
+2700 expect 6 clkdiv
+# LFO SYNC on: FREQUENCY 100 = a quarter-note cycle at 150 BPM (clock_quarter_inc 243479: 2.5 Hz)
+2800 expect 0 set 32 1
+2900 expect 243479 lfoinc
+# MIDI CLOCK = IN (the pad twice): no clock, not running; 0xFA and a 120 BPM clock: running, its tempo followed
+3000 pad 3 100
+3010 pad 3 0
+3020 pad 3 100
+3030 pad 3 0
+3200 expect 2 glob 11
+3200 expect 2 clkmode
+3200 expect 0 clkrun
+3300 midi 0xFA 0 0
+3310 clock 120 100
+3400 expect 1 clkrun
+# (120.2 and 195062 = 2.0 Hz: the tempo from ticks seen at block starts and at the host's whole milliseconds; a
+# quarter-note LFO at it)
+4500 expect 1 clkrun
+4500 expect 1202 bpm10
+4500 expect 195062 lfoinc
+# 0xFC stops it (the ticks go on); 0xFB continues; the clock gone (the last tick ~5373 ms): stopped after 0.25 s
+5000 midi 0xFC 0 0
+5100 expect 0 clkrun
+5150 midi 0xFB 0 0
+5200 expect 1 clkrun
+5800 expect 0 clkrun
+# back to OFF (THRU, IN no start / stop, OFF): the internal clock runs, at the program's 150
+6000 pad 3 100
+6010 pad 3 0
+6020 pad 3 100
+6030 pad 3 0
+6040 pad 3 100
+6050 pad 3 0
+6200 expect 0 glob 11
+6200 expect 1 clkrun
+6200 expect 1500 bpm10
+6300 shot
+6500 end

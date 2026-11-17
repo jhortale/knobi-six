@@ -12,7 +12,8 @@
  *   pitch      the wheel bends +-BEND RANGE (the program's) at its ends (plus MIDI pitch bend)
  *   mod wheel  0..127: adds LFO depth (the higher of it and MIDI CC 1)
  *   buttons    lit while held
- *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change
+ *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change,
+ *              MIDI clock (the global MIDI CLOCK; synth/clock.h); clock out: clock_out below
  *   programs   params/store_prog.c: 500 in the flash slots (bank / tens / ones), WRITE (fade out, save, fade in),
  *              MANUAL; the globals (params/globals.c) and the last program in blobs 0 / 1 (A/B), saved after
  *              3 s with nothing played
@@ -138,6 +139,27 @@ static void app_idle(void)
     if (idle_ok) midi_in();
 }
 
+/* MIDI clock out (global MIDI CLOCK = OUT; synth/clock.h): one 0xF8 for each tick the clock counted (engine.c
+ * eng_clk_ticks, 24 a quarter), 0xFA when OUT is chosen (the clock restarts on a downbeat then), 0xFC when it is left.
+ * From the main loop: a tick goes out within a pass of its time (a few ms at most); more than 8 owed at once (a long
+ * stall) are dropped, not sent in a burst */
+static void clock_out(void)
+{
+    static int8_t mode = -1;
+    static uint32_t sent;
+    int m = ctl_glob[G_MIDI_CLOCK];
+    uint32_t t = eng_clk_ticks;
+    if (m != mode) {
+        if (mode == CLK_MIDI_OUT) midi_send(0xFCu, 0, 0);
+        if (m == CLK_MIDI_OUT) midi_send(0xFAu, 0, 0);
+        mode = (int8_t)m, sent = t;
+        return;
+    }
+    if (m != CLK_MIDI_OUT) return;
+    if (t - sent > 8u) sent = t - 8u;
+    for (; sent != t; sent++) midi_send(0xF8u, 0, 0);
+}
+
 #if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
 #include "../../tests/cpu1_emu/dual_hook.c"     /* (fm1-emu cases 6..8; never in a real build) */
 #endif
@@ -213,6 +235,7 @@ static void app_main(void)
 #endif
 
         midi_in();
+        clock_out();
 
         for (k = 0; k < 18u; k++)               /* a button lit while it is held */
             fm1_led_key(k, fm1_in.buttons >> k & 1u);
@@ -263,7 +286,15 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     }
     else if (!strcmp(name, "voices")) *got = eng_active();             /* voices sounding (releases included) */
     else if (!strcmp(name, "enc")) *got = (int)enc_pos[a0 & 7u];       /* enc K: encoder K's position (0 = K1) */
-    else if (!strcmp(name, "param")) *got = a0 < P_COUNT_PHASE1 ? eng_edit.v[a0] : -1;   /* param ID: its value */
+    else if (!strcmp(name, "param")) *got = P_IS_LIVE(a0) ? eng_edit.v[a0] : -1;   /* param ID: its value (a live id) */
+    else if (!strcmp(name, "bpm10")) *got = eng_clk_bpm10;             /* the clock's tempo followed, BPM x 10 */
+    else if (!strcmp(name, "clkrun")) *got = eng_clk_run;              /* the clock runs (an external one: arriving) */
+    else if (!strcmp(name, "clkticks")) *got = (int)eng_clk_ticks;     /* ticks counted (24 a quarter) */
+    else if (!strcmp(name, "clksteps")) *got = (int)eng_clk.steps;     /* steps since the clock's start */
+    else if (!strcmp(name, "clkbpm")) *got = eng_clk.bpm;              /* the clock's internal BPM (the program's) */
+    else if (!strcmp(name, "clkdiv")) *got = eng_clk.div;              /* its division */
+    else if (!strcmp(name, "clkmode")) *got = eng_clk.mode;            /* its mode (the MIDI CLOCK global, applied) */
+    else if (!strcmp(name, "lfoinc")) *got = (int)eng_synth.lfo.inc;   /* the LFO's increment, Q32 cycles a frame */
     else if (!strcmp(name, "bend")) *got = eng_last_bend;              /* the bend sent, 0..16383 */
     else if (!strcmp(name, "wheel")) *got = eng_last_wheel;            /* the mod wheel sent, 0..127 */
     else if (!strcmp(name, "screen")) *got = screen;                   /* the screen, enum screen_id (ui/controls.h) */

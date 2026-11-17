@@ -16,25 +16,33 @@
  *   STEREO      0 STEREO, 1 MONO (both outputs the sum)
  *   SUSTAIN     0 N.O., 1 N.C. (the polarity of the sustain message, MIDI CC 64: N.C. reads it upside down)
  *   AT CURVE    0..3 (0 linear, 1 soft, 2 softer, 3 hard) the bottom pads' pressure
+ *   MIDI CLOCK  0 OFF, 1 OUT, 2 IN, 3 SLAVE THRU, 4 IN (no start / stop): the clock (synth/clock.h CLK_MIDI_*; the
+ *               reference's 7, MIDI CLOCK; USB only: the SMK-37 has no MIDI jack, so no CLOCK PORT); OFF by default
+ *   ARP BEAT SYNC 0 OFF, 1 ON: the arpeggiator starts on the clock's next step (the reference's bottom row 9; Task 6)
  *   DUAL CORE   0 OFF, 1 ON: half the voices render on the second core (engine.c). Only in a KNOBI_CPU1 build
  *               (docs/API.md "Second core"); OFF by default
- * The record (version 1, blobs 0 / 1) holds the first G_COUNT_V1, byte for byte the same in every build. A
- * KNOBI_CPU1 build keeps DUAL CORE in a blob of its own (GLOBALS_DUAL_BLOB, globals.c), which a default build never
- * touches: the two builds can be swapped both ways with the globals kept; no DUAL CORE blob (or a broken one): OFF. */
+ * The record (version 2, blobs 0 / 1) holds the first G_COUNT_V2, byte for byte the same in every build; a version-1
+ * record (Phase 1's: the first G_COUNT_V1) still loads, the globals it lacks at their defaults. A KNOBI_CPU1 build
+ * keeps DUAL CORE in a blob of its own (GLOBALS_DUAL_BLOB, globals.c), which a default build never touches: the two
+ * builds can be swapped both ways with the globals kept; no DUAL CORE blob (or a broken one): OFF. (A firmware from
+ * before version 2 reads a version-2 record as none: its defaults.) */
 enum { G_MIDI_CH, G_POT_MODE, G_PARAM_TX, G_PARAM_RX, G_TRANSPOSE, G_TUNE, G_VEL_CURVE, G_LOCAL, G_STEREO, G_SUSTAIN,
        G_AT_CURVE, G_COUNT_V1,
+       G_MIDI_CLOCK = G_COUNT_V1, G_ARP_SYNC, G_COUNT_V2,
 #if KNOBI_CPU1
-       G_DUAL = G_COUNT_V1, G_COUNT
+       G_DUAL = G_COUNT_V2, G_COUNT
 #else
-       G_COUNT = G_COUNT_V1
+       G_COUNT = G_COUNT_V2
 #endif
 };
 enum { POT_RELATIVE, POT_PASSTHRU, POT_JUMP };
 extern const int8_t GLOB_MIN[G_COUNT], GLOB_MAX[G_COUNT], GLOB_DEF[G_COUNT];
 
-#define GLOBALS_VERSION 1
-#define GLOBALS_BYTES (1 + G_COUNT_V1 + 1 + 2 + 4 + 2)   /* version, the values, octave, last program (LE), seq (LE),
+#define GLOBALS_VERSION 2
+#define GLOBALS_BYTES_OF(n) (1 + (n) + 1 + 2 + 4 + 2)   /* version, n values, octave, last program (LE), seq (LE),
                                                           * CRC16 (LE) */
+#define GLOBALS_BYTES GLOBALS_BYTES_OF(G_COUNT_V2)        /* the record saved (version 2) */
+#define GLOBALS_BYTES_V1 GLOBALS_BYTES_OF(G_COUNT_V1)     /* a version-1 record (read only) */
 #if KNOBI_CPU1
 #define GLOBALS_DUAL_BLOB 2u                          /* DUAL CORE's blob (blobs 2..7 are otherwise unused) */
 #define GLOBALS_DUAL_BYTES 7                          /* "DUAL", the value, CRC16 (LE) */

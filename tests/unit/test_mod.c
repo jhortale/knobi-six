@@ -468,9 +468,29 @@ static void cost(void)
     printf("cost: mods_xm_tick (6 dests) + mods_fm1 = %.2f ns per voice-sample on the host (%d)\n", ns, sink != 0);
 }
 
+/* LFO SYNC (Task 5): FREQUENCY picks a note value of the clock's tempo (mod.h lfo_sync_inc), 16 of them from a cycle
+ * in 4 bars (FREQUENCY 0) to 16 cycles a quarter note (254), a quarter-note cycle at LFO_SYNC_QTR_P; rising */
+static void lfo_sync_divisions(void)
+{
+    uint32_t q = 194784u;                       /* 120 BPM: Q32 quarter notes a frame (clock_quarter_inc) */
+    uint32_t i0 = lfo_sync_inc(0, q), iq = lfo_sync_inc(LFO_SYNC_QTR_P, q), i254 = lfo_sync_inc(254, q), prev = 0;
+    int mono = 1;
+    for (int p = 0; p <= 254; p++) {
+        uint32_t i = lfo_sync_inc(p, q);
+        if (i < prev) mono = 0;
+        prev = i;
+    }
+    printf("lfo_sync_divisions: 120 BPM: FREQ 0 -> %.4f Hz (4 bars), FREQ %d -> %.3f Hz (a quarter), 254 -> %.2f Hz "
+           "(16 a quarter), rising %d, no clock -> %u\n", i0 * FS / 4294967296.0, LFO_SYNC_QTR_P, iq * FS / 4294967296.0,
+           i254 * FS / 4294967296.0, mono, lfo_sync_inc(100, 0));
+    CHECK(iq == q && i0 == q / 16u && i254 == q * 16u);
+    CHECK(mono && lfo_sync_inc(100, 0) == 0u);
+}
+
 int main(void)
 {
     lfo_range();
+    lfo_sync_divisions();
     lfo_polarity();
     lfo_random_max_is_noise();
     lfo_key_reset_first_only();

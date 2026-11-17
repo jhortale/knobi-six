@@ -17,7 +17,7 @@
 500 expect 1 sounding 60
 1000 btn 11
 1050 expect 1 wr
-1050 expect 7 screen
+1050 expect 8 screen
 1050 expect 0 wrdest
 1100 enc 3 7
 1150 expect 7 wrdest

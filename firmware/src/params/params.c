@@ -114,6 +114,22 @@ const int16_t PARAMS_RESERVED[P_RESERVED_N][3] = {
     [P_ARP_RANGE - P_COUNT_PHASE1] = {0, 2, 0}, [P_ARP_HOLD - P_COUNT_PHASE1] = {0, 1, 0},
 };
 
+/* the live reserved ids (params.h P_IS_LIVE): the reference's 2.11 CLOCK. CLOCK DIV's labels: clock.h's table */
+static const char *const param_l_div[] = { "HALF", "QTR", "8TH", "8TH D", "8TH S", "8TH T", "16TH", "16TH S", "16TH T",
+                                           "32ND" };
+const param_t PARAMS_LIVE2[P_LIVE2_N] = {
+    { P_BPM, PS_CLOCK, PK_KNOB, 2, 0, 30, 250, 120, "BPM", 0 },
+    { P_CLK_DIV, PS_CLOCK, PK_SELECT, 2, 0, 0, 9, 1, "CLOCK DIV", param_l_div },
+};
+
+const param_t *param_get(uint16_t id)
+{
+    if (id < P_COUNT_PHASE1) return &PARAMS[id];
+    if (id == P_BPM) return &PARAMS_LIVE2[0];
+    if (id == P_CLK_DIV) return &PARAMS_LIVE2[1];
+    return 0;
+}
+
 int16_t param_clamp(uint16_t id, int32_t value)
 {
     int32_t lo, hi;

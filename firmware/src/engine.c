@@ -9,7 +9,16 @@
  * stores the event, then (compiler barrier) advances eng_qw; the consumer reads eng_qw once, applies up to it, then
  * advances eng_qr. One core: an interrupt sees either the old index or the new one, never half an event. Events:
  * note on/off, param edit, bend, mod wheel, pressure, HOLD, panic, program load, chord memory slot, all notes off
- * (released, HOLD unchanged), MIDI volume, master tune (the globals TRANSPOSE + TUNE, cents).
+ * (released, HOLD unchanged), MIDI volume, master tune (the globals TRANSPOSE + TUNE, cents), MIDI clock in (the
+ * realtime bytes 0xF8 / FA / FB / FC) and the MIDI CLOCK global's mode.
+ *
+ * The clock (synth/clock.h; Task 5): eng_clk, the consumer's, on CPU0 in the audio interrupt, never on CPU1. Its events
+ * drain in order (P_BPM / P_CLK_DIV edits and program loads set its tempo and division, EV_RT a MIDI clock byte at the
+ * block's start, EV_CLKMODE the mode); then eng_render ticks it once per block, before the synth renders, and gives the
+ * synth its tempo for LFO SYNC (synth_clock). The block's step events stay in eng_clk (eng_clk.n, .at[], .step[]) for
+ * the arpeggiator (Task 6), which runs there too. The main loop reads what it publishes, one aligned word each:
+ * eng_clk_ticks (24 a quarter, never going back: MIDI clock out sends one 0xF8 each), eng_clk_beats (quarter notes:
+ * TAP's LED), eng_clk_run (clock_running) and eng_clk_bpm10 (the tempo followed, x 10).
  * Overflow policy: the consumer empties the queue at every block (5.8 ms), so it fills only if more than 256 events
  * arrive within one block (37 keys pressed and released together are 74). Nothing that would leave the synth wrong is
  * ever lost:
@@ -47,15 +56,18 @@
 #ifndef KNOBI_ENGINE_C
 #define KNOBI_ENGINE_C
 #include <stdint.h>
+#include "synth/clock.c"                  /* (the clock: a pure module, the engine's) */
 
 #define ENG_QLEN 256u                     /* events; a power of two */
 #define ENG_RESERVE 64u                   /* the last slots: note-offs, HOLD and PANIC only */
 #define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
 enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME,
-       EV_TUNE };
+       EV_TUNE, EV_RT, EV_CLKMODE };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383;
-                                                              CHORD a slot 0..5 b note (0 = empty) */
+                                                              CHORD a slot 0..5 b note (0 = empty); RT a status
+                                                              (0xF8..0xFC); CLKMODE b the MIDI CLOCK global */
+_Static_assert(P_COUNT_RESERVED <= 256, "a live id fits eng_ev_t.a");
 
 static synth_t eng_synth;                 /* the consumer's (and eng_init's, before eng_ready) */
 static eng_ev_t eng_q[ENG_QLEN];
@@ -64,6 +76,11 @@ static program_t eng_pbuf, eng_edit;
 static volatile uint32_t eng_pw, eng_pr;
 static volatile uint8_t eng_ready, eng_voices;
 static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127, eng_last_tune;
+static int32_t eng_last_clkmode;          /* the MIDI CLOCK mode sent (producer) */
+static clk_t eng_clk;                     /* the clock (consumer; eng_init before eng_ready) */
+static volatile uint32_t eng_clk_ticks, eng_clk_beats;   /* published by the consumer (see above) */
+static volatile uint8_t eng_clk_run;
+static volatile uint16_t eng_clk_bpm10;
 #define ENG_FADE_ONE 32768                /* the fade's gain, Q15 */
 #define ENG_FADE_MS 10
 #define ENG_FADE_STEP (ENG_FADE_ONE / (ENG_FADE_MS * 441 / 10))   /* a frame: 74 -> 443 frames = 10.0 ms */
@@ -78,7 +95,7 @@ static volatile uint8_t eng_vlimit = NVOICE;
 static volatile uint32_t eng_sheds;
 static uint32_t eng_load_q3, eng_peak_q8;   /* (consumer only) */
 static uint32_t eng_off_pend[4];          /* note-offs waiting for room: bit n = note n (producer only) */
-static uint32_t eng_par_pend[(P_COUNT_PHASE1 + 31u) / 32u];   /* param ids whose latest eng_edit value is not queued */
+static uint32_t eng_par_pend[(P_COUNT_RESERVED + 31u) / 32u];   /* live ids whose latest eng_edit value is not queued */
 static uint8_t eng_panic_pend, eng_alloff_pend, eng_chord_pend;
 
 /* keep: the free slots that must remain after this event (0 for note-offs, HOLD, PANIC; ENG_RESERVE for the rest) */
@@ -109,6 +126,11 @@ static void eng_init(void)                /* the init program; call before audio
     eng_panic_pend = eng_alloff_pend = eng_chord_pend = 0;
     eng_voices = 0;
     eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127, eng_last_tune = 0;
+    eng_last_clkmode = CLK_MIDI_OFF;
+    clock_init(&eng_clk);
+    clock_set_bpm(&eng_clk, eng_edit.v[P_BPM]);
+    clock_set_div(&eng_clk, eng_edit.v[P_CLK_DIV]);
+    eng_clk_ticks = eng_clk_beats = 0, eng_clk_run = 1, eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
     eng_fade_out = 0, eng_fade_g = ENG_FADE_ONE, eng_fade_quiet = 0;
     eng_load = eng_peak = 0, eng_load_q3 = eng_peak_q8 = 0, eng_vlimit = NVOICE, eng_sheds = 0;
     ENG_BARRIER();
@@ -141,10 +163,10 @@ static int eng_note(int note, int vel)    /* vel 0 = off. 0 queued, 1 an off kep
     if (eng_push(EV_NOTE, n, vel > 127 ? 127 : vel, ENG_RESERVE)) { eng_drops = eng_drops + 1u; return -1; }
     return 0;
 }
-static int eng_param(uint32_t id, int32_t v)   /* 0 queued (or unchanged), 1 kept for eng_flush, -1 not a param */
+static int eng_param(uint32_t id, int32_t v)   /* 0 queued (or unchanged), 1 kept for eng_flush, -1 not a live id */
 {
     int16_t c;
-    if (id >= P_COUNT_PHASE1) return -1;
+    if (id > 0xFFFFu || !P_IS_LIVE(id)) return -1;
     c = param_clamp((uint16_t)id, v);
     if (eng_edit.v[id] == c && !ENG_BIT(eng_par_pend, id)) return 0;
     eng_edit.v[id] = c;
@@ -165,6 +187,15 @@ static int eng_pressure(int32_t v) { return eng_level(EV_PRESSURE, &eng_last_pre
 static int eng_volume(int32_t v) { return eng_level(EV_VOLUME, &eng_last_vol, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_hold(int on) { return eng_level(EV_HOLD, &eng_last_hold, on != 0, 0); }
 static int eng_tune(int32_t cents) { return eng_level(EV_TUNE, &eng_last_tune, cents < -1250 ? -1250 : cents > 1250 ? 1250 : cents, ENG_RESERVE); }
+static int eng_clock_mode(int32_t mode) { return eng_level(EV_CLKMODE, &eng_last_clkmode, mode < 0 ? 0 : mode >= CLK_MIDI_COUNT ? CLK_MIDI_COUNT - 1 : mode, 0); }
+/* a MIDI clock byte in (0xF8 clock, FA start, FB continue, FC stop): -1 refused (the queue full). A clock tick keeps the
+ * reserve free (one lost is one tick late); start / stop / continue may use it */
+static int eng_midi_rt(uint32_t st)
+{
+    if (st != 0xF8u && st != 0xFAu && st != 0xFBu && st != 0xFCu) return -1;
+    if (eng_push(EV_RT, st, 0, st == 0xF8u ? ENG_RESERVE : 0)) { eng_drops = eng_drops + 1u; return -1; }
+    return 0;
+}
 static void eng_fade(int out) { eng_fade_out = (uint8_t)(out != 0); }
 static int eng_faded(void) { return eng_fade_out && eng_fade_quiet >= ENG_FADE_QUIET; }
 static int eng_panic(void)                /* 0 queued, 1 kept for eng_flush */
@@ -201,7 +232,7 @@ static int eng_flush(void)
             if (eng_push(EV_NOTE, i, 0, 0)) left++;
             else ENG_CLR(eng_off_pend, i);
         }
-    for (i = 0; i < P_COUNT_PHASE1; i++)
+    for (i = 0; i < P_COUNT_RESERVED; i++)
         if (ENG_BIT(eng_par_pend, i)) {
             if (eng_push(EV_PARAM, i, eng_edit.v[i], ENG_RESERVE)) left++;
             else ENG_CLR(eng_par_pend, i);
@@ -223,7 +254,7 @@ static int eng_program(const program_t *p)   /* -1: a load is still pending (or 
     eng_pw = eng_pw + 1u;
     if (eng_push(EV_PROGRAM, 0, 0, ENG_RESERVE)) { eng_pw = eng_pw - 1u; return -1; }
     eng_edit = *p;
-    for (unsigned i = 0; i < P_COUNT_PHASE1; i++) eng_edit.v[i] = param_clamp((uint16_t)i, p->v[i]);
+    for (unsigned i = 0; i < P_COUNT_RESERVED; i++) eng_edit.v[i] = param_clamp((uint16_t)i, p->v[i]);
     for (unsigned i = 0; i < sizeof eng_par_pend / sizeof eng_par_pend[0]; i++) eng_par_pend[i] = 0;   /* its values win */
     eng_chord_pend = 0;
     return 0;
@@ -239,7 +270,13 @@ static void eng_drain(void)
         const eng_ev_t *e = &eng_q[r & (ENG_QLEN - 1u)];
         switch (e->type) {
         case EV_NOTE: synth_note(&eng_synth, e->a, e->b); break;
-        case EV_PARAM: synth_param(&eng_synth, e->a, e->b); break;
+        case EV_PARAM:
+            if (e->a == P_BPM) clock_set_bpm(&eng_clk, e->b), eng_synth.prog.v[P_BPM] = e->b;
+            else if (e->a == P_CLK_DIV) clock_set_div(&eng_clk, e->b), eng_synth.prog.v[P_CLK_DIV] = e->b;
+            else synth_param(&eng_synth, e->a, e->b);
+            break;
+        case EV_RT: clock_midi(&eng_clk, e->a, eng_clk.now); break;   /* (at this block's start) */
+        case EV_CLKMODE: clock_set_mode(&eng_clk, e->b); break;
         case EV_BEND: synth_bend(&eng_synth, e->b); break;
         case EV_WHEEL: synth_wheel(&eng_synth, e->b); break;
         case EV_PRESSURE: synth_pressure(&eng_synth, e->b); break;
@@ -251,6 +288,8 @@ static void eng_drain(void)
         case EV_CHORD: if (e->a < 6u) eng_synth.prog.chord[e->a] = (uint8_t)e->b; break;
         case EV_PROGRAM:
             synth_program(&eng_synth, &eng_pbuf);
+            clock_set_bpm(&eng_clk, eng_pbuf.v[P_BPM]);   /* (the program's tempo and division: the position kept) */
+            clock_set_div(&eng_clk, eng_pbuf.v[P_CLK_DIV]);
             ENG_BARRIER();
             eng_pr = eng_pr + 1u;         /* the buffer is the producer's again */
             break;
@@ -408,6 +447,10 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     int32_t g = eng_fade_g, tgt;
     if (!eng_ready) return;
     eng_drain();
+    clock_tick(&eng_clk, frames);              /* this block's steps (eng_clk.n, .at[]: the arpeggiator's, Task 6) */
+    eng_clk_ticks = eng_clk.ticks, eng_clk_beats = eng_clk.beats;
+    eng_clk_run = (uint8_t)clock_running(&eng_clk), eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
+    synth_clock(&eng_synth, clock_quarter_inc(&eng_clk));   /* LFO SYNC's tempo (a compare when unchanged) */
     uint32_t t0 = eng_ticks();
     synth_render(&eng_synth, lr, frames);
 #ifdef DINGHY_HOST
