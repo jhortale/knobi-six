@@ -30,7 +30,8 @@ typedef struct {
 #define HEADER {W_HEAD, 7, 0, 143, 15, 0, 0, 0}, {W_HVAL, 150, 0, 83, 15, 0, 0, 0}
 #define FOOTER {W_FOOT, 7, 219, 226, 21, 0, 0, 0}
 #define PADHINT(y) {W_HINT, 7, y, 226, 9, 0, 0, "PADS 1 2: < SECTION >"}
-#define KNOB(x, y, w, a, s) {W_KNOB, x, y, w, 40, a, 0, s}
+#define KNOB(x, y, w, a, s) {W_KNOB, x, y, w, 41, a, 0, s}   /* (h: the label's last glyph row is y + h - 1: a row
+                                                                     * outside the cell is never cleared on a repaint) */
 #define PAD(x, y, w, h, a, b, s) {W_PAD, x, y, w, h, a, b, s}
 #define END {W_END, 0, 0, 0, 0, 0, 0, 0}
 
@@ -86,8 +87,8 @@ static const wdg_t SCR_ENV_W[] = {
 static const wdg_t SCR_LFO_W[] = {
     HEADER,
     {W_TITLE, 7, 16, 226, 19, 0, 0, "LFO"}, {W_ROWLED, 192, 19, 41, 9, 0, 0, 0},
-    {W_KNOB, 7, 40, 56, 52, 0, 0, "FREQ"}, {W_ENCBTN, 63, 40, 56, 52, 1, 0, "SYNC"},
-    {W_LIST, 119, 39, 56, 53, 2, 0, "SHAPE"}, {W_KNOB, 175, 40, 58, 52, 3, 0, "AMOUNT"},
+    {W_KNOB, 7, 40, 56, 53, 0, 0, "FREQ"}, {W_ENCBTN, 63, 40, 56, 53, 1, 0, "SYNC"},
+    {W_LIST, 119, 39, 56, 54, 2, 0, "SHAPE"}, {W_KNOB, 175, 40, 58, 53, 3, 0, "AMOUNT"},
     PAD(7, 95, 37, 22, 2, 0, "VCO1"), PAD(44, 95, 37, 22, 3, 0, "VCO2"), PAD(81, 95, 38, 22, 4, 0, "PW"),
     PAD(119, 95, 38, 22, 5, 0, "AMP"), PAD(157, 95, 38, 22, 6, 0, "F FRQ"), PAD(195, 95, 38, 22, 7, 0, "F MOD"),
     {W_TITLE, 7, 119, 226, 19, 0, 0, "X-MOD"}, {W_ROWLED, 192, 122, 41, 9, 0, 1, 0},
@@ -104,7 +105,7 @@ static const wdg_t SCR_AT_W[] = {
     PAD(63, 60, 56, 20, 5, 0, "AMP"), PAD(119, 60, 56, 20, 6, 0, "F FRQ"), PAD(175, 60, 58, 20, 7, 0, "F MOD"),
     {W_TITLE, 7, 84, 226, 19, 0, 0, "MISC"}, {W_ROWLED, 192, 87, 41, 9, 0, 1, 0},
     KNOB(7, 107, 56, 1, "DETUNE"), KNOB(63, 107, 56, 2, "SPREAD"), KNOB(119, 107, 56, 3, "BEND % ST"),
-    {W_LIST, 175, 107, 58, 63, 4, 0, "KEY MODE"},
+    {W_LIST, 175, 107, 58, 64, 4, 0, "KEY MODE"},
     KNOB(7, 153, 56, 5, "PRG VOL"), KNOB(63, 153, 56, 6, "PORTA RT"),
     PAD(119, 153, 56, 20, 2, 1, "UNISON"), PAD(119, 175, 56, 20, 3, 1, "VOX %"),
     PAD(175, 173, 58, 20, 4, 1, "PORTA"), PAD(175, 195, 58, 20, 5, 1, "%"),
@@ -121,10 +122,10 @@ static const wdg_t SCR_PROGRAM_W[] = {
 static const wdg_t SCR_GLOBALS_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "GLOBALS"},
-    {W_SEGENC, 7, 40, 56, 38, 0, 0, "MIDI CH"}, {W_LIST, 63, 40, 56, 38, 1, 0, "POT MODE"},
-    {W_LIST, 119, 40, 56, 38, 2, 0, "PARAM TX"}, {W_LIST, 175, 40, 58, 38, 3, 0, "PARAM RX"},
-    {W_SEGENC, 7, 81, 75, 38, 4, 0, "TRANSPOSE"}, {W_SEGENC, 82, 81, 75, 38, 5, 0, "TUNE"},
-    {W_SEGENC, 157, 81, 76, 38, 6, 0, "VEL CURVE"},
+    {W_SEGENC, 7, 40, 56, 39, 0, 0, "MIDI CH"}, {W_LIST, 63, 40, 56, 39, 1, 0, "POT MODE"},
+    {W_LIST, 119, 40, 56, 39, 2, 0, "PARAM TX"}, {W_LIST, 175, 40, 58, 39, 3, 0, "PARAM RX"},
+    {W_SEGENC, 7, 81, 75, 39, 4, 0, "TRANSPOSE"}, {W_SEGENC, 82, 81, 75, 39, 5, 0, "TUNE"},
+    {W_SEGENC, 157, 81, 76, 39, 6, 0, "VEL CURVE"},
     PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
     PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
     {W_DIAG, 7, 152, 226, 20, 0, 0, 0},
@@ -308,7 +309,7 @@ static void scr_list(const wdg_t *w, uint16_t id, int32_t v)   /* an LED a choic
         pg_led_s(x + 3, w->y + 3 + 9 * i, on);
         pg_text(x + 9, w->y + 9 * i, &FONT_XS, scr_choice(id, lo + i), on ? PC_WHITE : PC_DIM);
     }
-    if (w->s) pg_text_c(w->x + w->w / 2, w->y + w->h - 6, &FONT_XS, w->s, PC_WHITE);
+    if (w->s) pg_text_c(w->x + w->w / 2, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
 }
 
 static void scr_envg(const wdg_t *w, int32_t v)
@@ -367,24 +368,24 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_HINT: pg_text_c(cx, w->y + 1, &FONT_XS, w->s, PC_DIM); break;
     case W_KNOB: {
         int bip = id < P_COUNT_PHASE1 && PARAMS[id].bipolar;
-        pg_knob(cx, w->y + w->h - 22, 13, v, scr_lo(id), scr_hi(id), bip);
+        pg_knob(cx, w->y + w->h - 23, 13, v, scr_lo(id), scr_hi(id), bip);
         if (id == P_FLT_MODE) {                    /* the mode knob's ends */
-            pg_text(w->x + 1, w->y + w->h - 14, &FONT_XS, "LP", PC_DIM);
-            pg_text(w->x + w->w - 12, w->y + w->h - 14, &FONT_XS, "HP", PC_DIM);
+            pg_text(w->x + 1, w->y + w->h - 15, &FONT_XS, "LP", PC_DIM);
+            pg_text(w->x + w->w - 12, w->y + w->h - 15, &FONT_XS, "HP", PC_DIM);
         }
         scr_label(t, w->s, id, v);
-        pg_text_c(cx, w->y + w->h - 6, &FONT_XS, t, PC_WHITE);
+        pg_text_c(cx, w->y + w->h - 7, &FONT_XS, t, PC_WHITE);
         break;
     }
     case W_ENCBTN:                                 /* a switch on an encoder: clockwise on, anticlockwise off */
-        pg_button(cx - 11, w->y + w->h - 27, 22, 11, v != 0);
-        pg_text_c(cx, w->y + w->h - 6, &FONT_XS, w->s, PC_WHITE);
+        pg_button(cx - 11, w->y + w->h - 28, 22, 11, v != 0);
+        pg_text_c(cx, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
         break;
     case W_LIST: scr_list(w, id, v); break;
     case W_SEGENC:
         scr_seg_text(t, id, v);
         pg_seg(cx - pg_seg_w(3, 10, 18) / 2, w->y + 4, 3, 10, 18, 3, t);
-        pg_text_c(cx, w->y + w->h - 6, &FONT_XS, w->s, PC_WHITE);
+        pg_text_c(cx, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
         break;
     case W_PAD: {
         int active = v >> 16 & 1, on;
@@ -427,7 +428,7 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         t[0] = v < 0 ? '-' : (char)('0' + v % 10), t[1] = 0;
         x = pg_seg_w(1, 18, 30);
         pg_seg(cx - x / 2, w->y, 1, 18, 30, 3, t);
-        pg_text_c(cx, w->y + w->h - 6, &FONT_XS, w->s, PC_WHITE);
+        pg_text_c(cx, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
         break;
     case W_WSTAT: {                                /* what WRITE / MANUAL are doing, in words */
         char *q = t;

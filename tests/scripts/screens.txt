@@ -19,7 +19,7 @@
 1240 expect 1 holdpad
 1300 enc 1 -20
 1310 expect -20 enc 1
-1320 expect 3485 scrpx
+1320 expect 3541 scrpx
 1330 enc 2 30
 1340 enc 4 40
 1390 vel 100
