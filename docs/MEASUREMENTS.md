@@ -7,7 +7,8 @@
 The whole device image (`KNOBI_CPU1=1 ./build.sh`, the Pro, with the test hooks of `platform.c` /
 `hal/fm1_cpu1.h` where named) booted in fm1-emu `60645a5` (joakimeriksson, MIT) in its dual mode: cpu0 and cpu1 a
 step each; cpu1 released by `0x10008` bit 3 at the word at `0x01C7FFF8`; `--flaky-core1 RATE` flips bit 21 of
-cpu1's RAM loads now and then. 1,500 emulated ms each, `bash tests/cpu1_emu/run.sh EMU OUT` (CI job `cpu1-emu`).
+cpu1's RAM loads now and then. 1,500 emulated ms each, `bash tests/cpu1_emu/run.sh EMU OUT` (CI job `cpu1-emu`,
+run 44079859772: the same table as the local run, flaky retired at 468 ms instead of 469).
 The boot takes ~0.3 s, so a run plays ~203 audio halves (the single-core image: 203).
 
 | case | image | expected | seen |
@@ -19,7 +20,8 @@ The boot takes ~0.3 s, so a run plays ~203 audio halves (the single-core image: 
 | flaky | hook 3 + `--flaky-core1 1e-7 --seed 7 --cpu1-survives` | a misread fails the check, CPU1 retired, audio goes on | 14 misreads injected; FAIL (MISREAD) at 469 ms after 1 good ping, rejected 14, barred; 203 halves |
 
 Default build (KNOBI_CPU1 unset): `app.bin` sha1 `44541dc3b3f1f62f0021c4c359ae2f3ee1e59ca0`, the loader and the
-package byte for byte the same as before the HAL (e800d7e); build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
+package byte for byte the same as before the HAL (e800d7e; local build with the local bank; CI's knobi-six.fwsc and
+app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged); build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
 CPU1 build: image +2,504 B (221,636 B), RAM +3,200 B (CPU1's stacks 3,072 B and the mailbox), `.c1_text` 148 B in
 the RAM code; CPU1's stack 0 B for the loop and the ping (budget 2,560 B).
 
