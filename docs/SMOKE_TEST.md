@@ -63,9 +63,10 @@ keyboard since; else a new one), the way back ready, and **João installs it him
 `fm1_install.py`, flashes, or uses the USB rescue.
 
 **Package**: `knobi-six-cpu1probe.fwsc`, the CI artifact **`knobi-six-cpu1probe`** of the `build` workflow (job
-`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`. Download it from CI run 44144831394
-(https://github.com/jhortale/knobi-six/actions/runs/44144831394, commit 9384171, the end of Phase 2 2A/2B; older
-runs' probes are superseded): 652,737 B, SHA-256 `4444f363c3bd3ba71a46a4b9b6ffe40d766420de8e8dc63623f8038f5f7dfcea`
+`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`. Download it from CI run 44159088422
+(https://github.com/jhortale/knobi-six/actions/runs/44159088422, commit 6ba6f6b, Phase 2 after the final review's
+fixes; older runs' probes are superseded): 652,737 B, SHA-256
+`ea8e6bb4079c71fd8478d16cb71b189738550b5578fd2316ed1417c82a814eef`
 (the `.fwsc` inside the artifact zip, computed from a download). Before installing, check it:
 `shasum -a 256 knobi-six-cpu1probe.fwsc` must print exactly that. Identity
 `SMK-37 Pro_956`, as the default. (A local build: `./build.sh --probe-cpu1`; `--model elite` / `mke` for those units;
