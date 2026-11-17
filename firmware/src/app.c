@@ -168,12 +168,15 @@ static void clock_out(void)
 #include "../../tests/cpu1_emu/dual_hook.c"     /* (fm1-emu cases 6..8; never in a real build) */
 #endif
 
+static uint32_t keys_tx_on, keys_tx_off;       /* the keys' own note-ons / offs sent as MIDI (host probes) */
+
 /* ---- the main loop */
 #define KEY0 53u                                /* the note of F3, key 5 of the keybed, at octave 0 */
 static void app_main(void)
 {
     uint8_t key_note[FM1_NKEY] = {0};           /* the note each key started (0: none) */
     uint8_t key_out[FM1_NKEY] = {0};            /* its note-on went out as MIDI (the arp's notes may go instead) */
+    uint8_t key_vel[FM1_NKEY] = {0};            /* its velocity (a note-on sent late, keys_tx_sync) */
     uint32_t prev = 0, k, t_change = 0, dirty = 0, t_saved = 0;
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
@@ -198,6 +201,20 @@ static void app_main(void)
 #endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
         ch = controls_tx_ch();
+        {                                       /* the keys held, as the receiver sees them: whether their notes go out
+                                                 * changed (ARP ON / PARAM TX / LOCAL, ui/midi_map.c ctl_keys_out)?
+                                                 * now feeding the local arp: their note-offs; no more: their note-ons,
+                                                 * so a receiver never keeps a chord under the arp nor misses a note
+                                                 * the synth plays */
+            uint8_t ko = (uint8_t)ctl_keys_out();
+            for (k = 0; k < FM1_NKEY; k++)
+                if (key_note[k] && key_out[k] != ko) {
+                    if (ko && ctl_arp_take(key_note[k])) {}   /* (the arp's note on there: the key's now) */
+                    else if (ko) midi_send(0x90u | ch, key_note[k], key_vel[k]), keys_tx_on++;
+                    else midi_send(0x80u | ch, key_note[k], 0), keys_tx_off++;
+                    key_out[k] = ko;
+                }
+        }
 
         keys = fm1_in.notes;                    /* bit n: keybed key F3 + n (n = 0..26), the middle of the keybed */
         down = keys & ~prev;
@@ -209,11 +226,12 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + k);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);    /* (chord memory capture while CHORD is held) */
-                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel);
+                key_vel[key] = (uint8_t)vel;
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
             }
             if (up >> k & 1u && key_note[key]) {
                 stop(key_note[key]);
-                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
                 key_note[key] = 0, key_out[key] = 0;
             }
         }
@@ -224,10 +242,11 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + key - SMK_KEY_F3);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);
-                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel);
+                key_vel[key] = (uint8_t)vel;
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
             } else if (key_note[key]) {
                 stop(key_note[key]);
-                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
                 key_note[key] = 0, key_out[key] = 0;
             }
         }
@@ -319,6 +338,8 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
                                                                           order) */
     else if (!strcmp(name, "arpsteps")) *got = (int)eng_arp.steps;     /* arp notes played so far */
     else if (!strcmp(name, "arpout")) *got = (int)ctl_arp_outs;        /* arp notes sent as MIDI so far */
+    else if (!strcmp(name, "keyon")) *got = (int)keys_tx_on;           /* the keys' own note-ons sent as MIDI so far */
+    else if (!strcmp(name, "keyoff")) *got = (int)keys_tx_off;         /* their note-offs sent so far */
     else if (!strcmp(name, "keyed")) {                                 /* voices with a key down or latched */
         uint32_t v;
         *got = 0;

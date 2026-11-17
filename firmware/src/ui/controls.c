@@ -375,8 +375,6 @@ static void ctl_action(int *screen, uint32_t a)
         if (bpm) ctl_set(&eng_edit, P_BPM, bpm, 1);
         else ctl_last_id = B_ACT(ACT_TAP), ctl_last_v = ctl_tapclk.tap_n, ctl_edits++;   /* (the taps so far) */
     }
-    else if (a == ACT_ARP) ctl_set(&eng_edit, P_ARP_ON, !eng_edit.v[P_ARP_ON], 1);   /* (no pad has it: ARP ON is a
-                                                                                       * param pad, Play and Arp) */
 }
 static void ctl_write_press(int *screen)               /* WRITE (the pad, BT): arm (Program screen, the destination the
                                                         * current program) or cancel */

@@ -49,10 +49,16 @@ save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhi
 
 ## Sent
 
-Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with ARP ON and PARAM TX = CC, the notes the arp plays
-go out instead (note on with the key's velocity, note off at the end of its gate), and the keys' own notes do not (a
-receiver would play the chord under the arp); every arp note-on sent gets its note-off, even if PARAM TX is turned
-off meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
+Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with LOCAL ON, ARP ON and PARAM TX = CC, the keys feed
+the arp and the notes it plays go out instead (note on with the key's velocity, note off at the end of its gate); the
+keys' own notes do not (a receiver would play the chord under the arp). Every arp note-on sent gets its note-off, even
+if PARAM TX is turned off meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With
+**LOCAL OFF** the keys never reach the synth or its arp: they go out as played, as ever (a DAW controller), whatever
+ARP ON and PARAM TX say, and no arp notes go out for them.
+Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
+note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
+on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off
+goes out when it is let go. A key's note-off goes out only if its note-on did. With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
 goes out as its CC on the same channel, only when the 7-bit value changes (a 0..255 parameter moving one step may stay
 on the same CC value). Edits received over MIDI are not echoed.
 

@@ -22,10 +22,9 @@ enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_X
 #define B_IS_PROG(x) (((x) & 0xFF00u) == 0x2000u)
 #define B_IS_GLOBAL(x) (((x) & 0xFF00u) == 0x4000u)
 #define B_IS_ACT(x) (((x) & 0xFF00u) == 0x8000u)
-enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_ARP, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_TAP, ACT_COUNT };
-/* section back / on, the other row, HOLD, ARP (ARP ON toggled; the panel binds P_ARP_ON itself), WRITE (arm /
- * cancel), ENTER (commit the armed WRITE), MANUAL (the live panel), TAP (tap tempo: the program's BPM from the 4th tap;
- * synth/clock.h) */
+enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_TAP, ACT_COUNT };
+/* section back / on, the other row, HOLD, WRITE (arm / cancel), ENTER (commit the armed WRITE), MANUAL (the live
+ * panel), TAP (tap tempo: the program's BPM from the 4th tap; synth/clock.h). ARP ON is a param pad (P_ARP_ON) */
 enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
 /* a notice in the header (ctl_last_id = B_NOTICE, the value one of these): none, a broken stored program loaded as
  * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC") */

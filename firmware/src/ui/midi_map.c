@@ -16,9 +16,10 @@
  * 7-bit value differs from the last one either side had (a 0..255 param moving one step may stay on the same CC
  * value). Switches and selects have no CC (NRPN later).
  * Arp notes out (ctl_arp_out, main loop; synth/arp.h's ring): with ARP ON and PARAM TX = CC, the notes the arpeggiator
- * plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on), and the
- * keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
- * note-off goes out only if its note-on did). A note-off
+ * plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on), and (LOCAL
+ * ON: the keys feed the arp) the keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
+ * note-off goes out only if its note-on did; a change of ARP ON, PARAM TX or LOCAL with keys held
+ * sends their note-offs, or late note-ons, so the receiver's picture stays right: app.c). A note-off
  * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver). */
 #include "controls.h"
 
@@ -94,8 +95,18 @@ static void ctl_arp_out(void)
         else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; }
     }
 }
-/* the keys' own note-ons go out unless the arp's do (ARP ON with PARAM TX on) */
-static int ctl_keys_out(void) { return !(eng_edit.v[P_ARP_ON] && ctl_glob[G_PARAM_TX]); }
+/* the receiver has the arp's note on (sent, its off not yet): the key that now goes out raw takes it over (returns 1;
+ * the arp's later note-off is then not sent: its ARP OFF reaches the engine after the main loop's pass) */
+static int ctl_arp_take(uint32_t note)
+{
+    uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[(note & 127u) >> 5];
+    if (!(*m & bit)) return 0;
+    *m &= ~bit;
+    return 1;
+}
+/* the keys' own notes go out unless they feed the local arp and the arp's go instead (LOCAL ON, ARP ON, PARAM TX on).
+ * LOCAL OFF: the keys never reach the synth or the arp, so they go out raw as ever (a DAW controller) */
+static int ctl_keys_out(void) { return !(ctl_glob[G_LOCAL] && eng_edit.v[P_ARP_ON] && ctl_glob[G_PARAM_TX]); }
 
 /* MIDI clock in (0xF8 clock, FA start, FB continue, FC stop; any channel setting): to the clock when the global MIDI
  * CLOCK follows one (IN, SLAVE THRU, IN-no-start-stop), echoed out under SLAVE THRU; ignored under OFF and OUT */

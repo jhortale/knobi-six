@@ -106,7 +106,8 @@ keys: UNISON stacks each one, portamento glides between them, chord memory plays
   plays on when the clock runs again.
 - ARP off: the arp's note stops and the keys still held sound as played. ALL NOTES OFF (CC 123), a program change
   and PANIC (CC 120) stop it and forget its keys.
-- MIDI out: with PARAM TX = CC the arp's notes go out (and the keys' own notes do not).
+- MIDI out: with PARAM TX = CC the arp's notes go out (and the keys' own notes do not). LOCAL OFF: the keys go out as
+  played and do not reach the arp ([MIDI.md](MIDI.md)).
 
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to

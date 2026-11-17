@@ -1,6 +1,6 @@
 # Phase 2 Task 6: the arpeggiator (synth/arp.h) through the main loop and the queue. Params: 82 ARP ON, 83 MODE,
 # 84 OCTAVES, 85 ARP HOLD; glob 11 = MIDI CLOCK (0 OFF, 1 OUT, 2 IN), glob 2 = PARAM TX (on by default: arp notes out).
-# Probes: "arpn" keys in the pattern, "arpkey I" its key I (played order), "arpnote" the note sounding (-1 none),
+# Probes: "keyon" / "keyoff" the keys' own MIDI notes sent, "arpn" keys in the pattern, "arpkey I" its key I (played order), "arpnote" the note sounding (-1 none),
 # "arpout" arp notes sent as MIDI, "keyed" voices with a key down or latched. Keys: bit 7 C4, 9 D4, 11 E4, 12 F4,
 # 14 G4, 16 A4 (octave 0). Internal clock 120 BPM, QTR: a step every 500 ms, the gate 250 ms; ARP BEAT SYNC off: a
 # pattern starts at once (the clock restarts).
@@ -92,4 +92,62 @@
 7850 pad 3 0
 7900 expect 0 glob 11
 7900 expect 1 clkrun
-8000 end
+# Fix round 1: the keys' own MIDI out ("keyon" / "keyoff": the keys' note-ons / offs sent). LOCAL ON, ARP ON, PARAM TX
+# on: the keys feed the arp and stay home (none sent so far), the arp's notes go out
+8000 expect 0 keyon
+8000 expect 0 keyoff
+8100 keys 0x80
+8150 expect 60 arpnote
+8150 expect 0 keyon
+# ARP OFF (pad 5) with C held, the arp's C still on at the receiver (its gate to ~8354): the synth plays C and the key
+# takes the receiver's C over (no new note-on; the arp's own note-off is not sent); let go: the key's note-off
+8300 pad 5 100
+8310 pad 5 0
+8350 expect 1 sounding 60
+8350 expect 0 keyon
+8400 keys 0
+8410 expect 1 keyoff
+# ARP ON again, D held: the arp plays D (8500 .. 8750); after its gate, ARP OFF: the synth plays D and the receiver gets
+# D's late note-on (nothing of the arp's on there); let go: its note-off
+8450 pad 5 100
+8460 pad 5 0
+8500 keys 0x200
+8550 expect 62 arpnote
+8550 expect 0 keyon
+8800 expect -1 arpnote
+8850 pad 5 100
+8860 pad 5 0
+8900 expect 1 sounding 62
+8900 expect 1 keyon
+8950 keys 0
+8960 expect 2 keyoff
+# ARP OFF, E held (sent), then ARP ON: E's note-off goes out (no chord under the arp), the arp plays E; let go: no
+# second note-off
+9000 keys 0x800
+9010 expect 2 keyon
+9100 pad 5 100
+9110 pad 5 0
+9150 expect 3 keyoff
+9150 expect 64 arpnote
+9200 keys 0
+9210 expect 3 keyoff
+# LOCAL OFF (Globals, pad 2), ARP ON, PARAM TX on: the keys go out raw as in Phase 1, the local arp never gets them
+9300 btn 3
+9310 btn 3
+9350 expect 9 screen
+9400 pad 2 100
+9410 pad 2 0
+9450 expect 0 glob 7
+9450 expect 1 param 82
+9450 expect 1 glob 2
+9500 keys 0x4000
+9510 expect 3 keyon
+9510 expect 0 arpn
+9800 expect 0 keyed
+9800 expect -1 arpnote
+9900 keys 0
+9910 expect 4 keyoff
+10000 pad 2 100
+10010 pad 2 0
+10050 expect 1 glob 7
+10100 end
