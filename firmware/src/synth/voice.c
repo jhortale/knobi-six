@@ -35,6 +35,7 @@ void voice_reset(voice_t *v, uint32_t rnd)
     v->fenv.level = v->lenv.level = 0;
     v->fenv.stage = v->lenv.stage = ADSR_IDLE;
     v->act = 0, v->amp = 0;
+    v->pitch = v->target = VOICE_NO_PITCH, v->glide = 0;   /* nothing to glide from: the manager's last_pitch decides */
     v->busy = v->key = v->latched = v->pend_off = v->min_gate = 0;
 }
 

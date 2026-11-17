@@ -26,7 +26,8 @@
  * Portamento (on, RATE > 0): RATE r sets T = 1 ms x 2^((r - 1) x 12 / 126), 1 ms .. 4.1 s. FIXED RATE: T per octave
  * (a glide of n semitones takes n / 12 x T); FIXED TIME: T whatever the interval; the -A (auto) variants glide only
  * when the new note starts while another key is held (legato). Every new note glides from the latest note-on's pitch
- * (poly: whichever voice it gets; unison: the stack from the previous note); the very first note does not glide.
+ * (poly: whichever voice it gets; unison: every slot of the stack); the first note after init, synth_program or
+ * synth_panic does not glide (a freed voice forgets its pitch).
  * Bend: +-BEND RANGE semitones at the wheel's ends (both VCOs). HOLD: key releases are latched until HOLD goes off.
  * Minimum gate: a note released within 2 ms (VOICE_MIN_GATE control ticks, >= 2.2 ms) is released when they elapse.
  *

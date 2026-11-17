@@ -272,6 +272,9 @@ static void synth_mono_go(synth_t *s, int key, int vel, int trigger, int legato)
         v->pan = odd && k == 0 ? 0 : sign * pair * 32768 / npair;
         v->dr1 = v->dr2 = n > 1 ? sign * m * 32768 / mm : 0;
         int note = synth_clampi(key + (nchord ? chord[k] - ref : 0), 0, 127);
+        /* a slot not already in the sounding stack starts from the latest note, as every other slot did */
+        if (!(v->busy && v->key) && s->last_pitch != VOICE_NO_PITCH)
+            v->pitch = s->last_pitch + (nchord ? (chord[k] - ref) * 65536 : 0);
         synth_voice_on(s, v, note, vel, legato, trigger);
     }
     s->mono = (int16_t)key;
@@ -297,6 +300,7 @@ static void synth_mono_follow(synth_t *s)
 void synth_program(synth_t *s, const program_t *p)
 {
     synth_all_off(s);
+    s->last_pitch = VOICE_NO_PITCH;   /* a new program does not glide from the old one's notes */
     s->prog = *p;
     for (unsigned i = 0; i < P_COUNT_PHASE1; i++) s->prog.v[i] = param_clamp((uint16_t)i, p->v[i]);
     synth_targets(s);
@@ -382,6 +386,7 @@ void synth_panic(synth_t *s)
 {
     for (int i = 0; i < NVOICE; i++) voice_reset(&s->voice[i], synth_rand(s));
     s->nstack = 0, s->mono = -1, s->hold = 0;
+    s->last_pitch = VOICE_NO_PITCH;
 }
 
 int synth_active(const synth_t *s)

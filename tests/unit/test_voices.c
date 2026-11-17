@@ -238,6 +238,49 @@ static void porta_poly(void)
           abs(rate_sep - 103) <= 2 && s3 == 48 * 65536 && abs(time_leg - 176) <= 2);
 }
 
+/* no glide from before a panic or a program change; unison slots all glide from the latest note */
+static void porta_reset_and_unison(void)
+{
+    program_t p;
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_RATE, 64);
+    synth_note(&S, 48, 100); run(4096);
+    synth_panic(&S);
+    synth_note(&S, 55, 100);
+    int g_panic = S.voice[voice_of(55)].glide;
+    p = S.prog;
+    synth_note(&S, 55, 0); run(256);
+    synth_program(&S, &p);
+    synth_note(&S, 60, 100);
+    int g_prog = S.voice[voice_of(60)].glide;
+    /* poly C held, switch to unison 6, play G: every slot glides from C */
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_RATE, 64), set(P_LENV_R, 127);
+    for (int k = 0; k < 4; k++) { synth_note(&S, 40 + k, 100); run(256); }   /* stale pitches on voices 0..3 */
+    synth_note(&S, 48, 100); run(4096);
+    set(P_UNISON_ON, 1), set(P_UNISON_VOICES, 5);
+    synth_note(&S, 55, 100);
+    int same = 1;
+    for (int k = 0; k < 6; k++) if (S.voice[k].pitch != 48 * 65536 || !S.voice[k].glide) same = 0;
+    /* grow the stack mid-note (2 -> 6 voices): the next note's new slots glide from the latest note too */
+    run(8192);
+    set(P_UNISON_VOICES, 1);
+    synth_note(&S, 55, 0), synth_note(&S, 57, 100); run(8192);
+    set(P_UNISON_VOICES, 5);
+    synth_note(&S, 57, 0), synth_note(&S, 52, 100);
+    int grown = 1;
+    for (int k = 0; k < 6; k++) if (S.voice[k].pitch != 57 * 65536) grown = 0;
+    /* RATE-A, detached: no slot glides */
+    set(P_PORTA_MODE, 1);
+    synth_note(&S, 52, 0); run(64); synth_note(&S, 50, 100);
+    int none = 1;
+    for (int k = 0; k < 6; k++) if (S.voice[k].glide || S.voice[k].pitch != 50 * 65536) none = 0;
+    printf("porta_reset_and_unison: glide step after panic %d, after a program load %d; poly -> unison: all 6 slots "
+           "from C3 %d; grown stack all from the latest note %d; RATE-A detached: none glide %d\n", g_panic, g_prog,
+           same, grown, none);
+    CHECK(g_panic == 0 && g_prog == 0 && same && grown && none);
+}
+
 static void bend_range_program(void)
 {
     program_t p;
@@ -543,6 +586,7 @@ int main(void)
     key_mode_low_high();
     porta_modes();
     porta_poly();
+    porta_reset_and_unison();
     bend_range_program();
     pan_spread_alternates();
     hold_latches_and_releases();
