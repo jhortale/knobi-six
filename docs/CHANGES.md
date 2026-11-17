@@ -1,7 +1,22 @@
 # Changes from Dinghy
 
-SMK BASE starts from [Dinghy](https://github.com/zvenson/dinghy) (zvenson), `main` at commit `22acb91`. This is what
-is different.
+KNOBI-SIX is a clone of [smk37-base](https://github.com/fc79/smk37-base) (SMK BASE), which starts from
+[Dinghy](https://github.com/zvenson/dinghy) (zvenson), `main` at commit `22acb91`. The first section is KNOBI-SIX's;
+the rest of this file is **the base's history**: what SMK BASE changed from Dinghy, kept as it was written. Its names
+and identity lines (`SMK BASE`, `SB37`, `SMKBASE`, `_925`, `smk37-base.fwsc`) are the base's, not this firmware's.
+
+## KNOBI-SIX (this firmware)
+
+- The app is a standalone OB-6-inspired 6-voice polysynth (`firmware/src/synth/`, `engine.c`, `params/`, `ui/`); the
+  spec: `docs/superpowers/specs/2026-11-16-standalone-firmware-design.md`.
+- Its own name and data ([IDENTITY.md](IDENTITY.md)): `APP_NAME` "KNOBI-SIX", `STORE_MAGIC` "KNB6", `DATA_FAMILY`
+  "KNOBI6" (a flash with SMK BASE's `SMKBASE` tag is cleared at first start).
+- The identity is `SMK-37 Pro_956` (`SMK-37 Elite_956`, `MKE-P37_956`) in every build; a release changes only the
+  version on the screen.
+- The package is `build/knobi-six.fwsc` (`-elite`, `-mke`); `build/knobi-six-local*.fwsc` when the build contains the
+  user's own imported OB-6 factory bank, which a `--release` build refuses ([FACTORY_BANK.md](FACTORY_BANK.md)).
+
+# The base's history: SMK BASE, changed from Dinghy
 
 ## The app
 

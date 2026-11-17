@@ -185,7 +185,10 @@ static void eng_chord(const uint8_t *c)   /* chord memory: 6 absolute MIDI notes
     for (unsigned i = 0; i < 6u; i++) eng_edit.chord[i] = c[i] > 127u ? 0 : c[i];
     eng_chord_pend = 1;
 }
-static int eng_flush(void)                /* the main loop, every pass: what was kept, in order; returns what is left */
+/* the main loop, every pass: what was kept, in order; returns what is left. A kept param edit goes out here, after
+ * whatever was queued since, so it may land after a later note-on: harmless (eng_edit has the value already; the
+ * note starts on the value before it, and the edit then applies, smoothed, as any edit under a sounding note) */
+static int eng_flush(void)
 {
     int left = 0;
     unsigned i;

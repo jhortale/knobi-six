@@ -102,7 +102,7 @@ SVF_HOT float svf_soft(float x)
     return x < 0.0f ? -y : y;
 }
 
-/* Input drive (the mixer overdrive): Q15 in, float out (1.0 = Q15 32768). An odd polynomial with no linear zone, so
+/* Input drive (the mixer overdrive): Q15 in, float out (1.0 = Q15 32768). An odd function with no linear zone, so
  * saturation grows gradually from the lowest levels instead of switching on at a knee: with A = |x| / 32768,
  *   P(A) = A - 0.0012 A^2 - 0.007 A^3 - 0.005 A^5,   flat at P(2.429) = 1.899 for A >= 2.429 (where P' = 0).
  * THD of a sine: -75 dB at 0.25 x, -64 at 0.5 x (OSC_ONE: one oscillator at full level), -49 at 1 x, -32 at 1.5 x,

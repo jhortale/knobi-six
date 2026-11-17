@@ -17,7 +17,7 @@ About 13-19 hw cycles a frame (+0.3 % of the block); the musical patches also so
 ~770 Hz on the new map, 262 Hz before), which the filter's float path does not charge for. NVOICE stays 6; the CPU
 guard is unchanged.
 
-## Phase-1 CPU gate after the performance push (Task 11, second pass): NVOICE not decided, the CPU guard on
+## Phase-1 CPU gate after the performance push (Task 11, second pass): NVOICE = 6 with the CPU guard (João, 2026-11-17)
 
 **The gate** (João, replacing "every destination at full"): the **musical stress patch** at 6 voices must take less
 than 50 % of the 256-frame block (5.805 ms) at 240 MHz in **both** cycle models. If it does, `NVOICE = 6`; if not but
@@ -28,7 +28,7 @@ than 50 % of the 256-frame block (5.805 ms) at 240 MHz in **both** cycle models.
 The extreme patches (every destination at full, below) stay measured, and the CPU guard keeps them from overrunning.
 
 **Result: neither voice count passes at 240 MHz.** The gate is met only by the emu model with 4 voices; the hw
-model is over, so the decision goes back to João.
+model is over, so the decision went back to João: **NVOICE = 6 with the CPU guard** ("Decision", at the end).
 
 | musical stress | voices | 240 MHz, emu | 240 MHz, hw | 360 MHz, emu | 360 MHz, hw |
 |---|---|---|---|---|---|

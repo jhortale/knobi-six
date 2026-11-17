@@ -18,10 +18,17 @@ SysEx come later.
 | program change | 0..99: that program of the bank, loaded (notes sounding release, no click); ignored in MANUAL and while a WRITE is armed or committing (the edit buffer is what WRITE stores) |
 | CC 7 | volume: times PROGRAM VOLUME (the master volume, K1, after both); glides like PROGRAM VOLUME (no zipper); kept across program changes; 127 at power-on |
 | CC 120 | all sound off: PANIC (every voice silent at once, HOLD off) |
-| CC 123 | all notes off: every note released (the envelopes run their release); HOLD (pad or sustain) stays as it is |
+| CC 123 | all notes off: every note released (the envelopes run their release), the notes HOLD has latched too; HOLD itself (pad or sustain) stays on, latching the notes played after it |
 | CC 121 | reset controllers: MIDI wheel, bend, pressure and sustain to rest (not volume, as MIDI's RP-015) |
 | CC 4 | foot controller: ignored in phase 1 (the reference lists it as received but not what it does) |
 | the CCs below | with PARAM RX = CC: sets the parameter (0..127 over its range; bipolar: 64 = 0). Not sent back |
+
+### The autosave and MIDI notes
+
+The globals, the octave and the program last loaded are saved once nothing has been played for 3 s (an erase stalls
+the sound; [CONTROLS.md](CONTROLS.md)). A MIDI note on or off counts as playing **on any channel**, whatever MIDI CH
+says: a sequencer or keyboard sending notes without a 3 s pause (on a channel this unit ignores, too) postpones the
+save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhile, short of a power cut.
 
 ## Sent
 

@@ -41,7 +41,7 @@
  * SYNTH_VOICE_GAIN x PROGRAM VOLUME / 127, constant-power pan (centre: -3 dB each side): a 6-note chord of the init
  * patch (saw, filter open) at the default volume 100 peaks around -6 dBFS per channel (test_voices output_level). The
  * synth's bus then passes a DC blocker (a one-pole high-pass at 5 Hz: a sync lead's or a narrow pulse's offset goes,
- * 30 Hz loses 0.2 dB; its tail runs on after the voices stop, until under half an LSB) and a soft limiter: linear to
+ * 30 Hz loses 0.12 dB; its tail runs on after the voices stop, until under half an LSB) and a soft limiter: linear to
  * SYNTH_LIMIT_KNEE (-4.4 dBFS), then a smooth knee (slope 1 there, falling) that approaches SYNTH_LIMIT_CEIL (-0.45
  * dBFS) and never reaches it: six overdriven voices at every level at full (+-65536 each, the bus up to ~13.6 dB over
  * full scale) come out below the ceiling, rounded, never flat at a clip. */
