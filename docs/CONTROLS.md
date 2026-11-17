@@ -56,7 +56,7 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 
 | Screen | K2..K8 | Faders 1..4 | Top pads 0..7 |
 | --- | --- | --- | --- |
-| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT | FREQ, RESO, MODE, ENV AMOUNT | — (X-MOD, see below), UNISON, ARP (phase 2), HOLD |
+| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT | FREQ, RESO, MODE, ENV AMOUNT | SYNC (VCO1 sync), UNISON, ARP (phase 2), HOLD |
 | VCO 1 + 2 | VCO1 FREQ, SHAPE, PW, VCO2 FREQ, FINE, SHAPE, PW | VCO1 SHAPE, VCO1 PW, VCO2 SHAPE, VCO2 PW | ◀, ▶, SYNC, LOW FREQ, KEYBOARD |
 | Mixer + Filter | VCO1, VCO2, SUB OCT, NOISE, FREQ, RESO, MODE | FREQ, RESO, MODE, ENV AMOUNT | ◀, ▶, BP, KEY TRACK (off / half / full) |
 | Envelopes, FILTER row | ATTACK, DECAY, SUSTAIN, RELEASE, AMOUNT | A, D, S, R | ◀, ▶, VELOCITY > FILTER, VELOCITY > AMP, ROW |
@@ -71,5 +71,17 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 Every phase-1 parameter is on some screen (unit test `bindings_valid`). The globals here are kept in RAM until Task 10
 stores them with the others.
 
-**Open point:** the Play mockup shows an X-MOD performance switch, but the schema has no X-Mod on/off; Play's pad 0 is
-left free until that is decided.
+Play's pad 0 is **SYNC** (VCO1 sync): the Play mockup's X-MOD performance slot, as ruled for Task 8 (the schema has no
+X-Mod on/off; sync is the performance switch the OB-6 player reaches for there). It is the same switch as VCO 1 + 2's
+pad 2.
+
+## What the screens show
+
+`firmware/src/ui/screens.c` draws each screen from these same tables: a knob on screen is the encoder bound to it
+(K2..K8 in reading order), a lit red button is a top pad's switch (on), an LED list is a select stepped by its
+encoder or pad, and the bottom blue strip names what the four faders do. On the two-row screens the row the encoders
+or pads reach now is marked: Envelopes lights FILTER or LOUDNESS; LFO + X-Mod and Aftertouch + Misc light PADS next to
+the section the top pads switch (the other section's pad labels are greyed). The header shows the KNOBI-SIX mark, an
+LED per section (the current one lit), the octave and, on a small red display, the last value edited. Globals also
+shows the wheels' and faders' raw readings (for checking a unit's travel). The host probe `scrcheck`
+(`tests/scripts/screens.txt`) proves the drawing matches the bindings and that every label fits.

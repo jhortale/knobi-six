@@ -18,7 +18,7 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
     [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
                   {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
-                  {N, P_UNISON_ON, A(ARP), A(HOLD), N, N, N, N}},          /* pad 0 X-MOD: no such switch in the schema */
+                  {P_VCO1_SYNC, P_UNISON_ON, A(ARP), A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
     [SCR_VCO] = {{P_VCO1_FREQ, P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_FREQ, P_VCO2_FINE, P_VCO2_SHAPE, P_VCO2_PW},
                  {P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_SHAPE, P_VCO2_PW},
                  {A(PREV), A(NEXT), P_VCO1_SYNC, P_VCO2_LOWFREQ, P_VCO2_KEYBOARD, N, N, N}},

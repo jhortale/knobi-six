@@ -31,6 +31,7 @@ run "Review Focus 4: bottom-pad pressure while a top pad toggles: once; aftertou
 run "faders through the pot mode: passthru, jump, relative (expect)" sh tests/run_host.sh tests/scripts/faders_potmode.txt
 run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change stub (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
 run "chord memory: hold CHORD and play, the chord plays from a key (expect)" sh tests/run_host.sh tests/scripts/chord_memory.txt
+run "the screens: every one drawn and shot, the bindings drawn, only what changed redrawn (expect)" sh tests/run_host.sh tests/scripts/screens.txt
 
 $CC -DBOARD_SMK37=1 -Ifirmware/hal -o "$OUT/smk_flash_test" tests/smk_flash_test.c
 run "SMK-37 flash map: settings, blobs, owner tag, slots in the store; never the head, BTIF/USRTRIM, USR, key_mac" "$OUT/smk_flash_test"
