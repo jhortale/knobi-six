@@ -83,6 +83,8 @@ static void ctl_program_change(int32_t bank, int32_t prog)
 static uint32_t ctl_arp_r;                 /* the arp ring's read index (main loop) */
 static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bit a note) */
 static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
+static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
+static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
 static void ctl_arp_out(void)
 {
     uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
@@ -92,7 +94,7 @@ static void ctl_arp_out(void)
         uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
         uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
         if (vel && ctl_glob[G_PARAM_TX]) { midi_send(0x90u | ch, note, vel); *m |= bit; ctl_arp_outs++; }
-        else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; }
+        else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; ctl_arp_offs++, ctl_arp_offch = (uint8_t)ch; }
     }
 }
 /* the receiver has the arp's note on (sent, its off not yet): the key that now goes out raw takes it over (returns 1;

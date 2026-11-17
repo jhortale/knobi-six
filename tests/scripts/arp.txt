@@ -131,6 +131,21 @@
 9150 expect 64 arpnote
 9200 keys 0
 9210 expect 3 keyoff
+# Final review 4 (the late-note race): C pressed at 9220 reaches the engine in the block at 9225, where the arp's C
+# note-on enters its MIDI ring; ARP OFF (pad 5) at 9225 too, in the same main-loop pass. The arp's notes go out before
+# the keys' sync, so the receiver has the arp's C on when the key takes it over: no second C note-on, and the arp's own
+# note-off is not sent (it would cut the held key on the receiver). Let go: the key's note-off. ARP ON again at 9280
+9220 keys 0x80
+9225 pad 5 100
+9235 pad 5 0
+9240 expect 2 keyon
+9240 expect 11 arpout
+9240 expect 9 arpoff
+9260 keys 0
+9270 expect 4 keyoff
+9270 expect 9 arpoff
+9280 pad 5 100
+9290 pad 5 0
 # LOCAL OFF (Globals, pad 2), ARP ON, PARAM TX on: the keys go out raw as in Phase 1, the local arp never gets them
 9300 btn 3
 9310 btn 3
@@ -146,7 +161,7 @@
 9800 expect 0 keyed
 9800 expect -1 arpnote
 9900 keys 0
-9910 expect 4 keyoff
+9910 expect 5 keyoff
 10000 pad 2 100
 10010 pad 2 0
 10050 expect 1 glob 7

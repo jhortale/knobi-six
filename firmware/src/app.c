@@ -201,6 +201,11 @@ static void app_main(void)
 #endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
         ch = controls_tx_ch();
+        ctl_arp_out();                          /* the arp's notes out (PARAM TX on, LOCAL ON). Before the keys' sync
+                                                 * below (final review 4): an arp note-on still in the ring goes out
+                                                 * first, so a key that now goes out raw takes it over (ctl_arp_take)
+                                                 * instead of sending its own on, the arp's on after it and the arp's
+                                                 * off later cutting the held key on the receiver */
         {                                       /* the keys held, as the receiver sees them: whether their notes go out
                                                  * changed (ARP ON / PARAM TX / LOCAL, ui/midi_map.c ctl_keys_out)?
                                                  * now feeding the local arp: their note-offs; no more: their note-ons,
@@ -269,7 +274,6 @@ static void app_main(void)
 
         midi_in();
         clock_out();
-        ctl_arp_out();                          /* the arp's notes out (PARAM TX on) */
 
         for (k = 0; k < 18u; k++)               /* a button lit while it is held */
             fm1_led_key(k, fm1_in.buttons >> k & 1u);
@@ -338,6 +342,8 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
                                                                           order) */
     else if (!strcmp(name, "arpsteps")) *got = (int)eng_arp.steps;     /* arp notes played so far */
     else if (!strcmp(name, "arpout")) *got = (int)ctl_arp_outs;        /* arp notes sent as MIDI so far */
+    else if (!strcmp(name, "arpoff")) *got = (int)ctl_arp_offs;        /* arp note-offs sent so far */
+    else if (!strcmp(name, "arpoffch")) *got = ctl_arp_offch;          /* the channel of the last one, 0..15 */
     else if (!strcmp(name, "keyon")) *got = (int)keys_tx_on;           /* the keys' own note-ons sent as MIDI so far */
     else if (!strcmp(name, "keyoff")) *got = (int)keys_tx_off;         /* their note-offs sent so far */
     else if (!strcmp(name, "keyed")) {                                 /* voices with a key down or latched */
