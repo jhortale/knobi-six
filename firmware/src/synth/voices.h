@@ -97,6 +97,29 @@ void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times
 void synth_tune(synth_t *s, int cents);             /* master transpose + tune, -1250..+1250 cents, both VCOs */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
+/* The render seam (Phase 2: part of the voices can render on the second core). Each control period synth_render runs
+ * the tick (the smoothers, the LFO, the shared voice_ctx_t, every voice's control and envelopes, freeing silent
+ * voices), sets ctx.pos, renders the busy voices into a zeroed int32 bus through SYNTH_SPLIT, then the DC blocker and
+ * the limiter. The bus sums int32 (exact in any order), so any split of the voices into sets is bit-exact with the
+ * one loop (tests/unit/test_split.c: every partition, and set B on a second thread under ThreadSanitizer).
+ *
+ * synth_render_set: the busy voices in voice_mask (bit i = voice i) for frames_in_period (<= the frames left in the
+ * period) ADDED into bus (L R int32 pairs; the caller zeroes it). It writes only those voices' voice_t and bus; it
+ * reads s->ctx (incl. pos), s->prog.v and those voices; nothing else of synth_t, no global. So two calls with
+ * disjoint masks may run at once (on two cores, each with its own bus, summed after), provided nothing writes the
+ * synth meanwhile: no tick, no synth_note / param / ... (those are serialised with synth_render already).
+ * synth_balance: the busy voices split by voice_t.busy (not by index): set A (mask_a: CPU0's, the core that also takes
+ * the other interrupts) the first n / 2 busy voices by index, set B (mask_b) the rest; returns n, the voices busy.
+ *
+ * SYNTH_SPLIT(s, bus, n): one period's voices into bus. A dual-core build defines it before voices.c: synth_balance,
+ * set B handed to the other core (its own bus), set A here, join, sum into bus. One core (the default): every voice
+ * as one set (set A all, set B empty: the Phase 1 loop, at its cost). */
+#define SYNTH_ALL_VOICES ((1u << NVOICE) - 1u)
+void synth_render_set(synth_t *s, uint32_t voice_mask, int32_t *bus, uint32_t frames_in_period);
+uint32_t synth_balance(const synth_t *s, uint32_t *mask_a, uint32_t *mask_b);
+#ifndef SYNTH_SPLIT
+#define SYNTH_SPLIT(s, bus, n) synth_render_set((s), SYNTH_ALL_VOICES, (bus), (n))
+#endif
 /* The CPU guard: after each render, the time it took (used) and the block's time (budget), in any one unit (the
  * platform's tick counter). Over SYNTH_GUARD_HI % of the budget the voice limit drops, in one step, to the voices that
  * fit under it at the measured cost per voice (used / voices sounding; at least one fewer, at least one), and the

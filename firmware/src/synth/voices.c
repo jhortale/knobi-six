@@ -493,6 +493,25 @@ static int synth_bus_live(const synth_t *s)
            __builtin_fabsf(s->dcy[1]) >= 0.5f;
 }
 
+/* the render seam (voices.h) */
+void synth_render_set(synth_t *s, uint32_t voice_mask, int32_t *bus, uint32_t frames_in_period)
+{
+    for (int i = 0; i < NVOICE; i++)
+        if ((voice_mask >> i & 1u) && s->voice[i].busy)
+            voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, (int)frames_in_period);
+}
+uint32_t synth_balance(const synth_t *s, uint32_t *mask_a, uint32_t *mask_b)
+{
+    uint32_t busy = 0, n = 0;
+    for (int i = 0; i < NVOICE; i++)
+        if (s->voice[i].busy) busy |= 1u << i, n++;
+    uint32_t a = 0, k = n >> 1;   /* set A: the first n / 2 busy voices by index (the smaller half), set B the rest */
+    for (int i = 0; k; i++)
+        if (busy >> i & 1u) a |= 1u << i, k--;
+    *mask_a = a, *mask_b = busy & ~a;
+    return n;
+}
+
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
 {
     if (!synth_active(s)) {
@@ -510,9 +529,8 @@ void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
         int n = (int)(frames < s->ctl_left ? frames : s->ctl_left);
         int32_t bus[2 * VOICE_CTL];
         for (int i = 0; i < 2 * n; i++) bus[i] = 0;
-        s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);
-        for (int i = 0; i < NVOICE; i++)
-            if (s->voice[i].busy) voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, n);
+        s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);   /* (shared state: written here, before the sets) */
+        SYNTH_SPLIT(s, bus, (uint32_t)n);
         synth_bus(s, bus, lr, n);
         lr += 2 * n;
         frames -= (uint32_t)n;
