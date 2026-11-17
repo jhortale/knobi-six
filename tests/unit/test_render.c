@@ -205,10 +205,10 @@ static void event_queue(void)
     eng_bend(12000);
     render(BLK);
     int bent = eng_synth.bend14 == 12000;
-    /* overflow: ENG_QLEN events fit, the next is dropped and counted */
+    /* overflow: ENG_QLEN - ENG_RESERVE note-ons fit, the next is refused and counted (the reserve is the note-offs') */
     eng_init();
     int ok = 0;
-    for (unsigned i = 0; i < ENG_QLEN; i++) ok += eng_note(40 + (int)(i & 31), (int)(i & 1) ? 0 : 100) == 0;
+    for (unsigned i = 0; i < ENG_QLEN; i++) ok += eng_note(40 + (int)(i & 31), 100) == 0;
     int over = eng_note(90, 100);
     uint32_t drops = eng_drops;
     render(BLK);
@@ -237,9 +237,101 @@ static void event_queue(void)
            "program loads %d %d(busy) %d -> FREQ %d then %d; HOLD keeps %d voice, PANIC leaves %d\n", before, after,
            k60, k64, coalesced, bent, ok, ENG_QLEN, over, drops, drained, more, l1, l2, l3, got1, got2, held, panicked);
     CHECK(before == 0 && after == 2 && k64 == 1 && k60 == 0 && coalesced && bent);
-    CHECK(ok == (int)ENG_QLEN && over == -1 && drops == 1 && drained && more);
+    CHECK(ok == (int)(ENG_QLEN - ENG_RESERVE) && over == -1 && drops == ENG_RESERVE + 1u && drained && more);
     CHECK(l1 == 0 && l2 == -1 && l3 == 0 && got1 == 50 && got2 == 60);
     CHECK(held == 1 && panicked == 0);
+}
+
+/* Task 7 review, folded into Task 8: a note-off is never lost. The last ENG_RESERVE slots take only note-offs (and
+ * PANIC / HOLD): note-ons are refused first. A note-off that finds even the reserve full is kept (eng_off_pend) and
+ * eng_flush (the main loop, every pass) queues it once there is room; a note-on of the same note waits for it. */
+static void queue_never_drops_note_off(void)
+{
+    eng_init();
+    eng_param(P_LENV_R, 0);
+    render(BLK);
+    int on = 0, off = 0, deferred = 0;
+    for (int n = 0; n < 256; n++) on += eng_note(n & 127, 100) == 0;    /* 256 note-ons: only QLEN - RESERVE fit */
+    for (int n = 0; n < 128; n++) { int r = eng_note(n, 0); off += r == 0; deferred += r == 1; }   /* 128 note-offs */
+    uint32_t pend0 = 0;
+    for (int i = 0; i < 4; i++) for (uint32_t b = eng_off_pend[i]; b; b &= b - 1u) pend0++;
+    render(BLK);                                                        /* drains: then the pending offs fit */
+    int left = eng_flush();
+    render(BLK);
+    int left2 = eng_flush();
+    int stuck = 0;
+    for (int i = 0; i < NVOICE; i++) stuck += eng_synth.voice[i].busy && eng_synth.voice[i].key;
+    render(FS / 4);
+    int active = eng_active();
+    /* a note-on after its own pending note-off: the off goes first (the note is not cut by a late off) */
+    eng_init();
+    for (int n = 0; n < (int)ENG_QLEN; n++) eng_note(n & 127, 100);      /* fill to the reserve */
+    for (int n = 0; n < (int)ENG_RESERVE; n++) eng_note(100 + (n & 15), 0);   /* the reserve: note-offs */
+    int r_off = eng_note(60, 0);                                         /* queue full: kept for later */
+    int r_on = eng_note(60, 100);                                        /* refused (full); never before its off */
+    render(BLK);
+    eng_flush();
+    int r_on2 = eng_note(60, 100);
+    render(BLK);
+    int s60 = 0;
+    for (int i = 0; i < NVOICE; i++) s60 += eng_synth.voice[i].busy && eng_synth.voice[i].key && eng_synth.voice[i].note == 60;
+    printf("queue_never_drops_note_off: %d note-ons taken, note-offs %d queued + %d kept (%u pending), pending after "
+           "flushes %d %d, keys stuck %d, voices after 0.25 s %d; off then on of a pending note: %d %d then %d, "
+           "60 sounding %d\n", on, off, deferred, pend0, left, left2, stuck, active, r_off, r_on, r_on2, s60);
+    CHECK(on == (int)(ENG_QLEN - ENG_RESERVE) && off + deferred == 128 && deferred > 0 && pend0 == (uint32_t)deferred);
+    CHECK(left == 0 && left2 == 0 && stuck == 0 && active == 0);
+    CHECK(r_off == 1 && r_on == -1 && r_on2 == 0 && s60 == 1);
+}
+
+/* Task 7 review, folded into Task 8: a param edit the queue cannot take is not lost. eng_edit keeps the new value at
+ * once (screens show it), the id is marked (eng_par_pend) and eng_flush queues its latest value when there is room;
+ * several edits meanwhile send only the last. A program load supersedes pending edits. */
+static void queue_keeps_param_edit(void)
+{
+    eng_init();
+    for (int n = 0; n < (int)ENG_QLEN; n++) eng_note(n & 127, 100);      /* full up to the reserve */
+    int r1 = eng_param(P_FLT_FREQ, 50), r2 = eng_param(P_FLT_FREQ, 40);
+    int shown = eng_edit.v[P_FLT_FREQ];
+    render(BLK);
+    int before = eng_synth.prog.v[P_FLT_FREQ];
+    uint32_t q0 = eng_qw;
+    int left = eng_flush();
+    int sent = (int)(eng_qw - q0);
+    render(BLK);
+    int after = eng_synth.prog.v[P_FLT_FREQ];
+    /* a program load drops pending edits (its values win) */
+    for (int n = 0; n < (int)ENG_QLEN; n++) eng_note(n & 127, 0);
+    render(BLK);
+    for (int n = 0; n < (int)ENG_QLEN; n++) eng_note(n & 127, 100);
+    eng_param(P_FLT_RESO, 200);
+    render(BLK);
+    program_t p;
+    program_init(&p);
+    p.v[P_FLT_RESO] = 7;
+    int lp = eng_program(&p);
+    eng_flush();
+    render(BLK);
+    int reso = eng_synth.prog.v[P_FLT_RESO];
+    printf("queue_keeps_param_edit: edits on a full queue %d %d (kept), shown %d, synth before flush %d, flush leaves "
+           "%d and sends %d event, synth after %d; program load %d after a pending edit -> RESO %d\n",
+           r1, r2, shown, before, left, sent, after, lp, reso);
+    CHECK(r1 == 1 && r2 == 1 && shown == 40 && before == 164 && left == 0 && sent == 1 && after == 40);
+    CHECK(lp == 0 && reso == 7);
+}
+
+/* chord memory goes to the synth through the queue too (eng_chord: 6 slots, absolute MIDI notes, 0 = empty) */
+static void queue_chord(void)
+{
+    static const uint8_t c[6] = {60, 64, 67, 0, 0, 0};
+    eng_init();
+    eng_chord(c);
+    int left = eng_flush();                                              /* (the main loop's pass) */
+    int shown = eng_edit.chord[1];
+    render(BLK);
+    printf("queue_chord: flush leaves %d, edit %d, synth %d %d %d %d\n", left, shown, eng_synth.prog.chord[0], eng_synth.prog.chord[1],
+           eng_synth.prog.chord[2], eng_synth.prog.chord[3]);
+    CHECK(left == 0 && shown == 64 && eng_synth.prog.chord[0] == 60 && eng_synth.prog.chord[1] == 64 && eng_synth.prog.chord[2] == 67
+          && eng_synth.prog.chord[3] == 0);
 }
 
 int main(void)
@@ -248,6 +340,9 @@ int main(void)
     params_smoothed_no_step();
     silence_costs_nothing();
     event_queue();
+    queue_never_drops_note_off();
+    queue_keeps_param_edit();
+    queue_chord();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;
