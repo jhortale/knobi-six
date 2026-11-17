@@ -185,11 +185,11 @@ static void test_no_self_oscillation(void)
     double worst = -400, w100 = -400;
     int wstep = 0, wmode = 0, last = 0, lstep = 0;
     static const int modes[4][2] = { {0, 0}, {128, 0}, {255, 0}, {0, 32768} };   /* LP, notch, HP, BP */
-    for (int step = 46; step <= 164; step += 2) {     /* step 46 = 20.6 Hz: the audio band */
+    for (int step = 0; step <= 164; step += 2) {      /* the FILTER FREQ knob's whole range: 16 Hz .. 18.8 kHz */
         for (int m = 0; m < 4; m++) {
             svf_coef_t c;
             svf_t s = {0, 0};
-            svf_coef(&c, CUT_Q16(step), 255, modes[m][0], modes[m][1]);
+            svf_coef(&c, svf_knob_q16(step), 255, modes[m][0], modes[m][1]);
             double e0 = 0, e1 = 0, e100 = 0;
             for (int n = 0; n < FS + 441; n++) {
                 double y = svf_tick(&s, n == 0 ? 32767 : 0, &c);
@@ -204,9 +204,9 @@ static void test_no_self_oscillation(void)
         }
     }
     printf("no_self_oscillation: RESO 255, impulse, energy of [1 s, 1.01 s) vs the first 10 ms, worst %.1f dB "
-           "(step %d = %u Hz, mode %d)\n", worst, wstep, svf_cutoff_hz(CUT_Q16(wstep)), wmode);
-    printf("no_self_oscillation: the last nonzero output sample of any of them: %.3f s (step %d = %u Hz); "
-           "worst energy at [100 ms, 110 ms): %.1f dB\n", last / (double)FS, lstep, svf_cutoff_hz(CUT_Q16(lstep)),
+           "(FREQ %d = %u Hz, mode %d)\n", worst, wstep, svf_cutoff_hz(svf_knob_q16(wstep)), wmode);
+    printf("no_self_oscillation: the last nonzero output sample of any of them: %.3f s (FREQ %d = %u Hz); "
+           "worst energy at [100 ms, 110 ms): %.1f dB\n", last / (double)FS, lstep, svf_cutoff_hz(svf_knob_q16(lstep)),
            w100);
     CHECK(worst < -80);
     /* and a loud sustained input at max RESO stops ringing once the input stops */
