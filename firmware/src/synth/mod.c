@@ -9,7 +9,7 @@
  *
  * Fixed point: only 32 x 32 -> 64 products, no 64-bit division; 32-bit divisions by constants at control rate only
  * (lfo_depth, mods_gain). mods_xm_tick (mod.h) and mods_fm1 are the per-sample parts: no division but mods_fm1's
- * division of a semitone count by 3, which compilers turn into a multiply. Unity-build safe: every file-scope name
+ * division of a semitone count by 3 (a 32-bit SDIV on the chip, not a multiply; no library call). Unity-build safe: every file-scope name
  * is lfo_ / mods_ / LFO_ / MODS_ prefixed. */
 #include "mod.h"
 #include "../params/params.h"
@@ -255,7 +255,7 @@ void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t
     if (t > MODS_NOTE_HI) t = MODS_NOTE_HI;
     int32_t s = (int32_t)(t - note1_q16);                      /* |s| <= 195 semitones, Q16 */
     if (note1_q16 < MODS_NOTE_LO || note1_q16 > MODS_NOTE_HI) s = 0;   /* base outside the range: leave it */
-    int32_t x = s * 64 / 3;                                     /* octaves, Q24 (|x| < 2^30) */
+    int32_t x = s * 64 / 3;                                     /* octaves, Q24 (|x| < 2^30); a 32-bit SDIV */
     int n = x >> 24;                                            /* floor */
     int32_t f = x & (LFO_Q24 - 1);
     /* inc x 2^x = inc x 2^f x 2^n; inv x 2^-x = inv x 2^(1 - f) / 2 x 2^-n. The 64-bit products take constant

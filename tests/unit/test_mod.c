@@ -362,7 +362,8 @@ static void pw_dest_4state(void)
                m.vco1_pw / 65536.0, m.vco2_pw / 65536.0);
         CHECK((m.vco1_pw != 0) == want1[s] && (m.vco2_pw != 0) == want2[s]);
         if (want1[s]) CHECK(abs(m.vco1_pw - (int32_t)((int64_t)MODS_LFO_PW * LFO_ONE / 32768)) <= 2);
-        if (want2[s]) CHECK(m.vco2_pw == (want1[s] ? m.vco1_pw : m.vco2_pw));
+        if (want2[s]) CHECK(abs(m.vco2_pw - (int32_t)((int64_t)MODS_LFO_PW * LFO_ONE / 32768)) <= 2);
+        if (want1[s] && want2[s]) CHECK(m.vco2_pw == m.vco1_pw);
         m.vco1_pw = m.vco2_pw = 0;
         CHECK(mods_zero(&m));
     }
@@ -420,7 +421,7 @@ static void fm1_matches_set_pitch(void)
         uint32_t inc = a.inc1, inv = a.inv1;
         mods_fm1(&b, inc, inv, n, 0);
         if (b.inc1 != inc || b.inv1 != inv) exact0 = 0;
-        for (int32_t s = -48 * 65536; s <= 48 * 65536; s += 65536 / 3 + 77) {
+        for (int32_t s = -160 * 65536; s <= 160 * 65536; s += 65536 / 3 + 77) {   /* the real +-160 st sums */
             mods_fm1(&b, inc, inv, n, s);
             int32_t t = n + s;
             if (t < -60 * 65536 || t > 135 * 65536) {

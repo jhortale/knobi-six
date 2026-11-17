@@ -123,8 +123,8 @@ static inline __attribute__((always_inline)) void mods_xm_tick(mods_t *out, cons
 
 /* Per-sample VCO 1 pitch for audio-rate X-Mod, without osc_set_pitch's exp2 calls: inc1 / inv1 are the increment and
  * its inverse that osc_set_pitch computed for note1_q16 (saved by the voice at control rate); sets o->inc1 and o->inv1
- * for note1_q16 + semis_q16 (the sum clamped to the oscillator's -60..135 range). Accuracy: 0.2 cent (a cubic 2^f);
- * semis_q16 = 0 gives inc1 / inv1 back exactly. */
+ * for note1_q16 + semis_q16 (the sum clamped to the oscillator's -60..135 range). Accuracy: 0.31 cent (a cubic 2^f;
+ * measured over +-160 st); semis_q16 = 0 gives inc1 / inv1 back exactly. */
 void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t semis_q16);
 
 #endif
