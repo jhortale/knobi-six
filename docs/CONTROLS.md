@@ -18,7 +18,8 @@ top row of pads is switches, the bottom row is pressure only.
 | OCTAVE- / + | `BTN_OCT_DOWN` / `UP` | the keys' octave, -2..+2 |
 | BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
 | GLOBE held + BT, twice within 2 s | | RESTORE FACTORY: the first press asks (the header shows `SurE`, Program says RESTORE FACTORY? EDITS ARE LOST), the second within 2 s puts the current program's factory version into the edit buffer (header `FAC`; nothing is stored until WRITE). Not confirmed in time: forgotten. Globals, opened by GLOBE's press, closes again. No factory bank in the build: the init program. Not while a WRITE is armed (see [Programs](#programs)) |
-| KNOB BANK, FADER BANK, ARP, NOTE REPEAT, FX, SEQ, SEQ PLAY, SEQ REC | | nothing yet (effects, sequencer: phases 2 and 3; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
+| FX held + any encoder K2..K8 | `BTN_FX` | DISTORTION (0..127, the program's), on every screen: the OB-6's "hold EFFECT and turn MIX" (reference 2.9, 4). The effects (and a MIX knob) are not there yet, so every knob does it while FX is held; the header shows the value. FX alone: nothing yet |
+| KNOB BANK, FADER BANK, ARP, NOTE REPEAT, SEQ, SEQ PLAY, SEQ REC | | nothing yet (effects, sequencer: phases 2 and 3; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
 
@@ -57,7 +58,7 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 
 | Screen | K2..K8 | Faders 1..4 | Top pads 0..7 |
 | --- | --- | --- | --- |
-| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT | FREQ, RESO, MODE, ENV AMOUNT | SYNC (VCO1 sync), UNISON, ARP (ARP ON), HOLD |
+| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT, DISTORTION (K6, the PERFORMANCE row's DIST knob) | FREQ, RESO, MODE, ENV AMOUNT | SYNC (VCO1 sync), UNISON, ARP (ARP ON), HOLD |
 | VCO 1 + 2 | VCO1 FREQ, SHAPE, PW, VCO2 FREQ, FINE, SHAPE, PW | VCO1 SHAPE, VCO1 PW, VCO2 SHAPE, VCO2 PW | ◀, ▶, SYNC, LOW FREQ, KEYBOARD |
 | Mixer + Filter | VCO1, VCO2, SUB OCT, NOISE, FREQ, RESO, MODE | FREQ, RESO, MODE, ENV AMOUNT | ◀, ▶, BP, KEY TRACK (off / half / full) |
 | Envelopes, FILTER row | ATTACK, DECAY, SUSTAIN, RELEASE, AMOUNT | A, D, S, R | ◀, ▶, VELOCITY > FILTER, VELOCITY > AMP, ROW |
@@ -70,7 +71,7 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 | Program | BANK (0..4), TENS (0..9), ONES (0..9) | — | ◀, ▶, WRITE, ENTER, MANUAL |
 | Globals | MIDI CH (ALL, 1..16), POT MODE, PARAM TX (OFF / CC), PARAM RX (OFF / CC), TRANSPOSE (-12..+12), TUNE (-50..+50 cents), VEL CURVE (0..7) | — | ◀, ▶, LOCAL (ON / OFF), STEREO / MONO, SUSTAIN (N.O. / N.C.), AT CURVE (0..3) |
 
-Every phase-1 parameter, BPM and DIVISION, the four arpeggiator values, and every global is on some screen (unit test `bindings_valid`). The globals
+Every phase-1 parameter, BPM and DIVISION, the four arpeggiator values, DISTORTION, and every global is on some screen (unit test `bindings_valid`). The globals
 are kept in flash (below).
 
 ### Arp + Clock
@@ -113,6 +114,16 @@ keys: UNISON stacks each one, portamento glides between them, chord memory plays
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to
 16 cycles a beat (254). With no tempo known (a MIDI clock followed but not there yet) it runs free.
 
+### Distortion
+
+**DISTORTION** (Phase 2 Task 7; OB-6 reference 2.9: an amount per program, 0..127) drives the six voices' sum, before
+the output's DC blocker and limiter (and before the effects, when they come): 0 is off (the sound exactly as without
+it), the first quarter of the knob adds a little warmth, from about 32 it audibly saturates, 127 is a hard, squared-off
+drive (`firmware/src/synth/voices.h`). A chord stays at about its level (its peaks are held down while it gets denser);
+a single note gets louder, up to ~+8 dB. It is the program's (stored; a program from before Phase 2 loads with 0).
+Turn it with **K6 on Play** (DIST) or, anywhere, **hold FX and turn any of K2..K8**. No MIDI CC yet (as the clock's and
+the arpeggiator's values).
+
 Play's pad 0 is **SYNC** (VCO1 sync): the Play mockup's X-MOD performance slot, as ruled for Task 8 (the schema has no
 X-Mod on/off; sync is the performance switch the OB-6 player reaches for there). It is the same switch as VCO 1 + 2's
 pad 2.
@@ -134,7 +145,7 @@ shows the wheels' and faders' raw readings (for checking a unit's travel). The h
 set by the flash: the base's 8 slots of 16 KB hold 74 records each at 221 B a record (the largest a program may become
 in later phases), 592 in all, so 5 whole banks of 100 (`firmware/src/params/store_prog.h`). A program is its 66 values,
 its 20-character name and its chord memory, with a CRC (since record version 2 also 20 reserved phase-2/3 values:
-distortion, effects, clock, arpeggiator; the clock's and the arpeggiator's are in use, the rest stored for later). One that was never stored loads as its **factory
+distortion, effects, clock, arpeggiator; the distortion's, the clock's and the arpeggiator's are in use, the effects' stored for later). One that was never stored loads as its **factory
 program** when the build has a factory bank, else as the init program. One whose stored record is broken (or of a
 version this firmware does not know) loads as the init program and says so: `Err` in the header, STORED PROGRAM
 BROKEN: INIT LOADED on Program.

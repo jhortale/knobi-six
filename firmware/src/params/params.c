@@ -129,9 +129,13 @@ const param_t PARAMS_LIVE2[P_LIVE2_N] = {
     { P_ARP_HOLD, PS_ARP, PK_SWITCH, 2, 0, 0, 1, 0, "ARP HOLD", 0 },
 };
 
+/* the distortion (reference 2.9: hold EFFECT + MIX, 0..127, per program): the reserved range and default */
+const param_t PARAM_DISTORTION = { P_DISTORTION, PS_MISC, PK_KNOB, 2, 0, 0, 127, 0, "DISTORTION", 0 };
+
 const param_t *param_get(uint16_t id)
 {
     if (id < P_COUNT_PHASE1) return &PARAMS[id];
+    if (id == P_DISTORTION) return &PARAM_DISTORTION;
     if (P_IS_LIVE(id)) return &PARAMS_LIVE2[id - P_BPM];
     return 0;
 }

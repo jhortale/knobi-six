@@ -44,6 +44,7 @@ int32_t ctl_from7(uint16_t id, uint32_t x);         /* 0..127 -> the param's ran
 uint32_t ctl_to7(uint16_t id, int32_t v);           /* the inverse, 0..127 */
 int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast);   /* a param or global after det detents */
 int32_t ctl_pad_value(uint16_t id, int32_t cur);    /* a top pad pressed: a switch toggles, a select (or global) cycles */
+uint16_t ctl_enc_target(uint16_t bound, int fx_held);   /* what an encoder edits: FX held, DISTORTION; else bound */
 int32_t ctl_prog_digit(int32_t n, uint32_t d, int32_t det);   /* program n with digit d (PRG_*) turned det, clamped */
 int ctl_pad_at(const uint8_t *press);               /* the highest pressure of pads 8..15 */
 typedef struct { uint16_t id; int16_t last_v, anchor_v; uint8_t anchor_p, caught, mode; } ctl_fader_t;

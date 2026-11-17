@@ -53,12 +53,14 @@ extern const param_t PARAMS[P_COUNT_PHASE1];
  * of version 2 carries them already, no new record version): P_BPM 30..250 (default 120), P_CLK_DIV the 10 divisions
  * (default QTR): the clock (Task 5, synth/clock.h); P_ARP_ON (switch, default off), P_ARP_MODE (UP DOWN UP+DN RANDOM
  * ASSIGN, default UP), P_ARP_RANGE (1..3 octaves, default 1), P_ARP_HOLD (switch, default off): the arpeggiator (Task 6,
- * synth/arp.h; a version-1 record loads them at their defaults: the arp off). Everything that takes "a param" (the
- * queue, the panel, the screens) takes a live id; the other reserved ids are only stored. The live reserved ids are one
- * run, P_BPM .. P_ARP_HOLD. */
-#define P_IS_LIVE(id) ((id) < P_COUNT_PHASE1 || ((id) >= P_BPM && (id) <= P_ARP_HOLD))
+ * synth/arp.h; a version-1 record loads them at their defaults: the arp off); P_DISTORTION (knob 0..127, default 0 =
+ * bypass, MISC: the reference's 2.9; Task 7, synth/voices.h; a version-1 record loads it at 0) with an entry of its
+ * own (PARAM_DISTORTION). Everything that takes "a param" (the queue, the panel, the screens) takes a live id; the other
+ * reserved ids (the effects) are only stored. The live reserved ids: P_DISTORTION, and the run P_BPM .. P_ARP_HOLD. */
+#define P_IS_LIVE(id) ((id) < P_COUNT_PHASE1 || (id) == P_DISTORTION || ((id) >= P_BPM && (id) <= P_ARP_HOLD))
 #define P_LIVE2_N (P_ARP_HOLD - P_BPM + 1)
 extern const param_t PARAMS_LIVE2[P_LIVE2_N];
+extern const param_t PARAM_DISTORTION;
 const param_t *param_get(uint16_t id);                     /* a live id's entry, else 0 */
 
 #ifndef PROGRAM_VERSION

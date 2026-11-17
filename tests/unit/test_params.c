@@ -153,7 +153,8 @@ static void packed_size(void)
 
 /* Task 5: P_BPM and P_CLK_DIV are live: an entry each (param_get), in the clock section, with the reserved range and
  * default (a version-2 record already carries them: no new record version), the reference's ranges (BPM 30..250, the
- * 10 divisions); every phase-1 id is live and is PARAMS's own entry; the other reserved ids are not live yet */
+ * 10 divisions); every phase-1 id is live and is PARAMS's own entry; the other reserved ids are not live yet (bar the
+ * arp's, Task 6, and DISTORTION, Task 7: tests/unit/test_dist.c) */
 static void clock_params_live(void)
 {
     const param_t *b = param_get(P_BPM), *d = param_get(P_CLK_DIV);
@@ -171,7 +172,7 @@ static void clock_params_live(void)
     CHECK(!strcmp(d->labels[0], "HALF") && !strcmp(d->labels[4], "8TH S") && !strcmp(d->labels[9], "32ND"));
     for (unsigned i = 0; i < P_COUNT_PHASE1; i++) CHECK(P_IS_LIVE(i) && param_get((uint16_t)i) == &PARAMS[i]);
     for (unsigned i = P_COUNT_PHASE1; i < P_COUNT_RESERVED + 2u; i++)
-        others += (i < P_BPM || i > P_ARP_HOLD) && (P_IS_LIVE(i) || param_get((uint16_t)i));
+        others += (i < P_BPM || i > P_ARP_HOLD) && i != P_DISTORTION && (P_IS_LIVE(i) || param_get((uint16_t)i));
     CHECK(others == 0);
 }
 

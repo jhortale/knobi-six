@@ -8,7 +8,8 @@
  * anticlockwise one; a select steps one choice a detent. Nothing wraps. Faders are absolute: their move goes through
  * the global pot mode (ctl_fader_move). Top pads (0..7) act once per press (a switch toggles, a select cycles, an
  * action runs; a release, a held pad's pressure, do nothing); bottom pads (8..15) never switch: their highest pressure
- * is the aftertouch (with MIDI channel pressure: the higher of the two). */
+ * is the aftertouch (with MIDI channel pressure: the higher of the two). FX held: K2..K8 edit DISTORTION
+ * (ctl_enc_target). */
 #include "controls.h"
 #include "../params/store_prog.h"
 
@@ -22,7 +23,7 @@
 #endif
 const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
-    [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
+    [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, P_DISTORTION, N, N},   /* K6: DISTORTION */
                   {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
                   {P_VCO1_SYNC, P_UNISON_ON, P_ARP_ON, A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
     [SCR_VCO] = {{P_VCO1_FREQ, P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_FREQ, P_VCO2_FINE, P_VCO2_SHAPE, P_VCO2_PW},
@@ -126,6 +127,9 @@ int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast)
     }
     return v < lo ? lo : v > hi ? hi : v;
 }
+/* FX held (the OB-6's EFFECT held + MIX: reference 2.9, 4): every encoder K2..K8 edits DISTORTION, whatever the
+ * screen binds (the effects, and their MIX, are not there yet) */
+uint16_t ctl_enc_target(uint16_t bound, int fx_held) { return fx_held ? (uint16_t)P_DISTORTION : bound; }
 int32_t ctl_pad_value(uint16_t id, int32_t cur)
 {
     const param_t *p;
@@ -495,7 +499,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     b = ctl_binding(*screen, ctl_row[*screen]);
     for (k = 1; k < 8u; k++)                           /* K2..K8 */
         if ((e = fm1_enc_take(k)) != 0) {
-            uint16_t id = b->enc[k - 1u];
+            uint16_t id = ctl_enc_target(b->enc[k - 1u], *screen != SCR_BOOT && (fm1_in.buttons >> BTN_FX & 1u));
             int fast = fm1_ms - ctl_enc_ms[k] < CTL_FAST_MS;
             ctl_enc_pos[k] += e;
             ctl_enc_ms[k] = fm1_ms;

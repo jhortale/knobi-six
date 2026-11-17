@@ -139,6 +139,28 @@ retires CPU1 (FAIL PATTERN / FPU / DUAL), so DUAL CORE never renders the sound o
 (app.bin, app.dis, ota.bin, the package; also the plain `KNOBI_CPU1=1` app.bin). What the emulator cannot say (no
 cache or bus model, no supply-dependent misreads, no FPU trap path) is what the device run is for.
 
+## Phase 2 Task 7: the distortion (fm1-emu, local run = CI's `fm1-emu` job)
+
+The distortion (`synth/voices.h` "Distortion": an odd cubic soft clip on the summed bus, after both cores' voices and
+before the DC blocker and the limiter) costs per frame two float multiplies to the curve's input, a compare, and for a
+sample under the knee three multiplies and a subtract (no division; the coefficients, with a six-step Newton square
+root, are worked out at a control tick only when the smoothed amount moves). It runs on CPU0, after the join. Harness
+`DIST=127` (run.sh's `x` runs) against the same patch at 0 (the `p` runs), 6 voices, one core, cycles per 256-frame
+block, emu / hw model:
+
+| patch | amount 0 | amount 127 | delta | delta per frame, hw | 240 MHz hw, 0 -> 127 |
+|---|---|---|---|---|---|
+| init chord | 644,969 / 912,388 | 658,345 / 932,228 | +13,375 / +19,840 | +77.5 | 65.5 -> 66.9 % |
+| musical C3..C5 | 779,857 / 1,121,313 | 792,168 / 1,139,112 | +12,311 / +17,800 | +69.5 | 80.5 -> 81.8 % |
+| musical C5..C7 | 895,819 / 1,277,643 | 907,600 / 1,294,668 | +11,781 / +17,025 | +66.5 | 91.7 -> 92.9 % |
+
+At amount 0 the stage is skipped (one float compare a 16-frame period) and the output is the one before this task bit
+for bit: the harness checksums equal the previous commit's (init chord `55761876`, musical `c7a1eda5`, `aaafdace`,
+same local run of `ae72240`), at +662 / +980 cycles a block (the extra smoother and the compare: 644,307 / 911,408
+before on the init chord, +0.1 %). At full drive it is ~+1.3 % of the block at 240 MHz (hw model), the same in a
+dual-core build (it stays on CPU0: add it to CPU0's serial part in the Task 3 table). Under the CPU guard's 80 %
+nothing changes for the gate; the musical patch was already over 50 % on one core.
+
 ## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
 
 The listening round's fixes (FILTER FREQ re-anchored to 16 Hz .. 18.8 kHz, the bus DC blocker at 5 Hz and the new

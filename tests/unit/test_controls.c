@@ -62,9 +62,12 @@ static void bindings_valid(void)
     /* Task 6: the arpeggiator on the same screen (K4 MODE, K5 OCTAVES, pads 5 ARP ON, 6 ARP HOLD), Play's ARP pad */
     int arp_scr = ck->enc[2] == P_ARP_MODE && ck->enc[3] == P_ARP_RANGE && ck->pad_top[5] == P_ARP_ON &&
                   ck->pad_top[6] == P_ARP_HOLD && pl->pad_top[2] == P_ARP_ON;
+    /* Task 7: DISTORTION on Play's K6 (the encoder the filter's four leave free) */
+    int dist_play = pl->enc[4] == P_DISTORTION;
     printf("bindings_valid: %d bad bindings, %d params / globals unreachable, LFO pad 2 = LFO>VCO1 %d, Play faders %d, "
-           "Clock screen %d, arp %d\n", bad, missing, lfo_pad2, play_faders, clock_scr, arp_scr);
-    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders && clock_scr && arp_scr);
+           "Clock screen %d, arp %d, Play K6 DISTORTION %d\n", bad, missing, lfo_pad2, play_faders, clock_scr, arp_scr,
+           dist_play);
+    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders && clock_scr && arp_scr && dist_play);
 }
 
 /* encoders: a knob steps (range + 127) / 128 a detent, x4 when turned fast; switches go on (+) / off (-); selects step
@@ -211,9 +214,28 @@ static void cc_map(void)
     CHECK(bad == 0 && unmapped && MIDI_CC[P_FLT_FREQ] == 74 && MIDI_CC[P_FLT_RESO] == 71);
 }
 
+/* Task 7: FX held (the OB-6's EFFECT held + MIX), any of K2..K8 edits DISTORTION on every screen (a detent a step, as
+ * a 0..127 knob); FX not held: the screen's binding */
+static void fx_hold_distortion(void)
+{
+    int ok = 1;
+    for (int s = 0; s < SCR_COUNT; s++)
+        for (int k = 0; k < 7; k++) {
+            uint16_t b = ctl_binding(s, 0)->enc[k];
+            ok &= ctl_enc_target(b, 1) == P_DISTORTION && ctl_enc_target(b, 0) == b;
+        }
+    int up = ctl_enc_value(P_DISTORTION, 0, 1, 0), fast = ctl_enc_value(P_DISTORTION, 10, 1, 1),
+        top = ctl_enc_value(P_DISTORTION, 126, 5, 0), down = ctl_enc_value(P_DISTORTION, 3, -9, 0);
+    ok &= up == 1 && fast == 14 && top == 127 && down == 0;
+    printf("fx_hold_distortion: FX held: K2..K8 -> DISTORTION on every screen; 0 +1 -> %d, 10 fast +1 -> %d, 126 +5 -> "
+           "%d, 3 -9 -> %d: %d\n", up, fast, top, down, ok);
+    CHECK(ok);
+}
+
 int main(void)
 {
     bindings_valid();
+    fx_hold_distortion();
     encoder_steps();
     pad_switches();
     program_digits();

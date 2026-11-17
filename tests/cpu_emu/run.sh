@@ -49,4 +49,17 @@ for p in 0 3 4 1 2; do
   tc pi32v2/bin/nm --print-size "$OUT/$n-40.elf" > "$OUT/$n.nm"
   echo "$n done"
 done
+# Phase 2 Task 7: the distortion at full (DIST=127), 6 voices, one core: the init chord and the musical patches
+for p in 0 3 4; do
+  n="x$p-v6"
+  for k in 8 40; do
+    tc pi32v2/bin/clang "${FLAGS[@]}" -DNVOICE=6 -DPATCH=$p -DBLOCKS=$k -DDIST=127 -c $H/harness.c -o "$OUT/$n-$k.o"
+    tc pi32v2/bin/ld -T $H/link.ld --gc-sections -o "$OUT/$n-$k.elf" "$OUT/crt0.o" "$OUT/$n-$k.o"
+    python3 $H/elf2bin.py "$OUT/$n-$k.elf" "$OUT/$n-$k.bin" > /dev/null
+    FM1_SPIKE_COST="$OUT/$n-$k.cost" "$EMU" --bin "$OUT/$n-$k.bin" --steps 1000000000 --dump 0x01C70000 4 \
+      > "$OUT/$n-$k.log" 2>&1 || true
+  done
+  tc pi32v2/bin/nm --print-size "$OUT/$n-40.elf" > "$OUT/$n.nm"
+  echo "$n done"
+done
 python3 $H/analyze.py "$OUT" | tee "$OUT/summary.md"

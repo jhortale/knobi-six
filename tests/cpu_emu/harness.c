@@ -12,6 +12,7 @@
  *            measured, guarded (voices.c's CPU guard), not the gate.
  *   PATCH 3: the musical stress patch, the gate (tests/scripts/musical.txt; docs/MEASUREMENTS.md): C3 G3 C4 E4 G4 C5
  *   PATCH 4: the same on C5 G5 C6 E6 G6 C7 (tests/scripts/musical_high.txt)
+ * DIST (Phase 2 Task 7): the program's DISTORTION amount (run.sh's x runs: 127, against the p runs' 0).
  * NVOICE (voices.h) comes from the command line: 6 or 4. Results at 0x01C70000: magic, voices sounding,
  * sizeof (synth_t), a checksum of the output (bit-identity across optimisations).
  *
@@ -158,6 +159,9 @@ int main(void)
     program_init(&P);
 #if PATCH != 0
     for (unsigned i = 0; i < sizeof WORST / sizeof WORST[0]; i++) P.v[WORST[i][0]] = WORST[i][1];
+#endif
+#ifdef DIST
+    P.v[P_DISTORTION] = DIST;   /* (Phase 2 Task 7: the distortion's cost; run.sh's x runs) */
 #endif
     synth_program(&S, &P);
 #if PATCH == 1 || PATCH == 2

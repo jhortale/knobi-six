@@ -140,6 +140,28 @@ if duals:
     print('\nfm1-emu has no cache and no bus-contention model: both cores fetch and load at full speed here. On the chip '
           'they share one I-cache and the XIP flash; prior art measured -27..-41 % on devices '
           '(docs/research/second-core.md), not the ideal ~-50 %.')
+dists = sorted({os.path.basename(p)[:-len('-40.cost')] for p in glob.glob(f'{out}/x*-40.cost')},
+               key=lambda n: [0, 3, 4, 1, 2].index(int(n[1])))
+if dists:
+    # Phase 2 Task 7 (harness DIST=127): the distortion at full against the same patch at 0 (the p run), one core
+    print('\n### Distortion (DIST=127 against 0; one core, cycles per block)\n')
+    print('| run | patch | voices | amount 0, emu / hw | amount 127, emu / hw | delta, emu / hw | delta per frame, hw '
+          '| % of block at 240 MHz, 0 -> 127 (hw) | voices sounding, checksum |')
+    print('|---|---|---|---|---|---|---|---|---|')
+    for n in dists:
+        base = n.replace('x', 'p', 1)
+        def blk(m):
+            a, b = load(f'{out}/{m}-40.cost'), load(f'{out}/{m}-8.cost')
+            return [(sum(v[i] for v in a.values()) - sum(v[i] for v in b.values())) / K / (1 if i == 0 else 8)
+                    for i in range(3)]
+        z, x = blk(base), blk(n)
+        c = check(f'{out}/{n}-40.log')
+        good = c is not None and c[0] == 6
+        ok &= good
+        p240 = BLOCK_S * 240e6
+        print(f'| {n} | {NAMES[int(n[1])]} | {n.split("-v")[1]} | {z[1]:,.0f} / {z[2]:,.0f} | {x[1]:,.0f} / {x[2]:,.0f} | '
+              f'{x[1] - z[1]:+,.0f} / {x[2] - z[2]:+,.0f} | {(x[2] - z[2]) / 256:+.1f} | '
+              f'{100 * z[2] / p240:.1f} -> {100 * x[2] / p240:.1f} | {f"{c[0]}, {c[2]}" if good else "RUN FAILED"} |')
 if not ok:
     print('\nERROR: a run did not finish with the result words (or a dual run differs from the one-core run)')
     sys.exit(1)

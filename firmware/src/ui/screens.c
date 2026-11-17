@@ -55,8 +55,8 @@ static const wdg_t SCR_PLAY_W[] = {
     KNOB(7, 87, 56, 0, "FREQ"), KNOB(63, 87, 56, 1, "RESO"), KNOB(119, 87, 56, 2, "MODE"),
     KNOB(175, 87, 58, 3, "ENV AMT"),
     {W_TITLE, 7, 133, 226, 19, 0, 0, "PERFORMANCE"},
-    PAD(7, 158, 56, 22, 0, 2, "SYNC"), PAD(63, 158, 56, 22, 1, 2, "UNISON"), PAD(119, 158, 56, 22, 2, 2, "ARP"),
-    PAD(175, 158, 58, 22, 3, 2, "HOLD"),
+    PAD(7, 158, 42, 22, 0, 2, "SYNC"), PAD(49, 158, 42, 22, 1, 2, "UNISON"), PAD(91, 158, 42, 22, 2, 2, "ARP"),
+    PAD(133, 158, 42, 22, 3, 2, "HOLD"), KNOB(175, 154, 58, 4, "DIST"),   /* (K6: DISTORTION, Task 7) */
     {W_HINT, 7, 196, 226, 9, 0, 0, "TOP PADS: SWITCHES"},
     {W_HINT, 7, 207, 226, 9, 0, 0, "BOTTOM PADS: PRESSURE"},
     FOOTER, END};
