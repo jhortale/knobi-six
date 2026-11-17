@@ -15,6 +15,13 @@ the programs, and the program names that contain "OB" / "Ober" clash with the pr
 
 Where to get the file and the steps: README.md, "Importing the OB-6 factory programs".
 
+**The build enforces it** (`tools/build.py`, `factory_guard`; tested by `tests/build_factory_test.py`):
+- `--release` (what CI's release workflow and anything we publish use) **refuses to run** while
+  `firmware/gen/factory_bank.h` is there: move it away or delete it, then build the release again.
+- Any other build with it there names the package **`build/knobi-six-local.fwsc`** (`knobi-six-local-elite.fwsc`,
+  `-local-mke.fwsc`) instead of `knobi-six.fwsc`, and warns, before and after building, that the package contains your
+  own imported bank and must not be shared. Install it on your own keyboard only.
+
 Names in the v1.01 bank that contain "OB" / "Ober": 18 of 500. They are imported as they are; the importer's local
 report (`build/factory_bank_report.txt`) lists them for whoever runs it on their own file.
 

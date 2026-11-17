@@ -18,8 +18,10 @@ run() { echo "== $1"; shift; "$@" || fail=1; }
 
 run "unit tests (tests/unit/test_*.c)" make -s -C tests unit
 run "the OB-6 importer on synthetic dumps (tools/ob6_import.py; no OB-6 data)" python3 tests/ob6_import_test.py
+run "tools/build.py and a local factory bank: --release refused, other builds -local and a warning" python3 tests/build_factory_test.py
 
-[ -f build/knobi-six.fwsc ] || { echo "run ./build.sh first"; exit 1; }
+# (knobi-six-local.fwsc: built with the local factory bank, docs/FACTORY_BANK.md)
+[ -f build/knobi-six.fwsc ] || [ -f build/knobi-six-local.fwsc ] || { echo "run ./build.sh first"; exit 1; }
 
 run "the app on the host: the default script" sh tests/run_host.sh
 run "every kind of control once: keys, a button, an encoder, a pad, a fader, a wheel, an outer key" sh tests/run_host.sh tests/scripts/diag.txt

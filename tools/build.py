@@ -6,13 +6,19 @@ installable .fwsc package.
 
   tools/build.py [--release X.Y[-suffix]] [--model pro|elite|mke]
 
-Outputs in build/: app.bin (app), loader/ota.bin (update loader), knobi-six.fwsc (package). See README.md for the
+Outputs in build/: app.bin (app), loader/ota.bin (update loader), knobi-six.fwsc (package; knobi-six-local.fwsc with
+the local factory bank). See README.md for the
 toolchain and the SDK.
 
 -DBOARD_SMK37=1 for the app and the loader, the SMK flash layout (fm1pkg_make.py, app slot 0x97400), identity
 SMK-37 Pro_956. --model elite / mke (or MODEL=): the same build under the SMK-37 Elite's or the MKE-P37's model name
 (identity, loader and update record; -DSMK_MODEL), so M-Vave's updater still takes that unit's factory package:
 knobi-six-elite.fwsc, -mke.fwsc. A release changes only the version on the screen, never the identity.
+
+The factory bank (docs/FACTORY_BANK.md): firmware/gen/factory_bank.h, when it is there, is Sequential's data, imported
+by the user (tools/ob6_import.py), and the image then contains it. A --release build refuses to run with it there (a
+published build never contains it); any other build names the package knobi-six-local*.fwsc and warns that it must not
+be shared.
 
 The JieLi toolchain is Linux x86-64 only. JIELI_TOOLCHAIN points at it; on
 macOS (or with JIELI_DOCKER=1) each tool runs in a linux/amd64 container.
@@ -65,6 +71,23 @@ IDENT = "956"                       # KNOBI-SIX, every build: free in the Firmwa
                                     # the installers' resume wants _9NN
 PRODUCT = "SMK-37 Pro_" + IDENT
 VERSION = None                      # APP_VER for release builds
+FACTORY_H = FW / "gen" / "factory_bank.h"   # the user's own imported OB-6 bank (never committed, never published)
+
+
+def factory_guard(release, header=None):
+    """the package name's mark for the factory bank: refuse a release build while firmware/gen/factory_bank.h is there
+    (SystemExit); "-local" (and a warning) for any other build with it; "" without it"""
+    header = FACTORY_H if header is None else Path(header)
+    if not header.exists():
+        return ""
+    if release:
+        raise SystemExit(f"build: --release refused: {header} is there. It holds Sequential's OB-6 factory programs "
+                         "(your own import, tools/ob6_import.py), and a release must never contain them. Move it away "
+                         "(or delete it) and build the release again (docs/FACTORY_BANK.md).")
+    print(f"warning: {header} is there: this build contains your own imported OB-6 factory bank (Sequential's data). "
+          "The package is named knobi-six-local*.fwsc: install it on your own keyboard only, never share or publish "
+          "it (docs/FACTORY_BANK.md).", file=sys.stderr)
+    return "-local"
 
 
 def toolchain():
@@ -321,7 +344,8 @@ def main():
         BOARD_PREFIX[BOARD] = BOARD_PREFIX[BOARD].replace(MODELS["pro"], MODELS[model])
         suffix += "-" + model
     PRODUCT = BOARD_PREFIX[BOARD] + IDENT
-    name = f"knobi-six{suffix}.fwsc"
+    local = factory_guard(a.release)    # (before anything is built)
+    name = f"knobi-six{local}{suffix}.fwsc"
     if a.release:                   # one digit each (X.Y; a .Z only in the text)
         m = re.fullmatch(r"(\d)\.(\d)(\.\d)?(-[A-Za-z0-9]+)?", a.release)
         if not m:
@@ -351,6 +375,8 @@ def main():
     print(f"app      {OUT / 'app.bin'}  {len(img)} B")
     print(f"loader   {LDR / 'ota.bin'}  {len(ota)} B")
     print(f"package  {OUT / name}  {len(pkg)} B, identity {PRODUCT}")
+    if local:
+        print(f"warning: {name} contains your own imported OB-6 factory bank: do not share it", file=sys.stderr)
     return 0
 
 

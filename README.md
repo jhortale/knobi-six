@@ -18,7 +18,7 @@ Linux on x86-64, or macOS with Docker; Python 3 with Pillow; JieLi's toolchain a
 tools/get_toolchain.sh                      # JieLi's clang for the chip, to ~/.jieli/toolchain
 git clone --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
     https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK
-./build.sh                                  # -> build/knobi-six.fwsc (--model elite|mke for the others)
+./build.sh                                  # -> build/knobi-six.fwsc (--model elite|mke; -local with a factory bank)
 sh tests/run_tests.sh                       # the host test suite, after ./build.sh
 tests/run_host.sh tests/scripts/diag.txt    # the app on the computer: screens as PNG, sound as WAV (build/host/)
 make -C tests unit                          # unit tests (from Task 1 on)
@@ -46,7 +46,10 @@ a firmware built with it (`firmware/gen/factory_bank.h` is in `.gitignore`).
    ```
    It writes `firmware/gen/factory_bank.h` and a report of every conversion and warning in
    `build/factory_bank_report.txt`.
-4. Build as usual (`./build.sh`) and install as usual. The bank adds about 100 KB to the image.
+4. Build as usual (`./build.sh`) and install as usual. The bank adds about 100 KB to the image. With the header
+   there, the package is `build/knobi-six-local.fwsc` (`-local-elite`, `-local-mke`) and the build warns that it holds
+   your imported bank: install it on your own keyboard, **never share it**. A `--release` build refuses to run while
+   the header is there.
 
 Program names are kept as they are, including the ones that contain "OB". The sequencer data of the
 programs is not imported (a program has no room for it); effects, arpeggiator and clock settings are kept for later
