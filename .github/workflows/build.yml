@@ -1,4 +1,4 @@
-# KNOBI-SIX: device build + host tests on every push to phase1 and on demand; uploads the package, map and
+# KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) on every push to phase1 and on demand; uploads the package, map and
 # disassembly. (release.yml publishes tagged releases.) Toolchain and SDK as in release.yml.
 name: build
 
@@ -30,7 +30,9 @@ jobs:
           test -d ~/fw-AC79_AIoT_SDK
 
       - name: Build (Pro)
-        run: ./build.sh
+        run: |
+          ./build.sh | tee build.log
+          { echo '### Device build (Pro)'; echo '```'; grep -E 'ok   |app  |package' build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Host tests
         run: sh tests/run_tests.sh
@@ -54,3 +56,40 @@ jobs:
             build/app.map
             build/app.dis
           if-no-files-found: error
+
+  # The CPU gate (Task 11, docs/MEASUREMENTS.md): cycles per 256-frame block of the synth, built with the JieLi clang
+  # at the app's flags, run in joakimeriksson/fm1-emu (MIT, pinned) patched to count per-pc costs in two cycle models
+  # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale). Builds and emulates only.
+  fm1-emu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      FM1_EMU_SHA: 60645a58d6cd1597ed565a3f00e4981964623232
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JieLi toolchain (pkgman.jieliapp.com)
+        run: sh tools/get_toolchain.sh
+
+      - name: fm1-emu (pinned, patched to record per-pc costs)
+        run: |
+          git clone --filter=blob:none https://github.com/joakimeriksson/fm1-emu.git ~/fm1-emu
+          cd ~/fm1-emu && git checkout -q "$FM1_EMU_SHA"
+          python3 "$GITHUB_WORKSPACE/tests/cpu_emu/patch_emu.py" ~/fm1-emu
+          CARGO_PROFILE_RELEASE_LTO=false cargo build --release -p fm1-emu 2>&1 | tail -3
+
+      - name: Cycles per block (init chord, worst case; 6 and 4 voices)
+        run: |
+          bash tests/cpu_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/emu
+          { echo '### CPU gate (fm1-emu)'; cat build/emu/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: knobi-six-cpu
+          path: |
+            build/emu/summary.md
+            build/emu/*.cost
+            build/emu/*.log
+            build/emu/*.nm
+          if-no-files-found: warn
