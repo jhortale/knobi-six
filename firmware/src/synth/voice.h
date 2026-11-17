@@ -9,7 +9,10 @@
  *   per sample, voice_render: osc_tick; the X-Mod VCO 2 terms (mods_xm_term) into mods_fm1 (VCO 1 pitch), osc_set_shape
  *     (VCO 1 shape / PW) and svf_coef_fast (F FREQ, F MODE, Norm<->BP: the audio-rate filter path, used only when one
  *     of those destinations is on with a non-zero VCO 2 amount; svf_coef at control rate otherwise); the mixer;
- *     adsr_tick x 2; svf_tick; vca_control + vca_apply; the pan gains into the stereo bus.
+ *     adsr_tick x 2; svf_tick; vca_control + vca_apply; the pan gains into the stereo bus. The mixer levels and the
+ *     filter's output gains (MODE, BP: svf_coef's lp / hp / bp) ramp linearly per sample from the previous tick's
+ *     values to this tick's (no 16-frame steps when they move; skipped when they do not, and the gains on the
+ *     audio-rate filter path, which recomputes them every sample).
  *
  * Levels: the mixer gains are Q14 (16384 = level 127 = unity: one oscillator at full level is OSC_ONE = -6 dBFS into
  * the filter, the four at full overdrive its input drive, as rule 1 wants). The filter and the VCA keep 1 bit over Q15
@@ -38,6 +41,7 @@ typedef struct {
     int32_t bp;                           /* BP switch 0..32768 (smoothed: the switch crossfades) */
     int32_t shape1, pw1, shape2, pw2;     /* Q16 param units (smoothed) */
     int32_t lvl[4];                       /* mixer gains Q14, OSC_VCO1 .. OSC_NOISE (smoothed) */
+    int32_t lvl0[4];                      /* the previous tick's: voice_render ramps from them to lvl per sample */
     int32_t kres;                         /* svf_reso_k(reso) */
     int32_t gain;                         /* output gain Q15 (voice gain x program volume, smoothed) */
     int32_t spread;                       /* PAN SPREAD 0..32768 (smoothed) */
@@ -47,12 +51,14 @@ typedef struct {
     adsr_rates_t fr, lr;                  /* filter / loudness envelope rates */
     mods_xm_t xm;                         /* X-Mod VCO 2 gains (mods_xm_gains) */
     uint8_t xm_pitch, xm_shape, xm_flt;   /* per-sample paths on: VCO1 pitch, VCO1 shape / PW, filter */
+    uint8_t pos;                          /* frames of the current control period already rendered (0..15) */
 } voice_ctx_t;
 
 typedef struct {
     osc_t osc;
     svf_t svf;
     svf_coef_t coef;
+    int32_t g0[3];                        /* the previous tick's filter output gains lp, hp, bp (ramped per sample) */
     adsr_t fenv, lenv;
     mods_t ctl;                           /* this tick's mods_sum (VCO 2 term 0) */
     uint32_t inc1, inv1;                  /* VCO 1's increment and inverse at note1 (mods_fm1's base) */

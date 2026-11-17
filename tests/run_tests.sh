@@ -24,7 +24,9 @@ run "the app on the host: the default script" sh tests/run_host.sh
 run "every kind of control once: keys, a button, an encoder, a pad, a fader, a wheel, an outer key" sh tests/run_host.sh tests/scripts/diag.txt
 run "velocity, a pad, an outer key, the pitch wheel" sh tests/run_host.sh tests/scripts/smk37.txt
 run "MIDI in on USB, any channel; a key out on channel 1" sh tests/run_host.sh tests/scripts/midi.txt
-run "a key and a pad on one note: each keeps its voice (expect)" sh tests/run_host.sh tests/scripts/notes.txt
+run "a key held: its note sounds until the key is let go; the pad is not the app's yet (expect)" sh tests/run_host.sh tests/scripts/notes.txt
+run "the init program: a six-note chord, the wheels, the release (expect)" sh tests/run_host.sh tests/scripts/chord.txt
+run "the worst-case patch, six voices, set through the event queue (expect)" sh tests/run_host.sh tests/scripts/worst.txt
 
 $CC -DBOARD_SMK37=1 -Ifirmware/hal -o "$OUT/smk_flash_test" tests/smk_flash_test.c
 run "SMK-37 flash map: settings, blobs, owner tag, slots in the store; never the head, BTIF/USRTRIM, USR, key_mac" "$OUT/smk_flash_test"

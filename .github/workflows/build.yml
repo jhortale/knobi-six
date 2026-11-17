@@ -35,6 +35,17 @@ jobs:
       - name: Host tests
         run: sh tests/run_tests.sh
 
+      - name: CPU yardstick (host instructions per sample, x86-64)
+        continue-on-error: true
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null || true
+          for s in chord worst; do
+            DINGHY_PERF=1 sh tests/run_host.sh tests/scripts/$s.txt | grep '^perf' || echo "$s: no hardware counter here"
+          done
+          sudo apt-get install -y -qq valgrind >/dev/null
+          sh tests/cpu_host.sh tests/scripts/chord.txt 200 5000
+          sh tests/cpu_host.sh tests/scripts/worst.txt 200 6000
+
       - uses: actions/upload-artifact@v4
         with:
           name: knobi-six-pro

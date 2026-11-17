@@ -1,0 +1,53 @@
+# KNOBI-SIX: the worst case (Review Focus 1, tests/unit/test_render.c's WORST): every mixer level at max, VCO 1
+# pulse, VCO 2 pulse, sync on, max resonance, VCO2 -> VCO1 X-Mod at max (+ every other X-Mod destination, audio
+# rate), LFO square at 500 Hz on every destination at full depth + the mod wheel, aftertouch (MIDI channel pressure)
+# at full on every destination, volume 127; six keys at velocity 127, held 5.8 s.
+#   DINGHY_PERF=1 tests/run_host.sh tests/scripts/worst.txt   (Linux) -> instructions per sample
+# The patch is set with the host-only "set" hook (app.c host_probe): "T expect 0 set ID V" queues PARAM ID = V
+# through the engine's event queue, as the main loop would (0 = queued). The IDs are params.h's enum param_id.
+100 expect 0 set 10 127   # MIX_VCO1
+100 expect 0 set 11 127   # MIX_VCO2
+100 expect 0 set 12 127   # MIX_SUB
+100 expect 0 set 13 127   # MIX_NOISE
+100 expect 0 set 1 255   # VCO1_SHAPE
+100 expect 0 set 2 0   # VCO1_PW
+100 expect 0 set 6 254   # VCO2_SHAPE
+100 expect 0 set 7 255   # VCO2_PW
+100 expect 0 set 3 1   # VCO1_SYNC
+100 expect 0 set 14 100   # FLT_FREQ
+100 expect 0 set 15 255   # FLT_RESO
+100 expect 0 set 19 127   # FLT_ENV_AMT
+100 expect 0 set 60 127   # PRG_VOL
+100 expect 0 set 42 127   # XM_VCO2
+100 expect 0 set 41 127   # XM_FENV
+100 expect 0 set 43 1   # XM_D_VCO1
+100 expect 0 set 44 1   # XM_D_SHAPE1
+100 expect 0 set 45 1   # XM_D_PW1
+100 expect 0 set 46 1   # XM_D_FFREQ
+100 expect 0 set 47 1   # XM_D_FMODE
+100 expect 0 set 48 1   # XM_D_BP
+100 expect 0 set 31 254   # LFO_FREQ
+100 expect 0 set 33 3   # LFO_SHAPE
+100 expect 0 set 34 255   # LFO_AMT
+100 expect 0 set 35 1   # LFO_D_VCO1
+100 expect 0 set 36 1   # LFO_D_VCO2
+100 expect 0 set 37 3   # LFO_D_PW
+100 expect 0 set 38 1   # LFO_D_AMP
+100 expect 0 set 39 1   # LFO_D_FFREQ
+100 expect 0 set 40 1   # LFO_D_FMODE
+100 expect 0 set 49 127   # AT_AMT
+100 expect 0 set 50 1   # AT_D_VCO1
+100 expect 0 set 51 1   # AT_D_VCO2
+100 expect 0 set 52 1   # AT_D_LFOAMT
+100 expect 0 set 53 1   # AT_D_AMP
+100 expect 0 set 54 1   # AT_D_FFREQ
+100 expect 0 set 55 1   # AT_D_FMODE
+150 wheel 1 780
+150 midi 0xD0 127 0
+200 vel 127
+200 keys 0x1091081
+400 expect 6 voices
+400 expect 127 wheel
+400 expect 255 param 15
+5900 expect 6 voices
+6000 end

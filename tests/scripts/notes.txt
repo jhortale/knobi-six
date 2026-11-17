@@ -1,4 +1,4 @@
-# a key and a pad on the same note (F3, 53) keep a voice each: letting go of one leaves the other
+# a key held: F3 (53) sounds until the key is let go (the pad on the same note is not the app's yet: Task 8)
 100 vel 100
 110 keys 0x1
 150 pad 8 100

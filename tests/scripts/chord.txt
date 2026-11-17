@@ -1,0 +1,23 @@
+# KNOBI-SIX: the init program (program_init) on six keys at once, C4 E4 G4 C5 E5 G5 at velocity 100, held 4.8 s: the
+# pitch wheel bent to its top end and back, the mod wheel up (it only adds LFO depth: no LFO destination is on in
+# the init program, so it changes nothing you hear), then released. build/host/app.wav is the chord for listening;
+# DINGHY_PERF=1 tests/run_host.sh tests/scripts/chord.txt gives the init program's instructions per sample.
+100 vel 100
+200 keys 0x4884880
+400 expect 6 voices
+400 expect 1 sounding 60
+400 expect 1 sounding 79
+400 expect 0 sounding 61
+1500 wheel 0 700
+1600 expect 16383 bend
+2000 wheel 0 535
+2100 expect 8192 bend
+2500 wheel 1 780
+2600 expect 127 wheel
+3000 wheel 1 620
+3100 expect 0 wheel
+5000 keys 0
+5050 expect 0 sounding 60
+5300 expect 0 voices
+5400 shot
+5500 end

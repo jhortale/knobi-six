@@ -311,6 +311,7 @@ void synth_program(synth_t *s, const program_t *p)
     synth_lfo_set(s);
     s->ctx.kres = 0;
     synth_derive(s);
+    for (int i = 0; i < 4; i++) s->ctx.lvl0[i] = s->ctx.lvl[i];   /* snapped: no ramp */
 }
 
 void synth_init(synth_t *s)
@@ -406,6 +407,7 @@ static void synth_tick(synth_t *s)
         int32_t d = s->tgt[i] - s->sm[i];
         s->sm[i] = d > -16 && d < 16 ? s->tgt[i] : s->sm[i] + (d >> SYNTH_SM_SHIFT);
     }
+    for (int i = 0; i < 4; i++) s->ctx.lvl0[i] = s->ctx.lvl[i];   /* the voices ramp from these to the new levels */
     synth_derive(s);
     voice_ctx_t *c = &s->ctx;
     c->at = mods_at(s->pressure, v[P_AT_AMT]);
@@ -437,11 +439,20 @@ static int32_t synth_limit(int32_t x)
 
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
 {
+    if (!synth_active(s)) {
+        /* silence: nothing to add. The smoothed values snap to their targets (no voice to click) and the LFO runs on
+         * by the whole block; the next block starts a fresh control period */
+        for (int i = 0; i < SM_COUNT; i++) s->sm[i] = s->tgt[i];
+        lfo_tick(&s->lfo, s->prog.v[P_LFO_SHAPE], frames);
+        s->ctl_left = 0;
+        return;
+    }
     while (frames) {
         if (!s->ctl_left) synth_tick(s), s->ctl_left = VOICE_CTL;
         int n = (int)(frames < s->ctl_left ? frames : s->ctl_left);
         int32_t bus[2 * VOICE_CTL];
         for (int i = 0; i < 2 * n; i++) bus[i] = 0;
+        s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);
         for (int i = 0; i < NVOICE; i++)
             if (s->voice[i].busy) voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, n);
         for (int i = 0; i < 2 * n; i++) lr[i] += synth_limit(bus[i]);

@@ -84,6 +84,7 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
     v->cut = c->cut + kt + fenv_mod(fenv, prog[P_FLT_ENV_AMT], prog[P_FLT_VEL], v->vel) + v->ctl.flt_freq;
     v->mode = c->mode + v->ctl.flt_mode;
     v->bp = c->bp + v->ctl.bp_mix;
+    v->g0[0] = v->coef.lp, v->g0[1] = v->coef.hp, v->g0[2] = v->coef.bp;   /* ramp from these */
     if (c->xm_flt) svf_coef_fast(&v->coef, v->cut, c->kres, voice_r16(v->mode), v->bp);
     else svf_coef(&v->coef, v->cut, voice_r16(c->reso), voice_r16(v->mode), v->bp);
 
@@ -96,10 +97,24 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 
 void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t *bus, int n)
 {
-    const int32_t l0 = c->lvl[OSC_VCO1], l1 = c->lvl[OSC_VCO2], l2 = c->lvl[OSC_SUB], l3 = c->lvl[OSC_NOISE];
+    int32_t l0 = c->lvl[OSC_VCO1], l1 = c->lvl[OSC_VCO2], l2 = c->lvl[OSC_SUB], l3 = c->lvl[OSC_NOISE];
     const int32_t gl = v->gl, gr = v->gr, amp = v->amp;
     const int lamt = prog[P_LENV_AMT], lvel = prog[P_LENV_VEL], vel = v->vel;
     const int xm_pitch = c->xm_pitch, xm_shape = c->xm_shape, xm_flt = c->xm_flt;
+    /* ramps across the control period: value at its frame t (1..16) = old + (new - old) x t / 16, in Q4 accumulators */
+    const int32_t t0 = c->pos;
+    int32_t ld[4], la[4], gd[3], ga[3];
+    const int rl = c->lvl0[0] != l0 || c->lvl0[1] != l1 || c->lvl0[2] != l2 || c->lvl0[3] != l3;
+    const int rg = !xm_flt && (v->g0[0] != v->coef.lp || v->g0[1] != v->coef.hp || v->g0[2] != v->coef.bp);
+    svf_coef_t cf;
+    const svf_coef_t *cp = &v->coef;
+    if (rl)
+        for (int k = 0; k < 4; k++) ld[k] = c->lvl[k] - c->lvl0[k], la[k] = c->lvl0[k] * 16 + ld[k] * t0;
+    if (rg) {
+        cf = v->coef, cp = &cf;
+        gd[0] = cf.lp - v->g0[0], gd[1] = cf.hp - v->g0[1], gd[2] = cf.bp - v->g0[2];
+        for (int k = 0; k < 3; k++) ga[k] = v->g0[k] * 16 + gd[k] * t0;
+    }
     for (int i = 0; i < n; i++) {
         int32_t o[4];
         osc_tick(&v->osc, o);
@@ -113,10 +128,18 @@ void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t
                 svf_coef_fast(&v->coef, v->cut + mods_xm_term(x, c->xm.freq), c->kres,
                               voice_r16(v->mode + mods_xm_term(x, c->xm.mode)), v->bp + mods_xm_term(x, c->xm.bp));
         }
+        if (rl) {
+            la[0] += ld[0], la[1] += ld[1], la[2] += ld[2], la[3] += ld[3];
+            l0 = la[0] >> 4, l1 = la[1] >> 4, l2 = la[2] >> 4, l3 = la[3] >> 4;
+        }
+        if (rg) {
+            ga[0] += gd[0], ga[1] += gd[1], ga[2] += gd[2];
+            cf.lp = ga[0] >> 4, cf.hp = ga[1] >> 4, cf.bp = ga[2] >> 4;
+        }
         int32_t mix = (o[OSC_VCO1] * l0 + o[OSC_VCO2] * l1 + o[OSC_SUB] * l2 + o[OSC_NOISE] * l3) >> 14;
         adsr_tick(&v->fenv, &c->fr);
         int32_t le = adsr_tick(&v->lenv, &c->lr);
-        int32_t y = vca_apply(svf_tick(&v->svf, mix, &v->coef), vca_control(le, lamt, lvel, vel, amp, 0));
+        int32_t y = vca_apply(svf_tick(&v->svf, mix, cp), vca_control(le, lamt, lvel, vel, amp, 0));
         bus[2 * i] += (y * gl) >> 15;
         bus[2 * i + 1] += (y * gr) >> 15;
     }
