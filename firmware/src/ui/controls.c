@@ -173,7 +173,7 @@ int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint3
 static uint8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1};
 static uint8_t ctl_row[SCR_COUNT];
 static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY;
-static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel;
+static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel, ctl_midi_vol = 127;
 static int32_t ctl_midi_bend;                          /* MIDI pitch bend - 8192 (added to the wheel's) */
 static uint32_t ctl_pressed, ctl_released;             /* this pass's button edges (the app reads them after) */
 static int32_t ctl_enc_pos[8];                         /* detents turned, per encoder (screen, probes) */
@@ -355,6 +355,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         eng_pressure(at > ctl_midi_at ? at : ctl_midi_at);
     }
     eng_hold(ctl_hold || ctl_sustain);
+    eng_volume(ctl_midi_vol);                          /* MIDI CC 7 (sent every pass: a refused one is retried) */
     ctl_leds(*screen, edit);
 }
 #endif

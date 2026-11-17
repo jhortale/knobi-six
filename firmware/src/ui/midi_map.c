@@ -5,8 +5,10 @@
  *
  * In (controls_midi, main loop; the channel: global MIDI CH, 0 = ALL): notes (velocity; note-off velocity ignored),
  * channel pressure (aftertouch, with the bottom pads': the higher), pitch bend (added to the pitch wheel's), CC 1 mod
- * wheel (with the panel's: the higher), CC 64 sustain (= HOLD while down), CC 0 / 32 bank select and program change
- * (Task 10: a stub records the request), CC 120 / 123 all sound / notes off (PANIC), CC 121 reset controllers, and with
+ * wheel (with the panel's: the higher), CC 7 volume (times PROGRAM VOLUME, smoothed; master volume after), CC 64
+ * sustain (= HOLD while down), CC 0 / 32 bank select and program change (Task 10: a stub records the request), CC 120
+ * all sound off (PANIC), CC 123 all notes off (every note released, HOLD unchanged), CC 121 reset controllers (not
+ * volume, as MIDI's RP-015), CC 4 (foot controller) ignored in phase 1 (the reference lists it, not its effect), and with
  * PARAM RX = CC the map's CCs (0..127 over the param's range, bipolar 64 = 0). A CC received is not sent back.
  * Out (midi_cc_send): a panel edit, with PARAM TX = CC, as the map's CC on the MIDI channel (ALL = 1), only when its
  * 7-bit value differs from the last one either side had (a 0..255 param moving one step may stay on the same CC
@@ -83,7 +85,9 @@ void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
         if (d1 == 0u || d1 == 32u) ctl_bank_sel = (int32_t)d2;
         else if (d1 == 1u) ctl_midi_wheel = (uint8_t)d2;
         else if (d1 == 64u) ctl_sustain = d2 >= 64u;
-        else if (d1 == 120u || d1 == 123u) { eng_panic(); ctl_hold = ctl_sustain = 0; }
+        else if (d1 == 7u) ctl_midi_vol = (uint8_t)d2;
+        else if (d1 == 120u) { eng_panic(); ctl_hold = ctl_sustain = 0; }   /* all sound off: silence, HOLD off */
+        else if (d1 == 123u) eng_all_notes_off();       /* all notes off: released; HOLD (pad, sustain) unchanged */
         else if (d1 == 121u) { ctl_midi_wheel = 0; ctl_midi_bend = 0; ctl_midi_at = 0; ctl_sustain = 0; }
         else if (ctl_glob[G_PARAM_RX] && (id = midi_cc_param(d1)) >= 0) {
             midi_cc_known[d1] = (int16_t)d2;

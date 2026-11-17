@@ -64,7 +64,7 @@ struct synth {
     lfo_t lfo;
     int32_t sm[SM_COUNT], tgt[SM_COUNT];  /* smoothed values and their targets */
     uint32_t clock, rnd;                  /* event clock (allocation order), xorshift32 */
-    int32_t bend14, wheel, pressure;
+    int32_t bend14, wheel, pressure, midi_vol;   /* midi_vol: MIDI CC 7, 0..127 (127 at init) */
     uint8_t stack[SYNTH_STACK], svel[SYNTH_STACK], sdown[SYNTH_STACK];   /* keys in press order */
     uint8_t nstack;
     int16_t mono;                         /* unison: the sounding key, -1 none */
@@ -81,6 +81,8 @@ void synth_bend(synth_t *s, int bend14);            /* 0..16383, 8192 = centre *
 void synth_wheel(synth_t *s, int v);                /* 0..127 */
 void synth_pressure(synth_t *s, int v);             /* 0..127 */
 void synth_panic(synth_t *s);                       /* every voice silent now, keys and HOLD cleared */
+void synth_all_notes_off(synth_t *s);               /* every note released (envelopes release), HOLD unchanged */
+void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times PROGRAM VOLUME, smoothed */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
 

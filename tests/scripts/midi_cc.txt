@@ -2,7 +2,8 @@
 # the param (PARAM RX on, the default) and is not sent back; an edit on the panel goes out as its CC (PARAM TX on, the
 # default) on the MIDI channel (ALL = 1). "ccout N": the last value sent on CC N (-1: none). Globals (GLOBE): K2 MIDI
 # CH (0 = ALL, 1..16) = glob 0, K4 PARAM TX = glob 2, K5 PARAM RX = glob 3. Also the mod wheel (CC 1), sustain (CC 64,
-# the HOLD), pitch bend and program change + bank select (CC 32; programs are Task 10's: a stub records the request).
+# the HOLD), pitch bend and program change + bank select (CC 32; programs are Task 10's: a stub records the request),
+# CC 7 volume ("vol"), CC 123 all notes off (released, the HOLD pad's latch "holdpad" unchanged), CC 120 (PANIC).
 100 btn 12
 200 midi 0xB0 74 64
 250 expect 83 param 14
@@ -56,4 +57,27 @@
 1960 midi 0xC1 5 0
 2000 expect 1 prgbank
 2000 expect 5 prgreq
-2100 end
+# CC 7: MIDI volume (times PROGRAM VOLUME)
+2050 midi 0xB1 7 64
+2100 expect 64 vol
+# CC 123 with three keys down and the HOLD pad on (Play pad 3): the notes release (still sounding, no key), HOLD stays
+2150 vel 100
+2200 keys 0x91
+2250 pad 3 100
+2260 pad 3 0
+2300 expect 1 holdpad
+2300 expect 3 voices
+2350 midi 0xB1 123 0
+2360 expect 3 voices
+2360 expect 0 sounding 53
+2360 expect 0 sounding 60
+2360 expect 1 holdpad
+2360 expect 1 hold
+2400 keys 0
+# CC 120: PANIC, silent at once, HOLD off
+2450 keys 0x91
+2500 midi 0xB1 120 0
+2510 expect 0 voices
+2510 expect 0 holdpad
+2550 keys 0
+2600 end

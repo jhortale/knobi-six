@@ -334,6 +334,73 @@ static void queue_chord(void)
           && eng_synth.prog.chord[3] == 0);
 }
 
+/* fix round 1: a note-on after a PANIC the queue had to keep is not cut by it (the PANIC goes first) */
+static void queue_panic_before_note(void)
+{
+    eng_init();
+    for (int n = 0; n < (int)ENG_QLEN; n++) eng_note(n & 127, 100);     /* up to the reserve */
+    for (int n = 0; n < (int)ENG_RESERVE; n++) eng_note(n & 127, 0);    /* the reserve: full */
+    int rp = eng_panic();                                               /* kept */
+    render(BLK);
+    int rn = eng_note(60, 100);                                         /* PANIC queued first, then the note */
+    eng_flush();
+    render(BLK);
+    int s60 = 0;
+    for (int i = 0; i < NVOICE; i++) s60 += eng_synth.voice[i].busy && eng_synth.voice[i].key && eng_synth.voice[i].note == 60;
+    printf("queue_panic_before_note: panic kept %d, note %d, 60 sounding after the flush %d, voices %d\n", rp, rn, s60, eng_active());
+    CHECK(rp == 1 && rn == 0 && s60 == 1 && eng_active() == 1);
+}
+
+/* fix round 1: ALL NOTES OFF (MIDI CC 123) releases every note (the envelopes release, no cut) and leaves HOLD as it
+ * was; PANIC (CC 120) still cuts */
+static void all_notes_off_releases(void)
+{
+    eng_init();
+    eng_param(P_LENV_R, 60);
+    eng_hold(1);
+    eng_note(60, 100), eng_note(64, 100), eng_note(67, 100);
+    render(FS / 10);
+    eng_note(67, 0);                                                    /* latched by HOLD */
+    render(BLK);
+    int before = eng_active();
+    eng_all_notes_off();
+    render(BLK);
+    int keys = 0, latched = 0;
+    for (int i = 0; i < NVOICE; i++) keys += eng_synth.voice[i].busy && eng_synth.voice[i].key, latched += eng_synth.voice[i].latched;
+    int releasing = eng_active(), hold = eng_synth.hold;
+    int32_t peak = 0;
+    for (int i = 0; i < 2 * BLK; i++) if (abs(OUT[i]) > peak) peak = abs(OUT[i]);
+    render(FS);
+    int after = eng_active();
+    printf("all_notes_off_releases: %d voices, after ALL NOTES OFF %d still sounding (keys %d, latched %d, peak %d), HOLD "
+           "%d; 1 s later %d\n", before, releasing, keys, latched, peak, hold, after);
+    CHECK(before == 3 && releasing == 3 && keys == 0 && latched == 0 && peak > 1000 && hold == 1 && after == 0);
+}
+
+/* fix round 1: MIDI volume (CC 7) scales PROGRAM VOLUME, glides (no zipper), survives a program load */
+static void midi_volume(void)
+{
+    eng_init();
+    eng_note(57, 100);
+    render(FS / 2);
+    int32_t full = 0;
+    for (uint32_t i = FS / 4; i < FS / 2; i++) if (abs(OUT[2 * i]) > full) full = abs(OUT[2 * i]);
+    int32_t steady = max_step(FS / 4, FS / 2);
+    eng_volume(64);
+    render(FS / 2);
+    int32_t half = 0;
+    for (uint32_t i = FS / 4; i < FS / 2; i++) if (abs(OUT[2 * i]) > half) half = abs(OUT[2 * i]);
+    int32_t jump = max_step(0, FS / 20);
+    program_t p;
+    program_init(&p);
+    eng_program(&p);
+    render(BLK);
+    int kept = eng_synth.midi_vol;
+    printf("midi_volume: peak at 127 %d, at 64 %d (ratio %.3f, want 0.504); max step at the change %d (steady %d); after a "
+           "program load %d\n", full, half, (double)half / full, jump, steady, kept);
+    CHECK(fabs((double)half / full - 64.0 / 127.0) < 0.03 && jump <= 2 * steady && kept == 64);
+}
+
 int main(void)
 {
     voice_worst_case_bounded();
@@ -343,6 +410,9 @@ int main(void)
     queue_never_drops_note_off();
     queue_keeps_param_edit();
     queue_chord();
+    queue_panic_before_note();
+    all_notes_off_releases();
+    midi_volume();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;

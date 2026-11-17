@@ -293,6 +293,8 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "at")) *got = controls_aftertouch();        /* the bottom pads' aftertouch, 0..127 */
     else if (!strcmp(name, "pressure")) *got = eng_last_press;         /* the pressure sent (pads or MIDI) */
     else if (!strcmp(name, "hold")) *got = eng_last_hold;              /* HOLD sent (the pad or sustain) */
+    else if (!strcmp(name, "holdpad")) *got = ctl_hold;                /* the HOLD pad's latch (Play pad 3) */
+    else if (!strcmp(name, "vol")) *got = eng_last_vol;                /* the MIDI volume sent (CC 7), 0..127 */
     else if (!strcmp(name, "glob")) *got = a0 < G_COUNT ? ctl_glob[a0] : -1;   /* glob G: a global (controls.h G_*) */
     else if (!strcmp(name, "ccout")) *got = midi_cc_sent[a0 & 127u];   /* ccout N: the last value sent on CC N, -1 */
     else if (!strcmp(name, "prgreq")) *got = ctl_prg_req;              /* the last program change (Task 10 stub) */

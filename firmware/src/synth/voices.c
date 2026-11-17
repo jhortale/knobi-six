@@ -35,7 +35,7 @@ static void synth_targets(synth_t *s)
     s->tgt[SM_L2] = v[P_MIX_VCO2] * 65536;
     s->tgt[SM_LSUB] = v[P_MIX_SUB] * 65536;
     s->tgt[SM_LNOISE] = v[P_MIX_NOISE] * 65536;
-    s->tgt[SM_VOL] = v[P_PRG_VOL] * 65536;
+    s->tgt[SM_VOL] = v[P_PRG_VOL] * s->midi_vol * 65536 / 127;   /* PROGRAM VOLUME x MIDI volume (CC 7) */
     s->tgt[SM_SPREAD] = v[P_PAN_SPREAD] * 65536;
 }
 
@@ -320,6 +320,7 @@ void synth_init(synth_t *s)
     for (unsigned i = 0; i < sizeof *s; i++) b[i] = 0;
     s->rnd = 0x2545f491u;
     s->bend14 = 8192;
+    s->midi_vol = 127;
     s->mono = -1;
     s->last_pitch = VOICE_NO_PITCH;
     for (int i = 0; i < NVOICE; i++) voice_init(&s->voice[i], synth_rand(s));
@@ -383,6 +384,13 @@ void synth_hold(synth_t *s, int on)
 void synth_bend(synth_t *s, int bend14) { s->bend14 = synth_clampi(bend14, 0, 16383); }
 void synth_wheel(synth_t *s, int v) { s->wheel = synth_clampi(v, 0, 127); }
 void synth_pressure(synth_t *s, int v) { s->pressure = synth_clampi(v, 0, 127); }
+
+void synth_all_notes_off(synth_t *s) { synth_all_off(s); }   /* every note released (envelopes release; HOLD stays) */
+void synth_volume(synth_t *s, int v)
+{
+    s->midi_vol = synth_clampi(v, 0, 127);
+    s->tgt[SM_VOL] = s->prog.v[P_PRG_VOL] * s->midi_vol * 65536 / 127;   /* glides like PROGRAM VOLUME (no zipper) */
+}
 
 void synth_panic(synth_t *s)
 {

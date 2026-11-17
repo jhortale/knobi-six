@@ -8,7 +8,8 @@
  * running indices eng_qw (written only by the producer) and eng_qr (written only by the consumer); the producer
  * stores the event, then (compiler barrier) advances eng_qw; the consumer reads eng_qw once, applies up to it, then
  * advances eng_qr. One core: an interrupt sees either the old index or the new one, never half an event. Events:
- * note on/off, param edit, bend, mod wheel, pressure, HOLD, panic, program load, chord memory slot.
+ * note on/off, param edit, bend, mod wheel, pressure, HOLD, panic, program load, chord memory slot, all notes off
+ * (released, HOLD unchanged), MIDI volume.
  * Overflow policy: the consumer empties the queue at every block (5.8 ms), so it fills only if more than 256 events
  * arrive within one block (37 keys pressed and released together are 74). Nothing that would leave the synth wrong is
  * ever lost:
@@ -21,9 +22,10 @@
  *  - a param edit that does not fit is kept: eng_edit has the new value at once (the screens show it), the id is
  *    marked in eng_par_pend, and eng_flush queues the id's latest value when there is room (several edits meanwhile
  *    send one event). eng_param returns 1 then. A program load supersedes pending edits;
- *  - PANIC that does not fit is kept (eng_panic_pend) and flushed first; chord memory (eng_chord) always goes through
+ *  - PANIC and ALL NOTES OFF that do not fit are kept (eng_panic_pend, eng_alloff_pend) and flushed first, and a
+ *    note-on queues them before itself (or is refused), so a later note is never cut by an earlier PANIC; chord memory (eng_chord) always goes through
  *    eng_flush (six EV_CHORD events, all or none);
- *  - bend, wheel, pressure and HOLD are levels: refused, they are not marked sent (eng_last_*), so the caller's next
+ *  - bend, wheel, pressure, MIDI volume and HOLD are levels: refused, they are not marked sent (eng_last_*), so the caller's next
  *    call (the main loop sends them every pass) tries again.
  * Bend, wheel and pressure are queued only when their value changes, param edits only when the value changes
  * (eng_edit holds the values sent), so a fader or wheel cannot flood it.
@@ -44,7 +46,7 @@
 #define ENG_RESERVE 64u                   /* the last slots: note-offs, HOLD and PANIC only */
 #define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
-enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD };
+enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383;
                                                               CHORD a slot 0..5 b note (0 = empty) */
 
@@ -54,11 +56,11 @@ static volatile uint32_t eng_qw, eng_qr, eng_drops;
 static program_t eng_pbuf, eng_edit;
 static volatile uint32_t eng_pw, eng_pr;
 static volatile uint8_t eng_ready, eng_voices;
-static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold;
+static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127;
 
 static uint32_t eng_off_pend[4];          /* note-offs waiting for room: bit n = note n (producer only) */
 static uint32_t eng_par_pend[(P_COUNT_PHASE1 + 31u) / 32u];   /* param ids whose latest eng_edit value is not queued */
-static uint8_t eng_panic_pend, eng_chord_pend;
+static uint8_t eng_panic_pend, eng_alloff_pend, eng_chord_pend;
 
 /* keep: the free slots that must remain after this event (0 for note-offs, HOLD, PANIC; ENG_RESERVE for the rest) */
 static int eng_push(uint32_t type, uint32_t a, int32_t b, uint32_t keep)
@@ -85,9 +87,9 @@ static void eng_init(void)                /* the init program; call before audio
     eng_pw = eng_pr = 0;
     for (unsigned i = 0; i < 4u; i++) eng_off_pend[i] = 0;
     for (unsigned i = 0; i < sizeof eng_par_pend / sizeof eng_par_pend[0]; i++) eng_par_pend[i] = 0;
-    eng_panic_pend = eng_chord_pend = 0;
+    eng_panic_pend = eng_alloff_pend = eng_chord_pend = 0;
     eng_voices = 0;
-    eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0;
+    eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127;
     ENG_BARRIER();
     eng_ready = 1;
 }
@@ -102,6 +104,14 @@ static int eng_note(int note, int vel)    /* vel 0 = off. 0 queued, 1 an off kep
         if (eng_push(EV_NOTE, n, 0, 0)) { ENG_SET(eng_off_pend, n); return 1; }
         ENG_CLR(eng_off_pend, n);
         return 0;
+    }
+    if (eng_panic_pend) {                 /* a kept PANIC / ALL NOTES OFF goes before this note, not after it */
+        if (eng_push(EV_PANIC, 0, 0, 0)) { eng_drops = eng_drops + 1u; return -1; }
+        eng_panic_pend = 0;
+    }
+    if (eng_alloff_pend) {
+        if (eng_push(EV_ALLOFF, 0, 0, 0)) { eng_drops = eng_drops + 1u; return -1; }
+        eng_alloff_pend = 0;
     }
     if (ENG_BIT(eng_off_pend, n)) {       /* its off first */
         if (eng_push(EV_NOTE, n, 0, 0)) { eng_drops = eng_drops + 1u; return -1; }
@@ -131,12 +141,19 @@ static int eng_level(uint32_t type, int32_t *last, int32_t v, uint32_t keep)
 static int eng_bend(int32_t bend14) { return eng_level(EV_BEND, &eng_last_bend, bend14 < 0 ? 0 : bend14 > 16383 ? 16383 : bend14, ENG_RESERVE); }
 static int eng_wheel(int32_t v) { return eng_level(EV_WHEEL, &eng_last_wheel, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_pressure(int32_t v) { return eng_level(EV_PRESSURE, &eng_last_press, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
+static int eng_volume(int32_t v) { return eng_level(EV_VOLUME, &eng_last_vol, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_hold(int on) { return eng_level(EV_HOLD, &eng_last_hold, on != 0, 0); }
 static int eng_panic(void)                /* 0 queued, 1 kept for eng_flush */
 {
     eng_last_hold = 0;                    /* (panic clears HOLD) */
     if (eng_push(EV_PANIC, 0, 0, 0)) { eng_panic_pend = 1; return 1; }
     eng_panic_pend = 0;
+    return 0;
+}
+static int eng_all_notes_off(void)       /* every note released (MIDI CC 123); HOLD stays. 0 queued, 1 kept */
+{
+    if (eng_push(EV_ALLOFF, 0, 0, 0)) { eng_alloff_pend = 1; return 1; }
+    eng_alloff_pend = 0;
     return 0;
 }
 static void eng_chord(const uint8_t *c)   /* chord memory: 6 absolute MIDI notes, 0 = empty; queued by eng_flush */
@@ -150,6 +167,8 @@ static int eng_flush(void)                /* the main loop, every pass: what was
     unsigned i;
     if (eng_panic_pend && eng_push(EV_PANIC, 0, 0, 0) == 0) eng_panic_pend = 0;
     left += eng_panic_pend;
+    if (eng_alloff_pend && eng_push(EV_ALLOFF, 0, 0, 0) == 0) eng_alloff_pend = 0;
+    left += eng_alloff_pend;
     for (i = 0; i < 128u; i++)
         if (ENG_BIT(eng_off_pend, i)) {
             if (eng_push(EV_NOTE, i, 0, 0)) left++;
@@ -199,6 +218,8 @@ static void eng_drain(void)
         case EV_PRESSURE: synth_pressure(&eng_synth, e->b); break;
         case EV_HOLD: synth_hold(&eng_synth, e->b); break;
         case EV_PANIC: synth_panic(&eng_synth); break;
+        case EV_ALLOFF: synth_all_notes_off(&eng_synth); break;
+        case EV_VOLUME: synth_volume(&eng_synth, e->b); break;
         case EV_CHORD: if (e->a < 6u) eng_synth.prog.chord[e->a] = (uint8_t)e->b; break;
         case EV_PROGRAM:
             synth_program(&eng_synth, &eng_pbuf);

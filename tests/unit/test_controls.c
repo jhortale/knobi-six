@@ -153,11 +153,11 @@ static void pad_aftertouch(void)
 }
 
 /* the CC map: one CC per continuous (knob) param, none for switches and selects, every CC used once, none of the
- * CCs MIDI gives a meaning (bank 0/32, mod 1, data 6/38, volume 7, pan 10, expression 11, sustain 64, 96..101,
+ * CCs MIDI gives a meaning (bank 0/32, mod 1, foot 4, data 6/38, volume 7, pan 10, expression 11, sustain 64, 96..101,
  * channel mode 120..127); midi_cc_param is the inverse */
 static void cc_map(void)
 {
-    static const uint8_t RESERVED[] = {0, 1, 6, 7, 10, 11, 32, 38, 64, 96, 97, 98, 99, 100, 101, 120, 121, 122, 123, 124, 125, 126, 127};
+    static const uint8_t RESERVED[] = {0, 1, 4, 6, 7, 10, 11, 32, 38, 64, 96, 97, 98, 99, 100, 101, 120, 121, 122, 123, 124, 125, 126, 127};
     uint8_t used[128] = {0};
     int bad = 0, knobs = 0;
     midi_map_init();

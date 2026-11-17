@@ -41,4 +41,19 @@
 1750 expect 7 param 14
 1800 fader 0 127
 1850 expect 164 param 14
-1900 end
+# PASSTHRU, then a screen change: fader 2 is RESONANCE on Play (left at 100 = 201 above), VCO1 PW (param 2, 127) on
+# VCO 1 + 2 (screen 2): there it changes nothing until it crosses 127, then follows
+1950 btn 10
+2000 enc 2 1
+2050 expect 1 glob 1
+2100 btn 12
+2150 btn 3
+2200 expect 2 screen
+2250 fader 1 110
+2300 expect 127 param 2
+2350 expect 201 param 15
+2400 fader 1 60
+2450 expect 120 param 2
+2500 fader 1 40
+2550 expect 80 param 2
+2600 end
