@@ -8,6 +8,7 @@
  * second host thread every control period through a lock-free mailbox (C11 atomics, as CPU1's will be), set A on the
  * calling thread at the same time: bit-exact, and ThreadSanitizer finds no race, i.e. synth_render_set writes nothing
  * the other set reads or writes. */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

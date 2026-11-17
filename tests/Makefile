@@ -4,7 +4,7 @@
 # pick their own.
 #   make -C tests unit
 #   make -C tests tsan    test_split.c's split_threads_tsan: set B on a second thread, under ThreadSanitizer (skipped,
-#                         not failed, where the compiler cannot build with -fsanitize=thread)
+#                         not failed, where a -fsanitize=thread program cannot be built or run)
 CC ?= cc
 CFLAGS = -std=c11 -O2 -Wall -Werror -DDINGHY_HOST -DKNOBI_NO_FACTORY -I../firmware/src -I../firmware/hal -I../firmware/gen
 TESTS := $(basename $(notdir $(wildcard unit/test_*.c)))
@@ -20,7 +20,8 @@ unit:
 tsan:
 	@mkdir -p $(OUT)
 	@echo "== test_split (threads, -fsanitize=thread)"
-	@if echo 'int main(void){return 0;}' | $(CC) -fsanitize=thread -x c -o $(OUT)/tsan_probe - >/dev/null 2>&1; then \
+	@if echo 'int main(void){return 0;}' | $(CC) -fsanitize=thread -x c -o $(OUT)/tsan_probe - >/dev/null 2>&1 && \
+	    $(OUT)/tsan_probe >/dev/null 2>&1; then \
 	  $(CC) $(CFLAGS) -O1 -g -fsanitize=thread -pthread -DSPLIT_THREADS -o $(OUT)/test_split_tsan unit/test_split.c -lm && \
 	  TSAN_OPTIONS="halt_on_error=1 $$TSAN_OPTIONS" $(OUT)/test_split_tsan; \
-	else echo "tsan: $(CC) cannot build with -fsanitize=thread here: skipped"; fi
+	else echo "tsan: $(CC) cannot build or run a -fsanitize=thread program here: skipped"; fi
