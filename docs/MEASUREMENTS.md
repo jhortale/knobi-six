@@ -140,6 +140,9 @@ Hot spots (hw cycles per block):
      fade.
    - After ~1 s (172 blocks) under 55 %, one voice comes back.
    - New notes and unison stacks respect the limit.
+   - A long block with no voice sounding is someone else's load (other interrupts): the guard does nothing.
+   - Accepted behaviour (controller): on the extreme patches, where even one or two voices can exceed 80 %, the
+     limit can oscillate between 1 and 2. Each re-shed is a 2.2 ms fade, and recovery waits 172 calm blocks.
    - Test: `test_render cpu_guard_sheds`. Six voices at 140 % shed to three in one step; the fake clock reads 70 %
      for the next block.
      - The real next block also pays for the three fading voices over ~96 of its 256 frames: ≈ 96 %, so under 100 %

@@ -499,6 +499,7 @@ void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
             if (s->voice[i].busy && s->voice[i].shed) return;   /* still fading (in this measurement): wait */
             busy += s->voice[i].busy;
         }
+        if (!busy) return;   /* the load is not the synth's (other interrupts): nothing to shed, the limit stays */
         /* the cost per voice sounding is used / busy: keep the most voices k with k x used / busy under the threshold
          * (no division: k used 100 < HI budget busy), at least one fewer than now, at least one */
         int k = busy - 1;

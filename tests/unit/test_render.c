@@ -482,6 +482,13 @@ static void cpu_guard_sheds(void)
     CHECK(a6 == 6 && pct[0] > 100 && pct[1] < 100 && pct[2] < 80 && pct[3] < 80);
     CHECK(lim == 3 && live == 3 && st <= 2 * s0 && after_note == 3);
     CHECK(lim_early == 3 && lim_back == NVOICE);
+    /* a long block with no voice sounding (the time went to other interrupts): nothing shed, the limit stays */
+    eng_init();
+    render(BLK);
+    eng_fake_ticks += 2 * budget;   /* as if preempted for two blocks' time */
+    synth_guard(&eng_synth, 2 * budget, budget);
+    printf("cpu_guard_sheds: 200 %% with no voice sounding: limit %d\n", eng_synth.vlimit);
+    CHECK(synth_active(&eng_synth) == 0 && eng_synth.vlimit == NVOICE);
 }
 
 int main(void)
