@@ -287,7 +287,7 @@ until power-off, and a boot after a failed one runs on one core anyway, so it ne
 emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
 
 KNOBI-SIX's use (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a `KNOBI_CPU1` build): with the DUAL CORE global
-on (Globals pad 7, off by default, saved with the globals), every 16-frame control period of the audio interrupt
+on (Globals pad 7, off by default, kept in blob 2: the globals' version-1 record stays the default build's), every 16-frame control period of the audio interrupt
 splits the busy voices (`synth_balance`: CPU0 the smaller half), posts set B (`cpu1_job_voices`, into CPU1's own bus),
 renders set A, joins with a 1.5 ms deadline from the post and adds CPU1's bus: bit for bit the one-core output. Fewer
 than two voices busy, or CPU1 off: one core. A failed join renders set B on CPU0 in the same period and leaves one

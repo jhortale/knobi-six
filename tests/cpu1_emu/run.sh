@@ -22,6 +22,9 @@
 #            with it on, CPU0's render time (the joins' waits included) and CPU1's job load per patch
 #   dualfail test hook 7: as dual, CPU1's 1000th voice job never returns: the join fails, CPU0 renders set B in that
 #            period, CPU1 retired (LATE), one core from there; every checksum still the same
+#   dualmid  test hook 9: as dualfail, but the job stops after one voice of set B (late part way): that voice is
+#            rendered again from one period on, once; the patch's checksum differs, its largest step and peak stay
+#            within the one-core run's, the next patches equal again
 #   write    test hook 8: DUAL CORE on, a chord held, WRITE + ENTER (the program slot's erases and writes), then the
 #            globals' autosave (the extended record, read back), a chord again: CPU1 stays IDLE (the flash gate never
 #            had to retire it), the jobs go on, no fault, the audio runs
@@ -60,14 +63,16 @@ build reset 5
 build dual 6
 build dualfail 7
 build write 8
+build dualmid 9
 emu plain plain fm1_cpu1_mb 13
 emu start test3 cpu1_test 20
 emu nostart nostart cpu1_test 20
 emu hang hang cpu1_test 20
 emu flaky test3 cpu1_test 20 --flaky-core1 "$RATE" --seed 7 --cpu1-survives
 emu reset reset cpu1_test 20
-RUN_MS=$DMS emu dual dual dual_test 48 --keys 800:GLOBE --snap 2000 &
-RUN_MS=$DMS emu dualfail dualfail dual_test 48 &
-RUN_MS=$WMS emu write write dual_test 48 &
+RUN_MS=$DMS emu dual dual dual_test 66 --keys 800:GLOBE --snap 2000 &
+RUN_MS=$DMS emu dualfail dualfail dual_test 66 &
+RUN_MS=$DMS emu dualmid dualmid dual_test 66 &
+RUN_MS=$WMS emu write write dual_test 66 &
 wait
 python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" | tee "$OUT/summary.md"

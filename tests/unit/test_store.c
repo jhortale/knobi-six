@@ -340,58 +340,61 @@ static void response_curves(void)
 }
 
 #if KNOBI_CPU1
-/* Phase 2 Task 3 (test_store_cpu1.c: this file with KNOBI_CPU1): the DUAL CORE global. Off: the version-1 record,
- * byte for byte what a default build saves (both read it); on: the version-1 record + DUAL CORE + a second CRC16
- * (GLOBALS_BYTES_X), which a default build cannot read (its length: the defaults there); a version-1 record read by a
- * KNOBI_CPU1 build: DUAL CORE off; a bad second CRC or DUAL CORE out of range: not a good record */
-static void globals_dual_record(void)
+/* Phase 2 Task 3 (test_store_cpu1.c: this file with KNOBI_CPU1): the DUAL CORE global, in a blob of its own
+ * (GLOBALS_DUAL_BLOB). The version-1 record in blobs 0 / 1 is byte for byte what a default build saves (globals_pack
+ * packs the first G_COUNT_V1 in both builds, and blob 2 is the only other blob written): a default build's record
+ * reads back whole here (DUAL CORE off, no blob 2), this build's reads back whole there (the same bytes); swapping
+ * the builds keeps the globals both ways. DUAL CORE's blob missing, broken or out of range: OFF */
+static void globals_dual_blob(void)
 {
     globals_t g, h, d;
-    uint8_t v1[GLOBALS_BYTES], x[GLOBALS_BYTES_X];
-    int off_len, off_same, on_len, on_read, v1_read, default_reads, bad_crc, bad_range;
+    uint8_t v1[GLOBALS_BYTES], raw[GLOBALS_DUAL_BYTES];
+    int from_default, v1_bytes, others_kept, back, kept, missing, broken, range, only_blob2 = 1;
     globals_default(&d);
     CHECK(d.v[G_DUAL] == 0);                     /* off by default */
-    memset(f_blob, 0xFF, sizeof f_blob);
-    globals_load(&g);                            /* (nothing saved: the first save goes to blob 0) */
-    g.v[G_MIDI_CH] = 5, g.v[G_DUAL] = 0;
-    globals_save(&g);
-    globals_pack(&g, v1);
-    off_len = (int)f_get32(f_blob[0] + 4), off_same = !memcmp(f_blob[0] + 12, v1, GLOBALS_BYTES);
-    g.v[G_DUAL] = 1;
-    globals_save(&g);                            /* (blob 1) */
-    on_len = (int)f_get32(f_blob[1] + 4);
-    default_reads = blob_load(1, v1, GLOBALS_BYTES) == 0;   /* a default build asks for GLOBALS_BYTES: refused */
-    globals_load(&h);
-    on_read = h.v[G_DUAL] == 1 && h.v[G_MIDI_CH] == 5 && h.seq == g.seq;
-    memset(f_blob, 0xFF, sizeof f_blob);         /* a default build's record (version 1) */
-    g.v[G_DUAL] = 0, g.v[G_MIDI_CH] = 9, g.seq = 40;
+    memset(f_blob, 0xFF, sizeof f_blob);         /* a default build saved the globals (version 1, blob 0) */
+    g = d, g.v[G_MIDI_CH] = 9, g.v[G_TUNE] = -20, g.oct = 1, g.last_prog = 42, g.seq = 40;
     globals_pack(&g, v1);
     blob_save(0, v1, GLOBALS_BYTES);
-    g.v[G_DUAL] = 1;                             /* (what the load must not keep) */
-    globals_load(&h);
-    v1_read = h.v[G_DUAL] == 0 && h.v[G_MIDI_CH] == 9 && h.seq == 40;
-    g.v[G_DUAL] = 1, g.seq = 41;                 /* an extended record, its second CRC broken */
-    memset(f_blob, 0xFF, sizeof f_blob);
-    globals_pack(&g, x);
-    x[GLOBALS_BYTES] = 1;
-    x[GLOBALS_BYTES + 1] = 0, x[GLOBALS_BYTES + 2] = 0;
-    blob_save(0, x, GLOBALS_BYTES_X);
-    globals_load(&h);
-    bad_crc = !memcmp(h.v, d.v, sizeof h.v);
-    {                                            /* DUAL CORE 2, the CRC right: out of range */
-        uint16_t c;
-        x[GLOBALS_BYTES] = 2;
-        c = program_crc16(x, GLOBALS_BYTES + 1u);
-        x[GLOBALS_BYTES + 1] = (uint8_t)(c & 0xFFu), x[GLOBALS_BYTES + 2] = (uint8_t)(c >> 8);
-        blob_save(0, x, GLOBALS_BYTES_X);
-        globals_load(&h);
-        bad_range = !memcmp(h.v, d.v, sizeof h.v);
+    globals_load(&h);                            /* this build after it */
+    from_default = h.v[G_MIDI_CH] == 9 && h.v[G_TUNE] == -20 && h.oct == 1 && h.last_prog == 42 && h.seq == 40 &&
+                   h.v[G_DUAL] == 0;
+    h.v[G_DUAL] = 1, h.v[G_MIDI_CH] = 3;         /* DUAL CORE on and an edit, saved here */
+    globals_save(&h);
+    for (unsigned b = 3; b < NBLOB; b++)
+        for (unsigned k = 0; k < sizeof f_blob[b]; k++) only_blob2 &= f_blob[b][k] == 0xFF;
+    globals_pack(&h, v1);                        /* what a default build would have saved for the same globals */
+    v1_bytes = f_get32(f_blob[1] + 4) == GLOBALS_BYTES && !memcmp(f_blob[1] + 12, v1, GLOBALS_BYTES);
+    {                                            /* a default build reads blobs 0 / 1 only: the version-1 record */
+        globals_t t;
+        others_kept = globals_read(1, &t) == 0 && t.v[G_MIDI_CH] == 3 && t.v[G_TUNE] == -20 && t.seq == 41;
     }
-    printf("globals_dual_record: off -> %d B (= the version-1 record %d), on -> %d B, read back on %d, a default build "
-           "reads it %d; version 1 read: off %d; bad 2nd CRC -> defaults %d, DUAL 2 -> defaults %d\n", off_len, off_same,
-           on_len, on_read, default_reads, v1_read, bad_crc, bad_range);
-    CHECK(off_len == GLOBALS_BYTES && off_same && on_len == GLOBALS_BYTES_X && on_read && !default_reads && v1_read &&
-          bad_crc && bad_range);
+    globals_load(&g);
+    back = g.v[G_DUAL] == 1 && g.v[G_MIDI_CH] == 3 && g.seq == 41;
+    g.v[G_MIDI_CH] = 4;                          /* a default build edits and saves (blob 0; blob 2 untouched) */
+    g.seq = 41;
+    { globals_t t = g; t.seq = 42; globals_pack(&t, v1); blob_save(0, v1, GLOBALS_BYTES); }
+    globals_load(&h);
+    kept = h.v[G_MIDI_CH] == 4 && h.v[G_DUAL] == 1 && h.seq == 42;
+    memset(f_blob[GLOBALS_DUAL_BLOB], 0xFF, sizeof f_blob[0]);   /* no DUAL CORE blob */
+    globals_load(&h);
+    missing = h.v[G_DUAL] == 0 && h.v[G_MIDI_CH] == 4;
+    memcpy(raw, "DUAL\x01\x00\x00", sizeof raw);   /* a wrong CRC */
+    blob_save(GLOBALS_DUAL_BLOB, raw, sizeof raw);
+    globals_load(&h);
+    broken = h.v[G_DUAL] == 0;
+    {                                            /* the CRC right, the value 2 */
+        uint16_t c;
+        raw[4] = 2, c = program_crc16(raw, 5u), raw[5] = (uint8_t)(c & 0xFFu), raw[6] = (uint8_t)(c >> 8);
+        blob_save(GLOBALS_DUAL_BLOB, raw, sizeof raw);
+        globals_load(&h);
+        range = h.v[G_DUAL] == 0 && h.v[G_MIDI_CH] == 4;
+    }
+    printf("globals_dual_blob: a default build's record read here %d; saved here: the version-1 record byte for byte %d, "
+           "read as a default build would %d, nothing past blob 2 %d; read back %d; a default build's later save keeps "
+           "DUAL CORE %d; blob 2 missing -> OFF %d, broken -> OFF %d, value 2 -> OFF %d\n", from_default, v1_bytes,
+           others_kept, only_blob2, back, kept, missing, broken, range);
+    CHECK(from_default && v1_bytes && others_kept && only_blob2 && back && kept && missing && broken && range);
 }
 #endif
 
@@ -408,7 +411,7 @@ int main(void)
     globals_cut_save();
     globals_bad_crc_defaults();
 #if KNOBI_CPU1
-    globals_dual_record();
+    globals_dual_blob();
 #endif
     response_curves();
     if (fails) printf("test_store: %d FAILED\n", fails);

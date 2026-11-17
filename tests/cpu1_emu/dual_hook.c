@@ -17,13 +17,19 @@
  *               patch): the join fails after ENG_C1_JOIN_TICKS, CPU0 renders set B itself in that period, CPU1 is
  *               retired (LATE) and the rest runs on one core. Every checksum must still equal pass 0's (the job hung
  *               before it touched a voice: the output stays whole and exact).
+ *   9 dualmid   as 7, but the 1000th job renders one voice of set B and then hangs (a job late part way): CPU0
+ *               renders set B again, that voice from its state one period on (a jump in its waveform, once). That
+ *               patch's checksum differs (expected); the glitch must stay bounded: the largest sample-to-sample step
+ *               in the segment no more than the one-core pass's, the peak under full scale; the later patches
+ *               (each from synth_init) equal again. Recorded for 6, 7, 9: each segment's largest step and peak, and
+ *               after the script C1's status with DUAL CORE on (FAIL after a failure) and then off (OFF).
  *   8 write     DUAL CORE turned on (as the Globals pad would) at 400 ms and the init chord held from 500 ms; WRITE
  *               (BT) at 900 ms and ENTER at 1000 ms: the fade, the program slot's erase and write with the voices on
  *               two cores; the notes off at 1800 ms; then the globals' autosave after 3 s of quiet (DUAL CORE and the
  *               program changed: the extended record, read back); a chord again after it. CPU1 must stay IDLE (never
  *               retired by the flash gate's wait: every erase and write found it idle in its RAM loop), the jobs go
  *               on before, between and after, and the audio runs throughout. */
-#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7
+#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
 #define DT_SEG 40u                              /* blocks a segment (256 frames each) */
 #define DT_ON 32u                               /* of them with the notes held */
 #define DT_NPATCH 4u
@@ -32,6 +38,7 @@ struct {
     uint32_t magic, done, blocks;
     uint32_t sum[2][4], jobs[2][4], used[2][4], c1load[4];   /* (6, 7) per pass and patch */
     uint32_t failed, state, why, rejected, mbjobs;           /* at the end */
+    uint32_t step[2][4], peak[2][4], status_on, status_off;  /* (6, 7, 9) */
     uint32_t dual, wr_rc, writes, write_at, jobs_before, jobs_write, saves, save_at, jobs_save, dual_read, jobs_after,
              at_fail;                                        /* (8) */
 } dual_test = { 0x54554444u };                               /* "DDUT" */
@@ -46,7 +53,7 @@ static void dual_test_note(void)
     if (dual_test.state == CPU1_FAIL && !dual_test.at_fail) dual_test.at_fail = fm1_ms;
 }
 
-#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7
+#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
 static const int16_t DT_MUSICAL[][2] = {   /* = tests/scripts/musical.txt = harness.c PATCH 3, 4 */
     {P_MIX_VCO1, 95}, {P_MIX_VCO2, 95}, {P_MIX_SUB, 95}, {P_MIX_NOISE, 95},
     {P_VCO1_SHAPE, 255}, {P_VCO1_PW, 90}, {P_VCO2_SHAPE, 254}, {P_VCO2_PW, 160}, {P_VCO1_SYNC, 1},
@@ -96,13 +103,19 @@ static void dual_test_audio(int32_t *out, uint32_t n)
     if (!eng_ready) return;
     seg = blk / DT_SEG, k = blk % DT_SEG;
     if (seg >= 2u * DT_NPATCH) {
+        if (!dual_test.done) {                  /* C1's status: DUAL CORE on (as the script left it), then off */
+            dual_test.status_on = (uint32_t)eng_c1_status();
+            ctl_glob[G_DUAL] = 0, eng_dual = 0;
+            dual_test.status_off = (uint32_t)eng_c1_status();
+        }
         dual_test.done = 1;
         dual_test_note();
         eng_render(out, n);
         return;
     }
     pass = seg / DT_NPATCH, pi = seg % DT_NPATCH;
-    if (k == 0u) dual_test_setup(pass, pi);
+    static int32_t last[2];
+    if (k == 0u) dual_test_setup(pass, pi), last[0] = last[1] = 0;
     if (k == DT_ON)
         for (unsigned i = 0; i < 6u; i++) synth_note(&eng_synth, DT_NOTES[pi][i], 0);
     j0 = eng_c1_jobs;
@@ -111,7 +124,14 @@ static void dual_test_audio(int32_t *out, uint32_t n)
     used = eng_ticks() - t0;
     eng_c1_cpu(n * ENG_TICKS_PER_FRAME_X10 / 10u);
     sum = dual_test.sum[pass][pi];
-    for (uint32_t i = 0; i < 2u * n; i++) sum = (sum << 1 | sum >> 31) ^ (uint32_t)out[i];
+    for (uint32_t i = 0; i < 2u * n; i++) {
+        int32_t x = out[i], d = x - last[i & 1u], a = x < 0 ? -x : x;
+        sum = (sum << 1 | sum >> 31) ^ (uint32_t)x;
+        if (d < 0) d = -d;
+        if ((uint32_t)d > dual_test.step[pass][pi]) dual_test.step[pass][pi] = (uint32_t)d;
+        if ((uint32_t)a > dual_test.peak[pass][pi]) dual_test.peak[pass][pi] = (uint32_t)a;
+        last[i & 1u] = x;
+    }
     dual_test.sum[pass][pi] = sum;
     dual_test.jobs[pass][pi] += eng_c1_jobs - j0;
     if (k >= 8u && k < DT_ON) dual_test.used[pass][pi] += used;
@@ -120,7 +140,7 @@ static void dual_test_audio(int32_t *out, uint32_t n)
     dual_test_note();
 }
 static void dual_test_main(int *scr) { (void)scr; }
-#else
+#elif KNOBI_CPU1_TEST == 8
 static void dual_test_audio(int32_t *out, uint32_t n) { eng_render(out, n); }
 static const uint8_t DW_NOTES[6] = {60, 64, 67, 72, 76, 79};
 static void dual_test_main(int *scr)            /* (8) the main loop, every pass */

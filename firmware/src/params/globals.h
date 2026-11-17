@@ -18,10 +18,9 @@
  *   AT CURVE    0..3 (0 linear, 1 soft, 2 softer, 3 hard) the bottom pads' pressure
  *   DUAL CORE   0 OFF, 1 ON: half the voices render on the second core (engine.c). Only in a KNOBI_CPU1 build
  *               (docs/API.md "Second core"); OFF by default
- * The record (version 1) holds the first G_COUNT_V1. A KNOBI_CPU1 build with DUAL CORE on saves the version-1 record
- * followed by DUAL CORE and a second CRC16 over all of it (GLOBALS_BYTES_X): a default build cannot read that one
- * (its length differs: the defaults then), and with DUAL CORE off the record stays the version-1 one, which both read
- * (a KNOBI_CPU1 build reading a version-1 record: DUAL CORE off). */
+ * The record (version 1, blobs 0 / 1) holds the first G_COUNT_V1, byte for byte the same in every build. A
+ * KNOBI_CPU1 build keeps DUAL CORE in a blob of its own (GLOBALS_DUAL_BLOB, globals.c), which a default build never
+ * touches: the two builds can be swapped both ways with the globals kept; no DUAL CORE blob (or a broken one): OFF. */
 enum { G_MIDI_CH, G_POT_MODE, G_PARAM_TX, G_PARAM_RX, G_TRANSPOSE, G_TUNE, G_VEL_CURVE, G_LOCAL, G_STEREO, G_SUSTAIN,
        G_AT_CURVE, G_COUNT_V1,
 #if KNOBI_CPU1
@@ -37,7 +36,8 @@ extern const int8_t GLOB_MIN[G_COUNT], GLOB_MAX[G_COUNT], GLOB_DEF[G_COUNT];
 #define GLOBALS_BYTES (1 + G_COUNT_V1 + 1 + 2 + 4 + 2)   /* version, the values, octave, last program (LE), seq (LE),
                                                           * CRC16 (LE) */
 #if KNOBI_CPU1
-#define GLOBALS_BYTES_X (GLOBALS_BYTES + 1 + 2)        /* + DUAL CORE, a CRC16 (LE) over all before it */
+#define GLOBALS_DUAL_BLOB 2u                          /* DUAL CORE's blob (blobs 2..7 are otherwise unused) */
+#define GLOBALS_DUAL_BYTES 7                          /* "DUAL", the value, CRC16 (LE) */
 #endif
 #define GLOBALS_BLOB 0u                               /* blobs GLOBALS_BLOB and GLOBALS_BLOB + 1 */
 typedef struct {

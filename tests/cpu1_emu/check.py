@@ -124,7 +124,9 @@ case("reset", "a warm reset in the start window: counted once, then one core (ba
 # Task 3: dual-core voice rendering (tests/cpu1_emu/dual_hook.c, dual_test)
 DT = ["magic", "done", "blocks"] + [f"sum{p}{i}" for p in (0, 1) for i in range(4)] + \
      [f"jobs{p}{i}" for p in (0, 1) for i in range(4)] + [f"used{p}{i}" for p in (0, 1) for i in range(4)] + \
-     [f"c1load{i}" for i in range(4)] + ["failed", "state", "why", "rejected", "mbjobs", "dual", "wr_rc", "writes",
+     [f"c1load{i}" for i in range(4)] + ["failed", "state", "why", "rejected", "mbjobs"] + \
+     [f"step{p}{i}" for p in (0, 1) for i in range(4)] + [f"peak{p}{i}" for p in (0, 1) for i in range(4)] + \
+     ["status_on", "status_off", "dual", "wr_rc", "writes",
      "write_at", "jobs_before", "jobs_write", "saves", "save_at", "jobs_save", "dual_read", "jobs_after", "at_fail"]
 PATCHES = ["init chord", "musical C3..C5", "musical C5..C7", "extreme C3..C5"]
 BLOCK_TICKS = 256 * 5442 // 10                              # engine.c: the block's budget in TIMER4 ticks
@@ -137,13 +139,21 @@ def dt(r):
 
 
 if dms:
-    for name, hook in (("dual", 6), ("dualfail", 7)):
+    for name, hook in (("dual", 6), ("dualfail", 7), ("dualmid", 9)):
         r = load(name)
         t = dt(r)
-        same = all(t[f"sum0{i}"] is not None and t[f"sum0{i}"] == t[f"sum1{i}"] for i in range(4))
+        eq = [t[f"sum0{i}"] is not None and t[f"sum0{i}"] == t[f"sum1{i}"] for i in range(4)]
+        same = all(eq)
         ok = {**common(r, halves=min_halves(dms)), "magic": t["magic"] == 0x54554444, "script done": t["done"] == 1,
-              "dual output = one-core output, every patch (checksums)": same,
-              "no CPU1 job with DUAL CORE off": all(t[f"jobs0{i}"] == 0 for i in range(4))}
+              "no CPU1 job with DUAL CORE off": all(t[f"jobs0{i}"] == 0 for i in range(4)),
+              "C1 status after: on -> " + ("ON" if hook == 6 else "FAIL") + ", off -> OFF":
+                  (t["status_on"], t["status_off"]) == ((1 if hook == 6 else 2), 0)}
+        if hook == 9:
+            ok["dual = one core except the patch where the job stopped part way"] = eq[0] and not eq[1] and eq[2] and eq[3]
+            ok["that glitch bounded: largest step <= the one-core pass's, peak < full scale"] = \
+                (t["step11"] or 0) <= (t["step01"] or 0) and (t["peak11"] or 99999) < 32767
+        else:
+            ok["dual output = one-core output, every patch (checksums)"] = same
         if hook == 6:
             ok.update({"CPU1 jobs with it on, every patch (> 500 periods)": all((t[f"jobs1{i}"] or 0) > 500 for i in range(4)),
                        "IDLE, nothing failed or refused": (t["state"], t["why"], t["failed"], t["rejected"]) == (1, 0, 0, 0)})
@@ -152,11 +162,16 @@ if dms:
                        "jobs until the 1000th, none after": t["jobs10"] + t["jobs11"] == 999 and t["jobs12"] == 0 and t["jobs13"] == 0})
         seen = "; ".join(f"{PATCHES[i]} {t[f'sum1{i}']:08x}" for i in range(4) if t[f"sum1{i}"] is not None)
         seen += f"; jobs {[t[f'jobs1{i}'] for i in range(4)]}; {STATE.get(t['state'])} ({WHY.get(t['why'])})"
-        if hook == 7:
+        if hook != 6:
             seen += f" at {t['at_fail']} ms"
+        if hook == 9:
+            seen += (f"; musical C3..C5 largest step {t['step11']} (one core {t['step01']}), peak {t['peak11']} "
+                     f"(one core {t['peak01']})")
+        seen += f"; C1 status on/off {t['status_on']}/{t['status_off']}"
         seen += f"; {r['halves']} audio halves"
-        case(name, "DUAL CORE off vs on, same image and run" if hook == 6 else
-             "the 1000th voice job hangs: set B on CPU0, one core after", ok, seen)
+        case(name, {6: "DUAL CORE off vs on, same image and run",
+                    7: "the 1000th voice job hangs: set B on CPU0, one core after",
+                    9: "the 1000th job stops after one voice: set B again on CPU0, the glitch bounded"}[hook], ok, seen)
         if hook == 6 and same:
             for i in range(4):
                 dual_rows.append((PATCHES[i], 100 * t[f"used0{i}"] / 24 / BLOCK_TICKS, 100 * t[f"used1{i}"] / 24 / BLOCK_TICKS,

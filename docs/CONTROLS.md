@@ -142,7 +142,7 @@ every 30 s (flash wear). What each does:
 | STEREO | STEREO / MONO (STEREO) | MONO: both outputs carry the sum |
 | SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
 | AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
-| DUAL CORE | OFF / ON (OFF) | only in a `KNOBI_CPU1=1` build (never a release; [API.md](API.md) "Second core"): Globals pad 7; ON renders half the voices on the second core (the same sound, bit for bit). Saved with the globals |
+| DUAL CORE | OFF / ON (OFF) | only in a `KNOBI_CPU1=1` build (never a release; [API.md](API.md) "Second core"): Globals pad 7; ON renders half the voices on the second core (the same sound, bit for bit). Saved in a blob of its own (a default build keeps the other globals as they are) |
 
 Under the pads, the Globals screen's **diagnostics**: `CPU 65% PEAK 80%  VOX 6/6  SHED 0` (the audio block's load,
 smoothed, and its peak, decaying over ~1 s, in 5 % steps; the CPU guard's voice limit of 6; how many times it has

@@ -38,42 +38,14 @@ void globals_pack(const globals_t *g, uint8_t *b)
     b[o++] = (uint8_t)(c & 0xFFu);
     b[o++] = (uint8_t)(c >> 8);
 }
-#if KNOBI_CPU1
-/* the record a KNOBI_CPU1 build saves: GLOBALS_BYTES (DUAL CORE off), else GLOBALS_BYTES_X (globals.h); its length */
-static uint32_t globals_pack_x(const globals_t *g, uint8_t *b)
-{
-    uint16_t c;
-    globals_pack(g, b);
-    if (!g->v[G_DUAL]) return GLOBALS_BYTES;
-    b[GLOBALS_BYTES] = (uint8_t)g->v[G_DUAL];
-    c = program_crc16(b, GLOBALS_BYTES + 1u);
-    b[GLOBALS_BYTES + 1u] = (uint8_t)(c & 0xFFu);
-    b[GLOBALS_BYTES + 2u] = (uint8_t)(c >> 8);
-    return GLOBALS_BYTES_X;
-}
-#endif
 
 static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record */
 {
-#if KNOBI_CPU1
-    uint8_t b[GLOBALS_BYTES_X];
-    unsigned o = 1, i;
-    t->v[G_DUAL] = 0;                                 /* (a version-1 record: DUAL CORE off) */
-    if (blob_load(blob, b, GLOBALS_BYTES_X) == 0 &&
-        program_crc16(b, GLOBALS_BYTES_X - 2u) == (uint16_t)(b[GLOBALS_BYTES_X - 2u] | b[GLOBALS_BYTES_X - 1u] << 8))
-        t->v[G_DUAL] = (int8_t)b[GLOBALS_BYTES];
-    else if (blob_load(blob, b, GLOBALS_BYTES))
-        return -1;
-    if (b[0] != GLOBALS_VERSION || t->v[G_DUAL] < GLOB_MIN[G_DUAL] || t->v[G_DUAL] > GLOB_MAX[G_DUAL] ||
-        program_crc16(b, GLOBALS_BYTES - 2u) != (uint16_t)(b[GLOBALS_BYTES - 2u] | b[GLOBALS_BYTES - 1u] << 8))
-        return -1;
-#else
     uint8_t b[GLOBALS_BYTES];
     unsigned o = 1, i;
     if (blob_load(blob, b, sizeof b) || b[0] != GLOBALS_VERSION ||
         program_crc16(b, GLOBALS_BYTES - 2u) != (uint16_t)(b[GLOBALS_BYTES - 2u] | b[GLOBALS_BYTES - 1u] << 8))
         return -1;
-#endif
     for (i = 0; i < G_COUNT_V1; i++) {
         t->v[i] = (int8_t)b[o++];
         if (t->v[i] < GLOB_MIN[i] || t->v[i] > GLOB_MAX[i]) return -1;
@@ -85,6 +57,28 @@ static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record */
     return t->oct < -2 || t->oct > 2 || t->last_prog >= PROG_COUNT ? -1 : 0;
 }
 static uint8_t globals_at;                            /* the blob (0 / 1 after GLOBALS_BLOB) the newest record is in */
+#if KNOBI_CPU1
+/* DUAL CORE (a KNOBI_CPU1 build only): its own blob, GLOBALS_DUAL_BLOB, never touched by a default build, so the
+ * version-1 record in blobs 0 / 1 stays byte for byte a default build's and the builds can be swapped both ways.
+ * Record: "DUAL" (LE), the value, its CRC16. Missing, broken or out of range: OFF */
+static int8_t globals_dual_saved = -1;                /* the value in the blob (-1: not known yet) */
+static int globals_dual_read(void)
+{
+    uint8_t b[GLOBALS_DUAL_BYTES];
+    if (blob_load(GLOBALS_DUAL_BLOB, b, sizeof b) || b[0] != 'D' || b[1] != 'U' || b[2] != 'A' || b[3] != 'L' ||
+        program_crc16(b, 5u) != (uint16_t)(b[5] | b[6] << 8) || (int8_t)b[4] < GLOB_MIN[G_DUAL] ||
+        (int8_t)b[4] > GLOB_MAX[G_DUAL])
+        return 0;
+    return (int8_t)b[4];
+}
+static int globals_dual_save(int v)
+{
+    uint8_t b[GLOBALS_DUAL_BYTES] = {'D', 'U', 'A', 'L', (uint8_t)v, 0, 0};
+    uint16_t c = program_crc16(b, 5u);
+    b[5] = (uint8_t)(c & 0xFFu), b[6] = (uint8_t)(c >> 8);
+    return blob_save(GLOBALS_DUAL_BLOB, b, sizeof b);
+}
+#endif
 void globals_load(globals_t *g)
 {
     globals_t a, b;
@@ -93,22 +87,24 @@ void globals_load(globals_t *g)
     globals_at = 1;                                   /* (nothing good: the first save goes to blob 0) */
     if (ga && (!gb || (int32_t)(a.seq - b.seq) > 0)) *g = a, globals_at = 0;
     else if (gb) *g = b, globals_at = 1;
+#if KNOBI_CPU1
+    g->v[G_DUAL] = (int8_t)(globals_dual_saved = (int8_t)globals_dual_read());
+#endif
 }
 
 int globals_save(globals_t *g)
 {
-#if KNOBI_CPU1
-    uint8_t b[GLOBALS_BYTES_X];
-    globals_t t = *g;
-    t.seq = g->seq + 1u;
-    if (blob_save(GLOBALS_BLOB + (globals_at ^ 1u), b, globals_pack_x(&t, b)) == 0) {
-#else
     uint8_t b[GLOBALS_BYTES];
     globals_t t = *g;
     t.seq = g->seq + 1u;
+#if KNOBI_CPU1
+    if (g->v[G_DUAL] != globals_dual_saved) {         /* (first: a failure changes nothing, the caller tries again) */
+        if (globals_dual_save(g->v[G_DUAL])) return -1;
+        globals_dual_saved = g->v[G_DUAL];
+    }
+#endif
     globals_pack(&t, b);
-    if (blob_save(GLOBALS_BLOB + (globals_at ^ 1u), b, sizeof b) == 0) {
-#endif   /* the other blob: a cut save leaves this one */
+    if (blob_save(GLOBALS_BLOB + (globals_at ^ 1u), b, sizeof b) == 0) {   /* the other blob: a cut save leaves this one */
         globals_at ^= 1u;
         g->seq = t.seq;
         return 0;

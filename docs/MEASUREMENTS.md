@@ -89,7 +89,13 @@ more than set A. Every dual run's checksum equals its one-core run's.
 |---|---|---|
 | dual | the audio interrupt plays a fixed script, block by block: the init chord, the musical patch on C3..C5 and C5..C7, the extreme patch on C3..C5, each from `synth_init`, 32 blocks held + 8 released; DUAL CORE off, then on, same image, same run | every checksum the same (24ff6590, 2c757139, debaa049, edcde981); 580 CPU1 jobs per patch with it on, none off; IDLE, nothing refused; the Globals line shows `C1 ON 20%` |
 | dualfail | as dual, CPU1's 1000th voice job never returns (in the second patch with DUAL CORE on) | the join fails after 1.5 ms, CPU0 renders set B in that period: every checksum still the same; FAIL (LATE) at 1,669 ms, jobs 580, 419, 0, 0 (one core after); no halt, 358 audio halves |
-| write | DUAL CORE on at 400 ms, the chord held, WRITE + ENTER at 0.9 / 1.0 s, notes off at 1.8 s, the globals' autosave, a chord again | WRITE stored (rc 1) at 1,060 ms; autosave at 5,721 ms, DUAL CORE read back 1 (the extended record); jobs 1,104 before the WRITE, 1,536 after it, 7,498 at the end; CPU1 IDLE throughout (the flash gate never had to retire it: every erase and write found it idle in its RAM loop), rejected 0; no fault, 1,065 audio halves in 6.5 s |
+| dualmid | as dualfail, but the 1000th job renders one voice of set B and then hangs (late part way) | CPU0 renders set B again, that voice from one period on: FAIL (LATE) at 1,669 ms; only that patch's checksum differs (99f307e5); its largest sample-to-sample step 42,349 = the one-core pass's (the waveform's own edges are larger than the jump), peak 28,494 vs 28,253, under the limiter's ceiling; the next patches equal again |
+| write | DUAL CORE on at 400 ms, the chord held, WRITE + ENTER at 0.9 / 1.0 s, notes off at 1.8 s, the globals' autosave, a chord again | WRITE stored (rc 1) at 1,060 ms; autosave at 5,721 ms, DUAL CORE read back 1 (its blob); jobs 1,104 before the WRITE, 1,536 after it, 7,498 at the end; CPU1 IDLE throughout (the flash gate never had to retire it: every erase and write found it idle in its RAM loop), rejected 0; no fault, 1,065 audio halves in 6.5 s |
+
+What the write case cannot see: fm1-emu does not turn the XIP flash off during an erase or a write, so a CPU1 fetch
+from the flash at that moment would not fault here. The evidence that none happens is the gate: every flash entry
+point runs only with `fm1_flash_access_ok` (CPU1 held, or idle in its RAM loop, acknowledged), `fl_enter` refuses
+otherwise, and the case shows the gate never had to retire CPU1 (it stayed IDLE) while the saves succeeded.
 
 CPU0's render in the emulator's own time (no cost model; what the CPU guard measures, the joins' waits included),
 per block, % of the block, DUAL CORE off / on; and CPU1's job load (`C1 ON n%`):
@@ -108,8 +114,9 @@ Default build: `app.bin` (sha1 `44541dc3…`), `app.dis`, the loader and the pac
 (everything new is under `KNOBI_CPU1`: the global, the split, the alignment, the Globals line); the CI job still
 compares them with e800d7e's default build. The CPU1 build: image 222,756 B (+864 B), RAM 27,876 B (+256 B: CPU1's
 bus and counter on their lines); CPU1's stack: the deepest job `cpu1_job_voices` 612 B of 2,560 B. The globals:
-DUAL CORE off saves the version-1 record (21 B, what a default build saves and reads); on, 24 B (+ DUAL CORE + a CRC),
-which a default build reads as nothing (its defaults) (`test_store_cpu1`).
+the version-1 record in blobs 0 / 1 is byte for byte the same in both builds; a KNOBI_CPU1 build keeps DUAL CORE in
+blob 2 ("DUAL", the value, a CRC16), which a default build never touches, so swapping the builds keeps the globals both
+ways; blob 2 missing or broken: OFF (`test_store_cpu1` `globals_dual_blob`).
 
 ## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
 

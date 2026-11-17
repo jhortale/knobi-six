@@ -305,8 +305,8 @@ static volatile uint8_t eng_c1_failed;    /* consumer: a join failed: one core u
 static volatile uint32_t eng_c1_jobs;     /* consumer: periods set B rendered on CPU1 */
 static volatile uint16_t eng_c1_load;     /* consumer: CPU1's job time, % of the block, smoothed as eng_load */
 static uint32_t eng_c1_load_q3, eng_c1_seen;
-#if KNOBI_CPU1_TEST == 7
-#define ENG_C1_HANG_AT 1000u              /* (fm1-emu case dualfail: the 1000th voice job never returns) */
+#if KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
+#define ENG_C1_HANG_AT 1000u              /* (fm1-emu cases dualfail / dualmid: the 1000th voice job never returns) */
 static uint32_t eng_c1_test_jobs;
 static volatile uint32_t eng_c1_test_spin;
 #endif
@@ -320,6 +320,13 @@ static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of 
         for (;;) eng_c1_test_spin++;      /* (before it touches a voice: the fallback's output stays exact) */
 #endif
     for (uint32_t i = 0; i < 2u * n; i++) j->bus[i] = 0;
+#if KNOBI_CPU1_TEST == 9
+    if (++eng_c1_test_jobs == ENG_C1_HANG_AT) {   /* (dualmid: one voice of set B rendered, then the hang: CPU0 renders
+                                                   * set B again from that voice's advanced state) */
+        synth_render_set(j->s, j->mask & (0u - j->mask), j->bus, n);
+        for (;;) eng_c1_test_spin++;
+    }
+#endif
     synth_render_set(j->s, j->mask, j->bus, n);
     j->ticks += eng_ticks() - t0;
 }
@@ -330,11 +337,15 @@ static void eng_split(synth_t *s, int32_t *bus, uint32_t n)
         eng_c1.s = s, eng_c1.mask = b, eng_c1.n = n;
         if (cpu1_post(cpu1_job_voices, &eng_c1) == 0) {
             synth_render_set(s, a, bus, n);
-            if (cpu1_join(ENG_C1_JOIN_TICKS) < 0) {   /* late or lost: set B here, one core from now on */
+            if (cpu1_join(ENG_C1_JOIN_TICKS) < 0) {   /* late or lost: set B here, one core from now on. A job that
+                                           * stopped part way (late) left some of set B advanced by this period: they
+                                           * render it again from there, a jump of up to 16 frames in their waveform,
+                                           * once (fm1-emu case dualmid: the step stays within the clean run's) */
                 eng_c1_failed = 1;
                 synth_render_set(s, b, bus, n);
                 return;
             }
+            fm1_cpu1_sync();              /* (CPU1's writes, its bus and set B's voices, before CPU0 reads them) */
             for (uint32_t i = 0; i < 2u * n; i++) bus[i] += eng_c1.bus[i];
             eng_c1_jobs = eng_c1_jobs + 1u;
             return;
@@ -354,8 +365,9 @@ static void eng_c1_cpu(uint32_t budget)   /* (consumer, after the block's joins:
 /* main loop: 0 off (DUAL CORE off), 1 on (CPU1 renders), 2 FAIL (on, but CPU1 retired or never started) */
 static int eng_c1_status(void)
 {
-    int st = cpu1_state();
-    if (!eng_dual) return 0;
+    int st;
+    if (!eng_dual) return 0;              /* (off is OFF, whatever happened to CPU1) */
+    st = cpu1_state();
     return eng_c1_failed || st == CPU1_FAIL || st == CPU1_OFF ? 2 : 1;
 }
 #endif

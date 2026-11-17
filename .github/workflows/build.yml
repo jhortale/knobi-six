@@ -162,7 +162,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, write)
+      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, dualmid, write)
         run: |
           bash tests/cpu1_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/cpu1emu
           { cat build/cpu1emu/summary.md; echo; echo '```'; cat build/cpu1emu/plain.checks; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
