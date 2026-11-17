@@ -440,9 +440,10 @@ static void fade_and_tune(void)
 }
 
 /* The CPU guard (voices.h synth_guard) on the host's fake clock (engine.c: each render advances it by eng_fake_per_voice
- * ticks per voice sounding): at 120 % of the block for six voices it sheds down to the voices that fit under 80 %
- * (four), with no step in the output beyond the steady sound's (each shed voice fades in 5 ms, like a steal), keeps
- * them while it stays above 55 %, and gives a voice back after SYNTH_GUARD_HOLD calm blocks each. */
+ * ticks per voice sounding at its end). Six voices at 140 % of the block: one step sheds to the voices that fit under
+ * 80 % (three, at 23 % each), so the next block is already under 100 % and under 80 %; the output has no step beyond
+ * the steady sound's (each shed voice fades out in ~2.2 ms); the limit holds while the load stays over 55 % and comes
+ * back a voice per SYNTH_GUARD_HOLD calm blocks. */
 static void cpu_guard_sheds(void)
 {
     const uint32_t budget = BLK * ENG_TICKS_PER_FRAME_X10 / 10;
@@ -453,7 +454,14 @@ static void cpu_guard_sheds(void)
     render(FS / 4 / BLK * BLK);
     int a6 = synth_active(&eng_synth);
     int32_t s0 = max_step(FS / 8, FS / 4 / BLK * BLK);
-    eng_fake_per_voice = budget * 12 / 10 / 6;                 /* six voices: 120 % */
+    eng_fake_per_voice = budget * 14 / 10 / 6;                 /* six voices: 140 % */
+    double pct[4];
+    for (int b = 0; b < 4; b++) {
+        uint32_t t0 = eng_fake_ticks;
+        memset(&OUT[2 * b * BLK], 0, 2 * BLK * sizeof OUT[0]);
+        eng_render(&OUT[2 * b * BLK], BLK);
+        pct[b] = 100.0 * (eng_fake_ticks - t0) / budget;
+    }
     const uint32_t n = FS / 4 / BLK * BLK;
     render(n);
     int32_t st = max_step(1, n);
@@ -464,14 +472,16 @@ static void cpu_guard_sheds(void)
     eng_fake_per_voice = budget / 10;                          /* calm: 10 % a voice */
     render(BLK * (SYNTH_GUARD_HOLD - 2));
     int lim_early = eng_synth.vlimit;
-    render(BLK * (2 * SYNTH_GUARD_HOLD + 4));
+    render(BLK * (3 * SYNTH_GUARD_HOLD + 4));
     int lim_back = eng_synth.vlimit;
     eng_fake_per_voice = 0;
-    printf("cpu_guard_sheds: 6 voices at 120 %%: limit %d, %d voices sounding, max step %d (steady %d); a new note: "
-           "%d sounding; calm: limit %d after %d blocks, %d after %d\n", lim, live, st, s0, after_note, lim_early,
-           SYNTH_GUARD_HOLD - 2, lim_back, 3 * SYNTH_GUARD_HOLD + 2);
-    CHECK(a6 == 6 && lim == 4 && live == 4 && st <= 2 * s0 && after_note == 4);
-    CHECK(lim_early == 4 && lim_back == NVOICE);
+    printf("cpu_guard_sheds: 6 voices at 140 %%: blocks %.0f / %.0f / %.0f / %.0f %%, limit %d, %d voices sounding, "
+           "max step %d (steady %d); a new note: %d sounding; calm: limit %d after %d blocks, %d after %d\n", pct[0],
+           pct[1], pct[2], pct[3], lim, live, st, s0, after_note, lim_early, SYNTH_GUARD_HOLD - 2, lim_back,
+           4 * SYNTH_GUARD_HOLD + 2);
+    CHECK(a6 == 6 && pct[0] > 100 && pct[1] < 100 && pct[2] < 80 && pct[3] < 80);
+    CHECK(lim == 3 && live == 3 && st <= 2 * s0 && after_note == 3);
+    CHECK(lim_early == 3 && lim_back == NVOICE);
 }
 
 int main(void)

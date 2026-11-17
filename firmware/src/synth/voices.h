@@ -92,10 +92,11 @@ void synth_tune(synth_t *s, int cents);             /* master transpose + tune, 
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
 /* The CPU guard: after each render, the time it took (used) and the block's time (budget), in any one unit (the
- * platform's tick counter). Over SYNTH_GUARD_HI % of the budget the voice limit drops by one and the voices over it are
- * shed at once (the oldest released first, then the oldest held), each fading out in 5 ms as a steal does (no further
- * shedding until they are gone: their fade is in the next measurement); after
- * SYNTH_GUARD_HOLD blocks in a row under SYNTH_GUARD_LO % the limit goes back up by one (hysteresis: a patch on the
+ * platform's tick counter). Over SYNTH_GUARD_HI % of the budget the voice limit drops, in one step, to the voices that
+ * fit under it at the measured cost per voice (used / voices sounding; at least one fewer, at least one), and the
+ * voices over it are shed at once (the oldest released first, then the oldest held), each fading out linearly in
+ * ~2.2 ms (6 control ticks) like a steal and freed as soon as it is silent (no further shedding until they are gone:
+ * their fade is in the next measurement); after SYNTH_GUARD_HOLD blocks in a row under SYNTH_GUARD_LO % the limit goes back up by one (hysteresis: a patch on the
  * edge does not toggle every block). New notes respect the limit (they steal instead of taking a free voice). */
 #define SYNTH_GUARD_HI 80
 #define SYNTH_GUARD_LO 55

@@ -401,6 +401,9 @@ static void test_extreme_states(void)
         if (abs(y) > peak) peak = abs(y);
         if (abs(y) > 65536 || !isfinite(f.s1) || !isfinite(f.s2)) bad++;
     }
+    svf_t z = {1e-21f, -3e-30f}, k = {2e-20f, -1.0f};
+    svf_flush(&z), svf_flush(&k);
+    CHECK(z.s1 == 0 && z.s2 == 0 && k.s1 == 2e-20f && k.s2 == -1.0f);   /* svf_flush: tiny -> 0, the rest kept */
     printf("extreme_states: 2000000 random samples (states up to +-8 = the old int32 range): peak %d, %ld out of "
            "bounds or not finite\n", peak, bad);
     CHECK(bad == 0);

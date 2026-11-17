@@ -131,14 +131,25 @@ Hot spots (hw cycles per block):
    specialised by constant arguments (which X-Mod paths, even or odd frame), so the loops do not test the patch's
    switches per frame.
 6. **The CPU guard** (`synth_guard`, called from `eng_render`). `fm1_ticks()` times `synth_render`; on the host, a
-   fake clock does.
-   - When a block takes more than 80 % of its time, the voice limit drops by one. The voices over the limit are shed
-     (the oldest released first, then the oldest held), each fading out in 5 ms like a steal. It does not shed again
-     while they fade.
+   fake clock does. The measured time includes any interrupt that preempted the render (USB, key scan), which the
+   block did not have either.
+   - When a block takes more than 80 % of its time, the cost per voice is taken as used / voices sounding. In one
+     step, the voice limit drops to the voices that fit under 80 % at that cost: at least one fewer, at least one.
+   - The voices over the limit are shed (the oldest released first, then the oldest held). Each holds its VCA gain
+     and fades linearly to 0 in 6 control ticks (~2.2 ms), then is freed. The guard does not shed again while they
+     fade.
    - After ~1 s (172 blocks) under 55 %, one voice comes back.
    - New notes and unison stacks respect the limit.
-   - Test: `test_render cpu_guard_sheds`. At 120 % for six voices it sheds to four, with no output step beyond the
-     steady sound's, and recovers to six.
+   - Test: `test_render cpu_guard_sheds`. Six voices at 140 % shed to three in one step; the fake clock reads 70 %
+     for the next block.
+     - The real next block also pays for the three fading voices over ~96 of its 256 frames: ≈ 96 %, so under 100 %
+       within one block and under 80 % from the second.
+     - The output has no step beyond the steady sound's.
+     - The limit recovers to six at one voice per 172 calm blocks.
+7. **No denormals** (fix round 1). `svf_flush` sets filter states under 1e-20 to 0 at every control tick, far above
+   the float denormal range; the FPU's speed on denormals is not known.
+   - Test: `test_voices filter_states_flush`. A held voice with the mixer at 0 reaches exactly 0, and no denormal
+     is seen.
 
 ### What it sounds like now
 
@@ -175,6 +186,12 @@ Host yardstick (`tests/cpu_host.sh`, x86-64 instructions per sample):
 - **The CPU guard relies on `fm1_ticks()`** (TIMER4, 24 per µs) being readable in the audio interrupt.
 - **The app is now built with `-mcpu=r3 -mfprev1`.** The device build and every host test pass in CI, but nothing
   has run on a keyboard.
+  - docs/RULES.md says this flag set alone turns the FPU on, the audio interrupt included, as in ciapibox and
+    Drumtonic's FM-1 app builds.
+  - Nothing enables it at boot, and nothing is expected to.
+  - The floats are passed in the integer registers, so the interrupt's register save covers them.
+  - **A device smoke test is required before installing:** boot, play the musical patch, watch the CPU guard's
+    limit and the red-screen fault handler.
 
 The first pass's record follows.
 

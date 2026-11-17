@@ -559,6 +559,27 @@ static void xmod_filter_audio_rate(void)
     CHECK(changes >= VOICE_CTL - 1 && ea1 < 1e-3 && S.ctx.xm_flt == 0);
 }
 
+/* no denormals: a voice held with every mixer level at 0 (and RESONANCE up) decays its filter states to exactly 0
+ * (svf_flush at control rate, |state| < 1e-20 -> 0), not into the FPU's denormal range */
+static void filter_states_flush(void)
+{
+    fresh();
+    set(P_FLT_RESO, 200), set(P_FLT_FREQ, 40);
+    synth_note(&S, 48, 100);
+    run(FS / 10);
+    int v = voice_of(48);
+    set(P_MIX_VCO1, 0);
+    int denorm = 0;
+    for (int i = 0; i < 40; i++) {
+        run(FS / 10);
+        float a = fabsf(S.voice[v].svf.s1), b = fabsf(S.voice[v].svf.s2);
+        if ((a > 0 && a < 1.2e-38f) || (b > 0 && b < 1.2e-38f)) denorm++;
+    }
+    printf("filter_states_flush: held, mixer at 0, 4 s: states %g / %g, denormal seen %d times\n",
+           (double)S.voice[v].svf.s1, (double)S.voice[v].svf.s2, denorm);
+    CHECK(S.voice[v].busy && S.voice[v].svf.s1 == 0 && S.voice[v].svf.s2 == 0 && denorm == 0);
+}
+
 static void peak_rms(uint32_t n, double *peak, double *rms)
 {
     double p = 0, r = 0;
@@ -652,6 +673,7 @@ int main(void)
     free_resets();
     smoothing();
     xmod_filter_audio_rate();
+    filter_states_flush();
     output_level();
     mode_mapping();
     cost();

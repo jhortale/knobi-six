@@ -21,7 +21,8 @@
  * The synth is not thread-safe: the main loop talks to it only through engine.c's event queue (eng_*), which
  * app_audio drains before each render. The program at boot: the last one loaded (the globals), else program 0;
  * nothing stored there: program_init (every default).
- * Rules of the road (the chip has no FPU and no libgcc): integers only, no float, no 64-bit division.
+ * Rules of the road (no libgcc): no double, no 64-bit division; integers, except the filter's float path, which runs on
+ * the FPU (the app is built with -mfprev1, tools/build.py APP_FPU; docs/RULES.md, docs/MEASUREMENTS.md).
  * tests/run_host.sh runs this file on a computer: the screen as PNG, the sound as WAV.
  * What platform.c offers: docs/API.md. The chip's rules: docs/RULES.md. */
 #define APP_NAME "KNOBI-SIX"

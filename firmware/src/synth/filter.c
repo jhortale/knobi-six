@@ -138,6 +138,14 @@ SVF_INLINE int32_t svf_tick_hot(svf_t *f, int32_t in_q15, const svf_coef_t *c)
 }
 int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c) { return svf_tick_hot(f, in_q15, c); }
 
+/* states that have decayed below 1e-20 (far under the output's LSB, 3e-5) become 0, before they reach the denormal range
+ * (below 1.2e-38), whose speed on this FPU is not known; the voice calls it at control rate */
+void svf_flush(svf_t *f)
+{
+    if (__builtin_fabsf(f->s1) < 1e-20f) f->s1 = 0.0f;
+    if (__builtin_fabsf(f->s2) < 1e-20f) f->s2 = 0.0f;
+}
+
 SVF_HOT int32_t svf_clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 /* the same without branches (a taken branch costs ~7.5 cycles on this core, an ALU op 1), for the per-sample path;
  * v - lo and v - hi must not overflow (|v| < 2^30 here) */

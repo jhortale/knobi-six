@@ -338,7 +338,6 @@ void synth_init(synth_t *s)
     s->mono = -1;
     s->last_pitch = VOICE_NO_PITCH;
     s->vlimit = NVOICE;
-    adsr_rates(&s->ctx.shed, 0, 0, 0, 0);
     for (int i = 0; i < NVOICE; i++) voice_init(&s->voice[i], synth_rand(s));
     lfo_init(&s->lfo, synth_rand(s));
     program_t p;
@@ -446,7 +445,8 @@ static void synth_tick(synth_t *s)
         int live = vo->lenv.stage != ADSR_IDLE || vo->key || vo->latched || vo->pend_off;
         int32_t d = (live ? 32768 : 0) - vo->act;
         vo->act = d > -64 && d < 64 ? vo->act + d : vo->act + (d >> SYNTH_ACT_SHIFT);
-        if (!live && !vo->act) { voice_reset(vo, synth_rand(s)); continue; }   /* silent: free, states cleared */
+        if (!live && (!vo->act || vo->shed)) { voice_reset(vo, synth_rand(s)); continue; }   /* silent: free, states
+                                                                                               cleared (a shed voice at once) */
         voice_glide(vo);
         voice_control(vo, c, v);
         voice_env(vo, c, v);
@@ -494,9 +494,18 @@ void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
 {
     if ((uint64_t)used * 100u > (uint64_t)budget * SYNTH_GUARD_HI) {
         s->calm = 0;
-        for (int i = 0; i < NVOICE; i++)   /* voices shed earlier still fading (their cost is in 'used'): wait */
-            if (s->voice[i].busy && s->voice[i].shed) return;
-        if (s->vlimit > 1) s->vlimit--;
+        int busy = 0;
+        for (int i = 0; i < NVOICE; i++) {
+            if (s->voice[i].busy && s->voice[i].shed) return;   /* still fading (in this measurement): wait */
+            busy += s->voice[i].busy;
+        }
+        /* the cost per voice sounding is used / busy: keep the most voices k with k x used / busy under the threshold
+         * (no division: k used 100 < HI budget busy), at least one fewer than now, at least one */
+        int k = busy - 1;
+        while (k > 1 && (uint64_t)k * used * 100u >= (uint64_t)budget * SYNTH_GUARD_HI * (uint32_t)busy) k--;
+        if (k < 1) k = 1;
+        if (k < s->vlimit) s->vlimit = (uint8_t)k;
+        else if (s->vlimit > 1) s->vlimit--;
         for (int n = synth_live(s); n > s->vlimit; n--) {
             int best = -1;
             for (int i = 0; i < NVOICE; i++) {   /* the oldest released first */
@@ -510,8 +519,11 @@ void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
                     if (v->busy && !v->shed && (best < 0 || v->t_on < s->voice[best].t_on)) best = i;
                 }
             voice_t *v = &s->voice[best];
+            /* the VCA gain at the end of the period just rendered, held and faded by voice_env */
+            int32_t lv = v->lenv.level < 0 ? 0 : v->lenv.level, g = (int32_t)(((uint32_t)lv >> 15) * v->vk >> 16) + v->voff;
+            v->shedg = g < 0 ? 0 : g > VCA_CEIL ? VCA_CEIL : g;
             v->shed = 1, v->key = 0, v->latched = 0, v->pend_off = 0, v->min_gate = 0;
-            synth_gate(v, 0);
+            v->lenv.level = ADSR_ONE, v->lenv.stage = ADSR_RELEASE;
         }
     } else if ((uint64_t)used * 100u < (uint64_t)budget * SYNTH_GUARD_LO) {
         if (s->calm < SYNTH_GUARD_HOLD) s->calm++;

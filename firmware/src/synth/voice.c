@@ -69,6 +69,7 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
     if (v->pitch == VOICE_NO_PITCH || !v->glide) v->pitch = v->target;   /* the glide itself steps in voice_glide */
     int32_t key = v->pitch;
     int32_t fenv = v->fenv.level;
+    svf_flush(&v->svf);
     mods_sum(&v->ctl, prog, c->lfo, c->depth, fenv, 0, c->at);
 
     /* pitch */
@@ -107,7 +108,15 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 void voice_env(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 {
     adsr_tick16(&v->fenv, &c->fr);
-    int32_t l0 = v->lenv.level, l1 = adsr_tick16(&v->lenv, v->shed ? &c->shed : &c->lr);
+    if (v->shed) {   /* the CPU guard's fade: the gain it had, linearly to 0 in 6 ticks (~2.2 ms), then free */
+        int32_t l0 = v->lenv.level, l1 = l0 - ADSR_ONE / 6;
+        if (l1 <= 0) v->lenv.level = 0, v->lenv.stage = ADSR_IDLE;
+        else v->lenv.level = l1;
+        v->le0 = l0, v->led = (int32_t)(((int64_t)l1 - l0) >> 4);
+        v->vk = (uint32_t)v->shedg * 2u, v->voff = 0;   /* (ONE >> 15) x vk >> 16 = shedg */
+        return;
+    }
+    int32_t l0 = v->lenv.level, l1 = adsr_tick16(&v->lenv, &c->lr);
     v->le0 = l0;
     v->led = (int32_t)(((int64_t)l1 - l0) >> 4);   /* per frame of the 16 */
     v->vk = vca_env_k(prog[P_LENV_AMT], prog[P_LENV_VEL], v->vel);

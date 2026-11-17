@@ -34,6 +34,7 @@ typedef struct { float g, a1, a2, k, lp, hp, bp; } svf_coef_t;
 /* cutoff_q16: filter FREQ param + modulations, in param units Q16; mode 0..255 LP->notch->HP; bp 0..32768 Norm->BP */
 void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_mix);
 int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c);
+void svf_flush(svf_t *f);                 /* |state| < 1e-20 -> 0: no denormals (control rate) */
 /* The per-sample coefficient path, for audio-rate X-Mod into F FREQ / F MODE / Norm<->BP only (the voice uses
  * svf_coef at control rate otherwise): kres = svf_reso_k(RESONANCE), computed at control rate; mode 0..255 and bp_mix
  * as svf_coef's. No exp2: a table g (as svf_coef), the damping floor from a table, one FPU division. Against svf_coef:

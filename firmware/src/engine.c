@@ -263,6 +263,8 @@ static uint32_t eng_ticks(void) { return eng_fake_ticks; }
 static uint32_t eng_ticks(void) { return fm1_ticks(); }
 #endif
 
+/* eng_render's 'used' is wall-clock ticks around synth_render: it includes the time of any interrupt that preempted
+ * it (USB, the key scan), which is time the block did not have either, so the guard counts it too. */
 static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
 {
     int32_t g = eng_fade_g, tgt;
