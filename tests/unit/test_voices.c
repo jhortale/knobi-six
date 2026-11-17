@@ -430,13 +430,15 @@ static void amp_mod_fades(void)
     synth_note(&S, 48, 0);
     run(FS / 10);
     int last = -1;
-    for (int i = 0; i < FS / 10; i++) if (BUF[2 * i]) last = i;
+    /* the voice's end: the last frame that is not the bus DC blocker's free decay (once its input is 0 it goes on as
+     * y[n] = R y[n-1], a few LSB at 5 Hz: within 1.5 LSB of that after truncation) */
+    for (int i = 1; i < FS / 10; i++) if (fabs(BUF[2 * i] - SYNTH_DC_R * BUF[2 * i - 2]) > 1.5) last = i;
     double tail = 0;
     for (int i = last - 340; i <= last && i >= 0; i++)
         if (fabs((double)BUF[2 * i]) > tail) tail = fabs((double)BUF[2 * i]);
-    printf("amp_mod_fades: no note: max %d; note held: peak %.0f (the LFO alone opens the VCA); after key up silent "
-           "from frame %d (%.2f ms), last 340 frames (a period of C3) peak %.0f (%.1f dB under the note)\n", mx0, on,
-           last + 1, (last + 1) * 1000.0 / FS, tail, 20 * log10(tail / on + 1e-9));
+    printf("amp_mod_fades: no note: max %d; note held: peak %.0f (the LFO alone opens the VCA); after key up only the "
+           "DC tail from frame %d (%.2f ms), last 340 frames (a period of C3) peak %.0f (%.1f dB under the note)\n", mx0,
+           on, last + 1, (last + 1) * 1000.0 / FS, tail, 20 * log10(tail / on + 1e-9));
     CHECK(mx0 == 0 && on > 3000 && last > 340 && last < FS / 50 && tail < on / 4 && synth_active(&S) == 0);
 }
 
@@ -587,6 +589,96 @@ static void peak_rms(uint32_t n, double *peak, double *rms)
     *peak = 20 * log10(p / 32767), *rms = 10 * log10(r / (2 * n) / (32767.0 * 32767));
 }
 
+/* the bus at its worst level: six voices, every mixer level at 127, saws, the filter open (no resonance), PROGRAM
+ * VOLUME and velocity 127, as a C3..C5 chord and as a 6-voice unison stack (the voices in tune). The soft limiter
+ * keeps every sample under its ceiling (so under 32767: never a hard clip), and nothing sits flat at the top: the
+ * longest run of equal samples within 2 % of the peak is a few frames (a waveform's own crest), not a clipped
+ * plateau (the old limiter went flat at 32767 from 40960 up: program 420's 91 clipped samples). */
+static void bus_never_clips(void)
+{
+    static const int chord[6] = { 48, 55, 60, 64, 67, 72 };
+    for (int u = 0; u < 2; u++) {
+        fresh();
+        set(P_MIX_VCO1, 127), set(P_MIX_VCO2, 127), set(P_MIX_SUB, 127), set(P_MIX_NOISE, 127);
+        set(P_FLT_FREQ, 164), set(P_FLT_RESO, 0), set(P_FLT_ENV_AMT, 0), set(P_PRG_VOL, 127), set(P_DETUNE, 0);
+        if (u) set(P_UNISON_ON, 1), set(P_UNISON_VOICES, 5), synth_note(&S, 48, 127);
+        else for (int k = 0; k < 6; k++) synth_note(&S, chord[k], 127);
+        run(FS / 10);
+        int32_t mx = 0, top = 0;
+        int run_n = 0, longest = 0, at_top = 0;
+        double busmax = 0;
+        for (int b = 0; b < 2; b++) {
+            /* the voice bus itself, 16 frames by hand (synth_render's loop without the blocker and limiter) */
+            for (int f = 0; f < FS / 2; f += VOICE_CTL) {
+                int32_t bus[2 * VOICE_CTL] = {0};
+                synth_tick(&S);
+                for (int i = 0; i < NVOICE; i++)
+                    if (S.voice[i].busy) voice_render(&S.voice[i], &S.ctx, S.prog.v, bus, VOICE_CTL);
+                for (int i = 0; i < 2 * VOICE_CTL; i++)
+                    if (fabs((double)bus[i]) > busmax) busmax = fabs((double)bus[i]);
+            }
+            S.ctl_left = 0;
+        }
+        run(FS);
+        for (int i = 0; i < 2 * FS; i++) if (abs(BUF[i]) > mx) mx = abs(BUF[i]);
+        top = mx - mx / 50;
+        for (int c = 0; c < 2; c++)
+            for (int i = 1, n = 0; i < FS; i++) {
+                int32_t a = BUF[2 * i + c];
+                n = abs(a) >= top && a == BUF[2 * (i - 1) + c] ? n + 1 : 0;
+                if (n + 1 > longest) longest = n + 1;
+                if (abs(a) >= 32767) at_top++;
+            }
+        run_n = longest;
+        printf("bus_never_clips: %s: bus before the limiter up to %.0f (%+.1f dBFS); out max |x| %d (%.2f dBFS, "
+               "ceiling %d), %d samples at 32767, longest run of equal samples within 2 %% of the peak %d\n",
+               u ? "6-voice unison C3" : "6-note chord C3..C5", busmax, 20 * log10(busmax / 32767), mx,
+               20 * log10(mx / 32767.0), SYNTH_LIMIT_CEIL, at_top, run_n);
+        CHECK(busmax > 40960 && mx < SYNTH_LIMIT_CEIL && mx < 32767 && at_top == 0 && run_n <= 3);
+    }
+}
+
+/* the bus DC blocker: a DC-heavy patch (a sync lead: VCO 1 a saw synced to VCO 2 at a fifth + an octave below it, so
+ * every cycle is a cut ramp, far off zero mean; filter open) keeps a mean under -60 dBFS over a second; and a 30 Hz
+ * sine through the blocker alone comes out within 0.5 dB */
+static void bus_dc_blocker(void)
+{
+    fresh();
+    set(P_VCO1_SHAPE, 0), set(P_VCO1_SYNC, 1), set(P_VCO1_FREQ, 24 + 7), set(P_FLT_FREQ, 164), set(P_MIX_VCO1, 127);
+    for (int k = 0; k < 3; k++) synth_note(&S, 48 + 7 * k, 127);
+    run(FS / 2);
+    double raw = 0;   /* the voice bus's own mean over 1 s (synth_render's loop by hand), then the output's */
+    for (int f = 0; f < FS; f += VOICE_CTL) {
+        int32_t bus[2 * VOICE_CTL] = {0};
+        synth_tick(&S);
+        for (int i = 0; i < NVOICE; i++)
+            if (S.voice[i].busy) voice_render(&S.voice[i], &S.ctx, S.prog.v, bus, VOICE_CTL);
+        for (int i = 0; i < VOICE_CTL; i++) raw += bus[2 * i];
+    }
+    S.ctl_left = 0;
+    run(FS / 2);
+    run(FS);
+    double m = 0;
+    for (int i = 0; i < FS; i++) m += BUF[2 * i];
+    raw /= FS, m /= FS;
+    /* 30 Hz, amplitude 10000 (under the limiter's knee), 2 s; the gain from the second second's projection */
+    synth_t t;
+    memset(&t, 0, sizeof t);
+    static int32_t in[2 * 2 * FS], out[2 * 2 * FS];
+    for (int i = 0; i < 2 * FS; i++) in[2 * i] = in[2 * i + 1] = (int32_t)lrint(10000 * sin(2 * M_PI * 30 * i / FS));
+    memset(out, 0, sizeof out);
+    for (int i = 0; i < 2 * FS; i += VOICE_CTL) synth_bus(&t, &in[2 * i], &out[2 * i], VOICE_CTL);
+    double ps = 0, pc = 0;
+    for (int i = FS; i < 2 * FS; i++) {
+        double ph = 2 * M_PI * 30 * i / FS;
+        ps += out[2 * i] * sin(ph), pc += out[2 * i] * cos(ph);
+    }
+    double g = 20 * log10(2 * sqrt(ps * ps + pc * pc) / FS / 10000);
+    printf("bus_dc_blocker: sync lead x 3: voice bus mean %.0f (%.1f dBFS), out mean %.2f (%.1f dBFS); 30 Hz sine "
+           "%+.2f dB\n", raw, 20 * log10(fabs(raw) / 32767 + 1e-12), m, 20 * log10(fabs(m) / 32767 + 1e-12), g);
+    CHECK(fabs(raw) / 32767 > 0.03 && fabs(m) / 32767 < 0.001 && fabs(g) < 0.5);
+}
+
 static void output_level(void)
 {
     static const int chord[6] = { 48, 52, 55, 60, 64, 67 };
@@ -693,6 +785,8 @@ int main(void)
     xmod_filter_audio_rate();
     filter_states_flush();
     output_level();
+    bus_never_clips();
+    bus_dc_blocker();
     key_track_octaves();
     mode_mapping();
     cost();

@@ -40,8 +40,11 @@
  * Output: synth_render ADDS its stereo frames (L R int32 pairs, Q15 full scale 32767) into lr. Per-voice gain
  * SYNTH_VOICE_GAIN x PROGRAM VOLUME / 127, constant-power pan (centre: -3 dB each side): a 6-note chord of the init
  * patch (saw, filter open) at the default volume 100 peaks around -6 dBFS per channel (test_voices output_level). The
- * synth's bus then passes a soft limiter (linear to 24576 = -2.5 dBFS, a quadratic shoulder to 32767 at 40960, flat
- * after): the worst case (six overdriven voices, +-65536 each) cannot exceed +-32767. */
+ * synth's bus then passes a DC blocker (a one-pole high-pass at 5 Hz: a sync lead's or a narrow pulse's offset goes,
+ * 30 Hz loses 0.2 dB; its tail runs on after the voices stop, until under half an LSB) and a soft limiter: linear to
+ * SYNTH_LIMIT_KNEE (-4.4 dBFS), then a smooth knee (slope 1 there, falling) that approaches SYNTH_LIMIT_CEIL (-0.45
+ * dBFS) and never reaches it: six overdriven voices at every level at full (+-65536 each, the bus up to ~13.6 dB over
+ * full scale) come out below the ceiling, rounded, never flat at a clip. */
 #ifndef KNOBI_VOICES_H
 #define KNOBI_VOICES_H
 #include <stdint.h>
@@ -53,7 +56,8 @@
 #endif
 #define SYNTH_STACK 32                    /* keys remembered for note priority / legato */
 #define VOICE_MIN_GATE 7                  /* control ticks: 97..112 frames = 2.2..2.5 ms (a tick may fall at once) */
-#define SYNTH_LIMIT_KNEE 24576            /* the bus soft limiter's knee */
+#define SYNTH_LIMIT_KNEE 19661            /* the bus soft limiter's knee: 0.6 x full scale, -4.4 dBFS */
+#define SYNTH_LIMIT_CEIL 31129            /* its ceiling, approached, never reached: 0.95 x full scale, -0.45 dBFS */
 
 enum { SM_CUT, SM_RESO, SM_MODE, SM_BP, SM_SHAPE1, SM_PW1, SM_SHAPE2, SM_PW2, SM_L1, SM_L2, SM_LSUB, SM_LNOISE,
        SM_VOL, SM_SPREAD, SM_COUNT };
@@ -75,6 +79,7 @@ struct synth {
     uint8_t hold, ctl_left, rates_dirty;
     uint8_t vlimit;                       /* the CPU guard's voice limit, 1..NVOICE (synth_guard) */
     uint16_t calm;                        /* blocks in a row under SYNTH_GUARD_LO */
+    float dcx[2], dcy[2];                 /* the bus DC blocker: last input, last output, L R */
 };
 
 void synth_init(synth_t *s);

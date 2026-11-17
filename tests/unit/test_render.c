@@ -47,8 +47,8 @@ static int32_t max_step(uint32_t a, uint32_t b)
 
 /* Review Focus 1: 6 voices, every mixer level at max, VCO2 -> VCO1 X-Mod at max (and every other X-Mod destination),
  * sync on, max resonance, LFO at 500 Hz on every destination at full depth (+ the mod wheel), aftertouch at full on
- * every destination, volume 127, velocity 127, 10 s. The output stays in +-32767 (the platform's clip never acts) and
- * the voice bus before the soft limiter keeps int32 headroom (no wrap). tests/scripts/worst.txt is the same patch. */
+ * every destination, volume 127, velocity 127, 10 s. The output stays under the soft limiter's ceiling (so in +-32767:
+ * the platform's clip never acts) and the voice bus before the DC blocker and the limiter keeps int32 headroom (no wrap). tests/scripts/worst.txt is the same patch. */
 static const int16_t WORST[][2] = {
     {P_MIX_VCO1, 127}, {P_MIX_VCO2, 127}, {P_MIX_SUB, 127}, {P_MIX_NOISE, 127},
     {P_VCO1_SHAPE, 255}, {P_VCO1_PW, 0}, {P_VCO2_SHAPE, 254}, {P_VCO2_PW, 255}, {P_VCO1_SYNC, 1},
@@ -92,10 +92,10 @@ static void voice_worst_case_bounded(void)
         for (int i = 0; i < 2 * VOICE_CTL; i++) if (llabs(bus[i]) > bmax) bmax = llabs(bus[i]);
     }
     s->ctl_left = 0;
-    printf("voice_worst_case_bounded: 6 voices 10 s: max |out| %d (limit 32767), RMS %.1f dBFS, %d voices sounding; "
-           "bus before the limiter max |x| %lld (%.1f bits of int32 headroom left)\n", mx, rms, act, (long long)bmax,
+    printf("voice_worst_case_bounded: 6 voices 10 s: max |out| %d (ceiling %d), RMS %.1f dBFS, %d voices sounding; "
+           "bus before the limiter max |x| %lld (%.1f bits of int32 headroom left)\n", mx, SYNTH_LIMIT_CEIL, rms, act, (long long)bmax,
            31 - log2((double)bmax));
-    CHECK(mx <= 32767 && mx > 16384 && act == 6 && bmax < (1 << 28));
+    CHECK(mx < SYNTH_LIMIT_CEIL && mx > 16384 && act == 6 && bmax < (1 << 28));
 }
 
 /* Review Focus 2: a parameter jumped while a note sounds (sent through the queue, as the main loop will) gives no

@@ -414,6 +414,7 @@ void synth_panic(synth_t *s)
     for (int i = 0; i < NVOICE; i++) voice_reset(&s->voice[i], synth_rand(s));
     s->nstack = 0, s->mono = -1, s->hold = 0;
     s->last_pitch = VOICE_NO_PITCH;
+    s->dcx[0] = s->dcx[1] = s->dcy[0] = s->dcy[1] = 0.0f;   /* the bus blocker too: silent now, no tail */
 }
 
 int synth_active(const synth_t *s)
@@ -453,25 +454,55 @@ static void synth_tick(synth_t *s)
     }
 }
 
-/* the bus soft limiter: linear to the knee, then y = K + u - u^2 / 2^15 (u = |x| - K) up to 32767 at K + 16384 */
-static int32_t synth_limit(int32_t x)
+/* The bus, per channel (voices.h): a DC blocker, y = x - x1 + R y1 (a one-pole high-pass at 5 Hz: R = 1 - 2 pi 5 / fs),
+ * then the soft limiter, linear to the knee K, then y = K + W u / (u + W) (u = |x| - K, W = CEIL - K): slope 1 at the
+ * knee, falling smoothly, and it never reaches CEIL whatever x. Float on the FPU (one division, only above the knee);
+ * the output is truncated toward zero (no DC from a floor). The blocker comes first, so the limiter's ceiling holds for
+ * what goes out (a high-pass after it could overshoot). */
+#define SYNTH_DC_R 0.99928762f
+#define SYNTH_LIM_K ((float)SYNTH_LIMIT_KNEE)
+#define SYNTH_LIM_W ((float)(SYNTH_LIMIT_CEIL - SYNTH_LIMIT_KNEE))
+static inline __attribute__((always_inline)) int32_t synth_limit(float x)
 {
-    int32_t a = x < 0 ? -x : x;
-    if (a <= SYNTH_LIMIT_KNEE) return x;
-    int32_t u = a - SYNTH_LIMIT_KNEE, y = 32767;
-    if (u < 16384) y = SYNTH_LIMIT_KNEE + u - ((u * u) >> 15);
-    if (y > 32767) y = 32767;
-    return x < 0 ? -y : y;
+    float a = __builtin_fabsf(x);
+    if (a > SYNTH_LIM_K) {
+        float u = a - SYNTH_LIM_K;
+        a = SYNTH_LIM_K + SYNTH_LIM_W * u / (u + SYNTH_LIM_W);
+        x = x < 0.0f ? -a : a;
+    }
+    return (int32_t)x;
+}
+/* n frames of the voice bus (NULL: silence) through the DC blocker and the limiter, added into lr */
+static void synth_bus(synth_t *s, const int32_t *bus, int32_t *lr, int n)
+{
+    float xl = s->dcx[0], yl = s->dcy[0], xr = s->dcx[1], yr = s->dcy[1];
+    for (int i = 0; i < n; i++) {
+        float l = bus ? (float)bus[2 * i] : 0.0f, r = bus ? (float)bus[2 * i + 1] : 0.0f;
+        yl = l - xl + SYNTH_DC_R * yl, xl = l;
+        yr = r - xr + SYNTH_DC_R * yr, xr = r;
+        lr[2 * i] += synth_limit(yl);
+        lr[2 * i + 1] += synth_limit(yr);
+    }
+    s->dcx[0] = xl, s->dcy[0] = yl, s->dcx[1] = xr, s->dcy[1] = yr;
+}
+/* the blocker's tail once the voices are silent: run on zeros until it is below half an LSB, then exactly 0 (no
+ * denormals, nothing to do in silence) */
+static int synth_bus_live(const synth_t *s)
+{
+    return s->dcx[0] != 0.0f || s->dcx[1] != 0.0f || __builtin_fabsf(s->dcy[0]) >= 0.5f ||
+           __builtin_fabsf(s->dcy[1]) >= 0.5f;
 }
 
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
 {
     if (!synth_active(s)) {
-        /* silence: nothing to add. The smoothed values snap to their targets (no voice to click) and the LFO runs on
-         * by the whole block; the next block starts a fresh control period */
+        /* silence: nothing to add bar the DC blocker's tail. The smoothed values snap to their targets (no voice to
+         * click) and the LFO runs on by the whole block; the next block starts a fresh control period */
         for (int i = 0; i < SM_COUNT; i++) s->sm[i] = s->tgt[i];
         lfo_tick(&s->lfo, s->prog.v[P_LFO_SHAPE], frames);
         s->ctl_left = 0;
+        if (synth_bus_live(s)) synth_bus(s, 0, lr, (int)frames);
+        else s->dcy[0] = s->dcy[1] = 0.0f;
         return;
     }
     while (frames) {
@@ -482,11 +513,13 @@ void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
         s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);
         for (int i = 0; i < NVOICE; i++)
             if (s->voice[i].busy) voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, n);
-        for (int i = 0; i < 2 * n; i++) lr[i] += synth_limit(bus[i]);
+        synth_bus(s, bus, lr, n);
         lr += 2 * n;
         frames -= (uint32_t)n;
         s->ctl_left = (uint8_t)(s->ctl_left - n);
     }
+    for (int c = 0; c < 2; c++)   /* (a held voice silent for seconds: the blocker's state never goes denormal) */
+        if (__builtin_fabsf(s->dcy[c]) < 1e-20f) s->dcy[c] = 0.0f;
 }
 
 /* the CPU guard (voices.h) */
