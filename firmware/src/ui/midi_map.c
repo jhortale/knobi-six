@@ -15,8 +15,9 @@
  * Out (midi_cc_send): a panel edit, with PARAM TX = CC, as the map's CC on the MIDI channel (ALL = 1), only when its
  * 7-bit value differs from the last one either side had (a 0..255 param moving one step may stay on the same CC
  * value). Switches and selects have no CC (NRPN later).
- * Arp notes out (ctl_arp_out, main loop; synth/arp.h's ring): with ARP ON and PARAM TX = CC, the notes the arpeggiator
- * plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on), and (LOCAL
+ * Arp notes out (ctl_arp_out, main loop; synth/arp.h's ring): with ARP ON, PARAM TX = CC and LOCAL ON, the notes the
+ * arpeggiator plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on;
+ * not under LOCAL OFF, where MIDI in alone feeds the arp and a DAW's echo would feed it its own notes), and (LOCAL
  * ON: the keys feed the arp) the keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
  * note-off goes out only if its note-on did; a change of ARP ON, PARAM TX or LOCAL with keys held
  * sends their note-offs, or late note-ons, so the receiver's picture stays right: app.c). A note-off
@@ -85,6 +86,9 @@ static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bi
 static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
 static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
 static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
+/* the arp's note-ons go out with PARAM TX on and LOCAL ON only (final review 2): under LOCAL OFF the arp is fed by MIDI
+ * in alone, and a DAW echoing our notes back would feed the arp its own notes (with a latch on, a loop that sustains
+ * itself). Every note-on sent gets its note-off, whatever PARAM TX or LOCAL have become since (ctl_arp_sent) */
 static void ctl_arp_out(void)
 {
     uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
@@ -93,7 +97,7 @@ static void ctl_arp_out(void)
     for (; ctl_arp_r != w; ctl_arp_r++) {
         uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
         uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
-        if (vel && ctl_glob[G_PARAM_TX]) { midi_send(0x90u | ch, note, vel); *m |= bit; ctl_arp_outs++; }
+        if (vel && ctl_glob[G_PARAM_TX] && ctl_glob[G_LOCAL]) { midi_send(0x90u | ch, note, vel); *m |= bit; ctl_arp_outs++; }
         else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; ctl_arp_offs++, ctl_arp_offch = (uint8_t)ch; }
     }
 }

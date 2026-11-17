@@ -56,9 +56,11 @@ save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhi
 Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with LOCAL ON, ARP ON and PARAM TX = CC, the keys feed
 the arp and the notes it plays go out instead (note on with the key's velocity, note off at the end of its gate); the
 keys' own notes do not (a receiver would play the chord under the arp). Every arp note-on sent gets its note-off, even
-if PARAM TX is turned off meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With
-**LOCAL OFF** the keys never reach the synth or its arp: they go out as played, as ever (a DAW controller), whatever
-ARP ON and PARAM TX say, and no arp notes go out for them.
+if PARAM TX or LOCAL is turned off meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With **LOCAL OFF** the keys never
+reach the synth or its arp: they go out as played, as ever (a DAW controller), whatever ARP ON and PARAM TX say. The arp
+then plays what MIDI in feeds it, here only: its notes are not sent under LOCAL OFF, so a DAW that echoes our notes
+back (its MIDI thru, as a DAW controller needs) never feeds the arp its own notes (with a latch on, a loop that would
+sustain itself).
 Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
 note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
 on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off

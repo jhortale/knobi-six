@@ -165,4 +165,28 @@
 10000 pad 2 100
 10010 pad 2 0
 10050 expect 1 glob 7
-10100 end
+# Final review 2: LOCAL OFF, ARP ON, PARAM TX on: the arp fed by MIDI in plays here, its notes are not sent (a DAW
+# echoing them back would feed the arp its own notes, and with a latch on they would sustain themselves)
+10100 pad 2 100
+10110 pad 2 0
+10150 expect 0 glob 7
+10200 midi 0x90 60 100
+10250 expect 60 arpnote
+10250 expect 11 arpout
+10400 midi 0x80 60 0
+10500 expect 11 arpout
+10500 expect 9 arpoff
+# LOCAL ON, D from MIDI in: its note-on goes out; LOCAL OFF during its gate: its note-off still goes out (paired)
+10520 pad 2 100
+10530 pad 2 0
+10550 expect 1 glob 7
+10600 midi 0x90 62 100
+10650 expect 62 arpnote
+10650 expect 12 arpout
+10660 pad 2 100
+10670 pad 2 0
+10700 expect 0 glob 7
+10700 expect 9 arpoff
+10900 expect 10 arpoff
+10950 midi 0x80 62 0
+11000 end
