@@ -323,7 +323,8 @@ static void pan_spread_alternates(void)
     int alt = 1;
     for (int k = 0; k < NVOICE; k++) {
         double d = 10 * log10((l[k] + 1) / (r[k] + 1)), x = ((k & 1) ? 1 : -1) * (k / 2 + 1) / 3.0;
-        double want = k / 2 == 2 ? ((k & 1) ? -HUGE_VAL : HUGE_VAL) : 20 * log10(cos((x + 1) * M_PI / 4) / sin((x + 1) * M_PI / 4));
+        double want = k / 2 == 2 ? ((k & 1) ? -HUGE_VAL : HUGE_VAL)
+                                 : 20 * log10(cos((x + 1) * M_PI / 4) / sin((x + 1) * M_PI / 4));
         printf(" %+.1f (%+.1f)", d, want);
         if (k / 2 == 2 ? ((k & 1) ? d > -60 : d < 60) : fabs(d - want) > 0.3) alt = 0;
     }
