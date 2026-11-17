@@ -414,9 +414,15 @@ static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of 
 #endif
 #if KNOBI_CPU1_TEST == 10
     if (++eng_c1_test_jobs >= ENG_C1_HANG_AT) {   /* (slow: before it touches a voice, so a join that gives up on it
-                                                   * leaves the output exact) */
+                                                   * leaves the output exact. fm1-emu does not hold a retired core
+                                                   * (C1_CON): the job stops itself once CPU0 has retired it, as the
+                                                   * chip's hold would have stopped it there) */
         eng_c1_test_slow = 1;
-        while (eng_ticks() - t0 < ENG_C1_SLOW_TICKS) eng_c1_test_spin++;
+        while (eng_ticks() - t0 < ENG_C1_SLOW_TICKS) {
+            fm1_cpu1_sync();
+            if (!fm1_cpu1_on) return;
+            eng_c1_test_spin++;
+        }
     }
 #endif
     for (uint32_t i = 0; i < 2u * n; i++) j->bus[i] = 0;
