@@ -1,0 +1,62 @@
+# The globals (GLOBE screen; params/globals.h): K6 TRANSPOSE and K7 TUNE (the master tune sent to the synth, "tune" in
+# cents), K8 VEL CURVE (7: every key at 127), pad 2 LOCAL (OFF: the keys go to MIDI only, MIDI in still plays), pad 3
+# STEREO / MONO ("mono"), pad 4 SUSTAIN polarity (N.C.: CC 64 upside down), pad 5 AT CURVE (the pads' pressure, "at").
+# "glob G": global G (globals.h order: 0 MIDI CH, 1 POT, 2 TX, 3 RX, 4 TRANSPOSE, 5 TUNE, 6 VEL, 7 LOCAL, 8 STEREO,
+# 9 SUSTAIN, 10 AT CURVE). They are saved 2 s after the last change, once silent ("saves").
+50 btn 12
+100 btn 10
+150 expect 8 screen
+200 enc 5 -3
+250 expect -3 glob 4
+200 enc 6 25
+250 expect 25 glob 5
+300 expect -275 tune
+350 enc 6 40
+400 expect 50 glob 5
+400 expect -250 tune
+# VEL CURVE 7: a light key plays at 127 (sent out at 127 too)
+450 enc 7 7
+500 expect 7 glob 6
+550 vel 20
+600 keys 0x80
+650 expect 1 voices
+700 keys 0
+# LOCAL OFF: a key plays nothing here (it goes out over MIDI), MIDI in still plays
+900 expect 0 voices
+950 pad 2 100
+960 pad 2 0
+1000 expect 0 glob 7
+1050 keys 0x80
+1100 expect 0 voices
+1150 keys 0
+1200 midi 0x90 60 100
+1250 expect 1 voices
+1300 midi 0x80 60 0
+1500 pad 2 100
+1510 pad 2 0
+1550 expect 1 glob 7
+# MONO
+1600 pad 3 100
+1610 pad 3 0
+1650 expect 1 glob 8
+1650 expect 1 mono
+# SUSTAIN N.C.: CC 64 = 0 holds, 127 lets go
+1700 pad 4 100
+1710 pad 4 0
+1750 expect 1 glob 9
+1800 midi 0xB0 64 0
+1850 expect 1 hold
+1900 midi 0xB0 64 127
+1950 expect 0 hold
+# AT CURVE 2 (softer): pressure 32 on a bottom pad gives more than 32
+2000 pad 5 100
+2010 pad 5 0
+2020 pad 5 100
+2030 pad 5 0
+2050 expect 2 glob 10
+2100 pad 9 32
+2150 expect 55 at
+2200 pad 9 0
+# saved once, 2 s after the last change, while silent
+4300 expect 1 saves
+4400 end

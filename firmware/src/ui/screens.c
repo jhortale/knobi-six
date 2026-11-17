@@ -18,8 +18,8 @@
 #define SCR_WMAX 40                               /* widgets a screen at most */
 
 enum { W_END, W_HEAD, W_HVAL, W_FOOT, W_TITLE, W_RULE, W_HINT, W_KNOB, W_ENCBTN, W_LIST, W_SEGENC, W_PAD, W_ROWLED,
-       W_ROWSEL, W_ENVG, W_PROG, W_PROGBIG, W_NAME, W_BIGNAME, W_VOICES, W_DIAG, W_WORD, W_VER, W_BOOTTXT, W_VERTXT,
-       W_STATBTN };
+       W_ROWSEL, W_ENVG, W_PROG, W_DIGIT, W_NAME, W_BIGNAME, W_VOICES, W_DIAG, W_WORD, W_VER, W_BOOTTXT, W_VERTXT,
+       W_WSTAT };
 typedef struct {
     uint8_t t, x, y, w, h;
     uint8_t a;                                    /* encoder slot 0..6 (K2..K8) or top pad 0..7 */
@@ -112,24 +112,29 @@ static const wdg_t SCR_AT_W[] = {
 static const wdg_t SCR_PROGRAM_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "PROGRAM"},
-    {W_PROGBIG, 7, 44, 226, 52, 0, 0, 0},
-    {W_BIGNAME, 7, 104, 226, 32, 0, 0, 0},
-    {W_STATBTN, 7, 146, 226, 22, 0, 0, "WRITE (BT)"},
+    {W_DIGIT, 37, 42, 56, 50, 0, 0, "BANK"}, {W_DIGIT, 125, 42, 39, 50, 1, 0, "TENS"},
+    {W_DIGIT, 164, 42, 39, 50, 2, 0, "ONES"},
+    {W_BIGNAME, 7, 98, 226, 32, 0, 0, 0},
+    PAD(7, 136, 75, 22, 2, 2, "WRITE"), PAD(82, 136, 75, 22, 3, 2, "ENTER"), PAD(157, 136, 76, 22, 4, 2, "MANUAL"),
+    {W_WSTAT, 7, 166, 226, 20, 0, 0, 0},
     PADHINT(204), FOOTER, END};
 static const wdg_t SCR_GLOBALS_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "GLOBALS"},
-    {W_SEGENC, 7, 44, 56, 38, 0, 0, "MIDI CH"}, {W_LIST, 63, 44, 56, 38, 1, 0, "POT MODE"},
-    {W_LIST, 119, 44, 56, 38, 2, 0, "PARAM TX"}, {W_LIST, 175, 44, 58, 38, 3, 0, "PARAM RX"},
-    {W_DIAG, 7, 96, 226, 20, 0, 0, 0},
-    {W_VERTXT, 7, 124, 226, 9, 0, 0, 0},
+    {W_SEGENC, 7, 40, 56, 38, 0, 0, "MIDI CH"}, {W_LIST, 63, 40, 56, 38, 1, 0, "POT MODE"},
+    {W_LIST, 119, 40, 56, 38, 2, 0, "PARAM TX"}, {W_LIST, 175, 40, 58, 38, 3, 0, "PARAM RX"},
+    {W_SEGENC, 7, 81, 75, 38, 4, 0, "TRANSPOSE"}, {W_SEGENC, 82, 81, 75, 38, 5, 0, "TUNE"},
+    {W_SEGENC, 157, 81, 76, 38, 6, 0, "VEL CURVE"},
+    PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
+    PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
+    {W_DIAG, 7, 152, 226, 20, 0, 0, 0},
+    {W_VERTXT, 7, 178, 226, 9, 0, 0, 0},
     PADHINT(204), FOOTER, END};
 static const wdg_t *const SCR_W[SCR_COUNT] = {SCR_BOOT_W, SCR_PLAY_W, SCR_VCO_W, SCR_MIX_W, SCR_ENV_W, SCR_LFO_W,
                                               SCR_AT_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
 
 /* ---- state */
 static int scr_oct;                               /* the keys' octave (app.c sets it) */
-static int scr_prog;                              /* the program number on the 7-segment displays (Task 10) */
 static int scr_on = -1, scr_on_row;               /* the screen and row drawn */
 static uint32_t scr_strip = ~0u;                  /* a full redraw's next strip (done when past the screen) */
 static int32_t scr_cache[SCR_WMAX];               /* each widget's value as drawn */
@@ -152,18 +157,36 @@ static char *scr_num(char *d, int32_t v)
 /* ---- a binding's value, range and choices (params, globals, actions) */
 static const char *const SCR_POT[3] = {"RELATIVE", "PASSTHRU", "JUMP"};
 static const char *const SCR_TXRX[2] = {"OFF", "CC"};
+static const char *const SCR_ONOFF[2] = {"OFF", "ON"};
+static const char *const SCR_STEREO[2] = {"STEREO", "MONO"};
+static const char *const SCR_SUS[2] = {"N.O.", "N.C."};
+static int32_t scr_prog_shown(void) { return ctl_manual ? -1 : ctl_prog; }   /* the program on the displays, -1 MANUAL */
 static int32_t scr_val(uint16_t id)
 {
     if (id < P_COUNT_PHASE1) return scr_p->v[id];
     if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return ctl_glob[id & 0xFFu];
+    if (B_IS_PROG(id)) {                           /* a digit of the program (WRITE armed: of its destination) */
+        int32_t n = ctl_wr == 1 ? ctl_wr_dest : scr_prog_shown();
+        if (n < 0) return -1;
+        return (id & 0xFFu) == PRG_BANK ? n / 100 : (id & 0xFFu) == PRG_TENS ? n / 10 % 10 : n % 10;
+    }
     if (id == B_ACT(ACT_HOLD)) return ctl_hold;
+    if (id == B_ACT(ACT_WRITE)) return ctl_wr == 2 || (ctl_wr == 1 && (fm1_ms >> 8 & 1u));   /* armed: blinks */
+    if (id == B_ACT(ACT_ENTER)) return ctl_wr == 1;
+    if (id == B_ACT(ACT_MANUAL)) return ctl_manual;
     return 0;
 }
-static int32_t scr_lo(uint16_t id) { return id < P_COUNT_PHASE1 ? PARAMS[id].min : 0; }
+static int32_t scr_lo(uint16_t id)
+{
+    if (id < P_COUNT_PHASE1) return PARAMS[id].min;
+    if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return GLOB_MIN[id & 0xFFu];
+    return 0;
+}
 static int32_t scr_hi(uint16_t id)
 {
     if (id < P_COUNT_PHASE1) return PARAMS[id].max;
-    if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return CTL_GLOBAL_MAX[id & 0xFFu];
+    if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return GLOB_MAX[id & 0xFFu];
+    if (B_IS_PROG(id)) return (id & 0xFFu) == PRG_BANK ? (int32_t)PROG_BANKS - 1 : 9;
     return 1;
 }
 static const char *scr_choice(uint16_t id, int32_t v)   /* a select's choice, else 0 */
@@ -171,6 +194,9 @@ static const char *scr_choice(uint16_t id, int32_t v)   /* a select's choice, el
     if (id < P_COUNT_PHASE1) return PARAMS[id].kind == PK_SELECT ? PARAMS[id].labels[v - PARAMS[id].min] : 0;
     if (id == B_GLOBAL(G_POT_MODE)) return SCR_POT[v % 3];
     if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) return SCR_TXRX[v & 1];
+    if (id == B_GLOBAL(G_LOCAL)) return SCR_ONOFF[v & 1];
+    if (id == B_GLOBAL(G_STEREO)) return SCR_STEREO[v & 1];
+    if (id == B_GLOBAL(G_SUSTAIN)) return SCR_SUS[v & 1];
     return 0;
 }
 static void scr_label(char *d, const char *s, uint16_t id, int32_t v)   /* '%': the value */
@@ -213,7 +239,7 @@ static const char *scr_short(uint16_t id)          /* a fader's name in the foot
 static uint16_t scr_wid(int screen, int row, const wdg_t *w)
 {
     if (w->t == W_PAD) return ctl_binding(screen, w->b == 2 ? row : w->b)->pad_top[w->a & 7u];
-    if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC)
+    if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT)
         return ctl_binding(screen, row)->enc[w->a % 7u];
     return B_NONE;
 }
@@ -224,7 +250,7 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     uint16_t id = scr_wid(screen, row, w);
     uint32_t h = 0, i;
     switch (w->t) {
-    case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: return scr_val(id);
+    case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: return scr_val(id);
     case W_PAD: return scr_val(id) | (w->b == 2 || w->b == row) << 16;
     case W_ROWLED: case W_ROWSEL: return row;
     case W_HVAL: return (int32_t)((uint32_t)ctl_last_id << 16 ^ ((uint32_t)ctl_last_v & 0xFFFFu)) ^ (scr_oct + 2) << 12;
@@ -239,7 +265,10 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_NAME: case W_BIGNAME:
         for (i = 0; i < PROGRAM_NAME_LEN; i++) h = h * 31u + (uint8_t)scr_p->name[i];
         return (int32_t)h;
-    case W_PROG: case W_PROGBIG: return scr_prog;
+    case W_PROG: return scr_prog_shown();
+    case W_WSTAT:
+        return (int32_t)((uint32_t)ctl_wr | (uint32_t)ctl_wr_dest << 2 | (uint32_t)ctl_manual << 12 |
+                         (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16);
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + fm1_in.fader[i];
         return (int32_t)(h * 1031u + fm1_in.wheel[0] * 7u + fm1_in.wheel[1] * 65599u);
@@ -258,6 +287,9 @@ static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's disp
     } else if (id == B_GLOBAL(G_MIDI_CH)) {
         if (v) scr_num(d, v); else scr_cat(d, "ALL");
     } else if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) scr_cat(d, v ? "CC" : "OFF");
+    else if (id == B_GLOBAL(G_LOCAL)) scr_cat(d, v ? "On" : "OFF");
+    else if (id == B_GLOBAL(G_TRANSPOSE) || id == B_GLOBAL(G_TUNE) || id == B_GLOBAL(G_VEL_CURVE) ||
+             id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
     else if (id == B_ACT(ACT_HOLD)) scr_cat(d, v ? "On" : "OFF");
 }
@@ -357,9 +389,11 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         int active = v >> 16 & 1, on;
         int32_t val = (int32_t)(int16_t)(v & 0xFFFF);
         if (id < P_COUNT_PHASE1) on = val != PARAMS[id].min;
-        else on = id == B_ACT(ACT_HOLD) && val;
+        else if (B_IS_GLOBAL(id)) on = val != scr_lo(id);
+        else on = val != 0;                        /* HOLD, WRITE (blinks armed), ENTER (armed), MANUAL */
         pg_button(cx - 9, w->y + 1, 18, 8, on);
-        if (id < P_COUNT_PHASE1 && PARAMS[id].kind == PK_SELECT) {
+        if (B_IS_GLOBAL(id)) scr_label(t, w->s, id, val);
+        else if (id < P_COUNT_PHASE1 && PARAMS[id].kind == PK_SELECT) {
             int has = 0;
             for (i = 0; w->s[i]; i++) has |= w->s[i] == '%';
             if (has) scr_label(t, w->s, id, val);
@@ -379,25 +413,37 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_text(w->x + 130, w->y + 2, &FONT_XS, "LOUDNESS", v == 1 ? PC_WHITE : PC_FAINT);
         break;
     case W_ENVG: scr_envg(w, v); break;
-    case W_PROG:                                   /* bank . program, as the panel's display */
+    case W_PROG:                                   /* bank . program, as the panel's display (MANUAL: dashes) */
         x = pg_seg_w(1, 14, 24) + 6;
         pg_text(w->x + 1, w->y + 1, &FONT_XS, "BANK", PC_LABEL);
-        pg_text(w->x + x + 1, w->y + 1, &FONT_XS, "PROGRAM", PC_LABEL);
-        t[0] = (char)('0' + v / 100 % 10), t[1] = 0;
+        pg_text(w->x + x + 1, w->y + 1, &FONT_XS, v < 0 ? "MANUAL" : "PROGRAM", PC_LABEL);
+        t[0] = v < 0 ? '-' : (char)('0' + v / 100 % 10), t[1] = 0;
         pg_seg(w->x, w->y + 11, 1, 14, 24, 3, t);
-        t[0] = (char)('0' + v / 10 % 10), t[1] = (char)('0' + v % 10), t[2] = 0;
+        t[0] = v < 0 ? '-' : (char)('0' + v / 10 % 10), t[1] = v < 0 ? '-' : (char)('0' + v % 10), t[2] = 0;
         pg_seg(w->x + x, w->y + 11, 2, 14, 24, 3, t);
         break;
-    case W_PROGBIG:
-        t[0] = (char)('0' + v / 100 % 10), t[1] = 0;
+    case W_DIGIT:                                  /* a program digit, big, its encoder's name under it */
+        t[0] = v < 0 ? '-' : (char)('0' + v % 10), t[1] = 0;
         x = pg_seg_w(1, 18, 30);
-        pg_seg(w->x + 40, w->y, 1, 18, 30, 3, t);
-        pg_text_c(w->x + 40 + x / 2, w->y + 44, &FONT_XS, "BANK", PC_WHITE);
-        t[0] = (char)('0' + v / 10 % 10), t[1] = (char)('0' + v % 10), t[2] = 0;
-        x = pg_seg_w(2, 18, 30);
-        pg_seg(w->x + w->w - 40 - x, w->y, 2, 18, 30, 3, t);
-        pg_text_c(w->x + w->w - 40 - x / 2, w->y + 44, &FONT_XS, "PROGRAM", PC_WHITE);
+        pg_seg(cx - x / 2, w->y, 1, 18, 30, 3, t);
+        pg_text_c(cx, w->y + w->h - 6, &FONT_XS, w->s, PC_WHITE);
         break;
+    case W_WSTAT: {                                /* what WRITE / MANUAL are doing, in words */
+        char *q = t;
+        int32_t d = ctl_wr_dest;
+        if (ctl_wr == 1 || ctl_wr == 2) {
+            q = scr_cat(q, ctl_wr == 1 ? "WRITE TO " : "WRITING ");
+            *q++ = (char)('0' + d / 100), *q++ = '-', *q++ = (char)('0' + d / 10 % 10), *q++ = (char)('0' + d % 10), *q = 0;
+            if (ctl_wr == 1) scr_cat(q, "?");
+            pg_text_c(cx, w->y + 1, &FONT_XS, t, PC_WHITE);
+            if (ctl_wr == 1) pg_text_c(cx, w->y + 11, &FONT_XS, "ENTER: STORE   WRITE: CANCEL", PC_DIM);
+        } else if (ctl_manual) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "MANUAL: THE SOUND IS THE PANEL", PC_WHITE);
+        } else if (ctl_wr_rc) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : "WRITE FAILED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+        } else pg_text_c(cx, w->y + 1, &FONT_XS, "WRITE (OR BT) TO STORE THE SOUND", PC_DIM);
+        break;
+    }
     case W_NAME: case W_BIGNAME: {
         const felucca_font_t *f = w->t == W_NAME ? &FONT_S : &FONT_L;
         for (i = 0; i < PROGRAM_NAME_LEN && scr_p->name[i]; i++) t[i] = scr_p->name[i];
@@ -438,10 +484,6 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_VERTXT:
         scr_cat(scr_cat(t, "KNOBI-SIX " APP_VER "  "), FELUCCA_ID);
         pg_text_c(cx, w->y + 1, &FONT_XS, t, PC_FAINT);
-        break;
-    case W_STATBTN:                                /* (Task 10: WRITE on BT) */
-        pg_button(cx - 11, w->y + 1, 22, 10, 0);
-        pg_text_c(cx, w->y + 14, &FONT_XS, w->s, PC_DIM);
         break;
     }
 }
@@ -523,18 +565,19 @@ static int screen_check(void)
                 int32_t lim = w->w;
                 if (i >= SCR_WMAX) SCR_BAD;
                 if (w->x + w->w > 240 || w->y + w->h > 240) SCR_BAD;
-                if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC) {
-                    int kind = id < P_COUNT_PHASE1 ? PARAMS[id].kind : B_IS_GLOBAL(id) ? PK_SELECT : -1;
+                if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT) {
+                    int kind = id < P_COUNT_PHASE1 ? PARAMS[id].kind : B_IS_GLOBAL(id) || B_IS_PROG(id) ? PK_SELECT : -1;
                     if (w->a != n++ || id == B_NONE) SCR_BAD;
                     if ((w->t == W_KNOB) != (kind == PK_KNOB) || (w->t == W_ENCBTN) != (kind == PK_SWITCH)) SCR_BAD;
-                    if (w->t == W_SEGENC && id != B_GLOBAL(G_MIDI_CH)) SCR_BAD;
+                    if (w->t == W_SEGENC && !B_IS_GLOBAL(id)) SCR_BAD;
+                    if ((w->t == W_DIGIT) != (B_IS_PROG(id) != 0)) SCR_BAD;
                 }
                 if (w->t == W_PAD && (w->b == 2 || w->b == row)) {
                     if (id == B_NONE) SCR_BAD;
                     padseen |= 1u << w->a;
                 }
                 if (w->s && (w->t == W_KNOB || w->t == W_PAD || w->t == W_LIST || w->t == W_ENCBTN || w->t == W_SEGENC ||
-                             w->t == W_HINT)) {
+                             w->t == W_HINT || w->t == W_DIGIT)) {
                     int32_t v, lo = id != B_NONE ? scr_lo(id) : 0, hi = id != B_NONE ? scr_hi(id) : 0;
                     for (v = lo; v <= hi; v++) {
                         if (w->t == W_PAD && id < P_COUNT_PHASE1 && PARAMS[id].kind == PK_SELECT) {

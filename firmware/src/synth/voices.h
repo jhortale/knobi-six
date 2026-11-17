@@ -33,7 +33,8 @@
  *
  * Smoothing (no zipper): FILTER FREQ, RESONANCE, MODE, the BP switch, the shapes and widths, the four mixer levels,
  * PROGRAM VOLUME and PAN SPREAD glide to a new value with a one-pole at control rate, time constant 16 ticks = 5.8 ms
- * (BP and MODE jumps become crossfades). synth_program snaps them.
+ * (BP and MODE jumps become crossfades). synth_program snaps them when nothing sounds; with voices still sounding
+ * (a program change under held notes: they release) they glide like an edit, so the change does not click.
  *
  * Output: synth_render ADDS its stereo frames (L R int32 pairs, Q15 full scale 32767) into lr. Per-voice gain
  * SYNTH_VOICE_GAIN x PROGRAM VOLUME / 127, constant-power pan (centre: -3 dB each side): a 6-note chord of the init
@@ -69,6 +70,7 @@ struct synth {
     uint8_t nstack;
     int16_t mono;                         /* unison: the sounding key, -1 none */
     int32_t last_pitch;                   /* the latest note-on's key, Q16: where a new poly voice glides from */
+    int32_t tune;                         /* the globals TRANSPOSE + TUNE, Q16 semitones (added like the bend) */
     uint8_t hold, ctl_left, rates_dirty;
 };
 
@@ -83,6 +85,7 @@ void synth_pressure(synth_t *s, int v);             /* 0..127 */
 void synth_panic(synth_t *s);                       /* every voice silent now, keys and HOLD cleared */
 void synth_all_notes_off(synth_t *s);               /* every note released (envelopes release), HOLD unchanged */
 void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times PROGRAM VOLUME, smoothed */
+void synth_tune(synth_t *s, int cents);             /* master transpose + tune, -1250..+1250 cents, both VCOs */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
 

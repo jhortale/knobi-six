@@ -401,6 +401,44 @@ static void midi_volume(void)
     CHECK(fabs((double)half / full - 64.0 / 127.0) < 0.03 && jump <= 2 * steady && kept == 64);
 }
 
+/* WRITE's fade (engine.c): out to exact silence in ENG_FADE_MS along a line (no step larger than the sound's own),
+ * eng_faded() once two whole blocks went out silent, back to full in the same time; the synth plays on underneath.
+ * And the master tune (the globals TRANSPOSE + TUNE) reaches the synth, clamped to +-1250 cents */
+static void fade_and_tune(void)
+{
+    eng_init();
+    eng_param(P_FLT_FREQ, 80);                     /* a smooth wave: a step would stand out */
+    eng_note(60, 100);
+    render(FS / 4);
+    int32_t peak = 0, steady = max_step(FS / 8, FS / 4), after = 0, rest = 0, ramp, back = 0;
+    for (uint32_t i = FS / 8; i < FS / 4; i++) if (abs(OUT[2 * i]) > peak) peak = abs(OUT[2 * i]);
+    eng_fade(1);
+    render(BLK);
+    int early = eng_faded();
+    render(4 * BLK);                               /* (OUT from 0 again: 4 blocks of the fade) */
+    int faded = eng_faded();
+    for (uint32_t i = BLK; i < 4 * BLK; i++) rest |= OUT[2 * i] | OUT[2 * i + 1];   /* (the line ends in block 2) */
+    eng_fade(0);
+    render(2 * BLK);
+    ramp = max_step(0, 2 * BLK);
+    for (uint32_t i = 0; i < 2 * BLK; i++) if (i >= 443 && abs(OUT[2 * i]) > back) back = abs(OUT[2 * i]);
+    render(FS / 8);
+    for (uint32_t i = 0; i < FS / 8; i++) if (abs(OUT[2 * i]) > after) after = abs(OUT[2 * i]);
+    int voices = eng_active();
+    eng_tune(1200);
+    render(BLK);
+    int32_t t12 = eng_synth.tune;
+    eng_tune(5000);
+    render(BLK);
+    int32_t tmax = eng_synth.tune;
+    printf("fade_and_tune: peak %d (steady step %d); faded after 1 block %d, after 5 %d, silent %d; back: step %d, peak %d "
+           "then %d; voices %d; tune +1200 c -> %d (Q16), +5000 -> %d\n", peak, steady, early, faded, rest == 0, ramp, back,
+           after, voices, t12, tmax);
+    CHECK(!early && faded && rest == 0 && ramp <= steady + steady / 4 && voices == 1);
+    CHECK(after > peak * 9 / 10 && after < peak * 11 / 10 && back > peak * 8 / 10);
+    CHECK(t12 == 12 * 65536 && tmax == 1250 * 65536 / 100);
+}
+
 int main(void)
 {
     voice_worst_case_bounded();
@@ -413,6 +451,7 @@ int main(void)
     queue_panic_before_note();
     all_notes_off_releases();
     midi_volume();
+    fade_and_tune();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;

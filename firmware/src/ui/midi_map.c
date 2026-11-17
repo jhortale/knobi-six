@@ -6,7 +6,9 @@
  * In (controls_midi, main loop; the channel: global MIDI CH, 0 = ALL): notes (velocity; note-off velocity ignored),
  * channel pressure (aftertouch, with the bottom pads': the higher), pitch bend (added to the pitch wheel's), CC 1 mod
  * wheel (with the panel's: the higher), CC 7 volume (times PROGRAM VOLUME, smoothed; master volume after), CC 64
- * sustain (= HOLD while down), CC 0 / 32 bank select and program change (Task 10: a stub records the request), CC 120
+ * sustain (= HOLD while down; the global SUSTAIN N.C. reads it upside down), CC 32 bank select (0..PROG_BANKS-1, the
+ * next program change's bank; CC 0 is ignored: one bank byte is all 5 banks need, as the OB-6 receives CC 32) and
+ * program change (0..99 in that bank, else the current program's bank; ignored in MANUAL), CC 120
  * all sound off (PANIC), CC 123 all notes off (every note released, HOLD unchanged), CC 121 reset controllers (not
  * volume, as MIDI's RP-015), CC 4 (foot controller) ignored in phase 1 (the reference lists it, not its effect), and with
  * PARAM RX = CC the map's CCs (0..127 over the param's range, bipolar 64 = 0). A CC received is not sent back.
@@ -62,8 +64,14 @@ static void midi_cc_send(uint16_t id, int32_t v)
     midi_send(0xB0u | controls_tx_ch(), cc, x);
 }
 
-/* program change and bank select: Task 10 loads programs; until then the request is only recorded */
-static void ctl_program_change(int32_t bank, int32_t prog) { ctl_prg_bank = bank, ctl_prg_req = prog; }
+/* program change: program prog (0..99) of bank (CC 32's, -1: the current program's) */
+static void ctl_program_change(int32_t bank, int32_t prog)
+{
+    ctl_prg_bank = bank, ctl_prg_req = prog;
+    if (bank < 0) bank = ctl_prog / 100;
+    if (ctl_manual || bank >= (int32_t)PROG_BANKS || prog < 0 || prog > 99) return;
+    ctl_prog_select(bank * 100 + prog);
+}
 
 void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
 {
@@ -82,9 +90,10 @@ void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
     case 0xE0u: ctl_midi_bend = (int32_t)(d2 << 7 | d1) - 8192; break;
     case 0xC0u: ctl_program_change(ctl_bank_sel, (int32_t)d1); break;
     case 0xB0u:
-        if (d1 == 0u || d1 == 32u) ctl_bank_sel = (int32_t)d2;
+        if (d1 == 32u) ctl_bank_sel = (int32_t)d2;
+        else if (d1 == 0u) { }                         /* bank select MSB: ignored (CC 32 alone picks the bank) */
         else if (d1 == 1u) ctl_midi_wheel = (uint8_t)d2;
-        else if (d1 == 64u) ctl_sustain = d2 >= 64u;
+        else if (d1 == 64u) ctl_sustain = (d2 >= 64u) != (ctl_glob[G_SUSTAIN] != 0);   /* N.C.: upside down */
         else if (d1 == 7u) ctl_midi_vol = (uint8_t)d2;
         else if (d1 == 120u) { eng_panic(); ctl_hold = ctl_sustain = 0; }   /* all sound off: silence, HOLD off */
         else if (d1 == 123u) eng_all_notes_off();       /* all notes off: released; HOLD (pad, sustain) unchanged */

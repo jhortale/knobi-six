@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include "params/params.c"
 #define CONTROLS_PURE 1
+#define GLOBALS_PURE 1
+#include "params/globals.c"
 #include "ui/controls.c"
 #include "ui/midi_map.c"
 
@@ -15,8 +17,8 @@ static int fails;
 
 static int is_param(uint16_t b) { return b < P_COUNT_PHASE1; }
 
-/* every binding is a param, a global, an action or nothing; faders only take knobs; top pads only switches, selects
- * and actions; at most 7 encoders (the struct) and every phase-1 param reachable from some screen */
+/* every binding is a param, a global, a program digit (encoders), an action or nothing; faders only take knobs; top
+ * pads only switches, selects, globals and actions; at most 7 encoders (the struct) and every phase-1 param reachable from some screen */
 static void bindings_valid(void)
 {
     uint8_t seen[P_COUNT_PHASE1] = {0};
@@ -27,7 +29,8 @@ static void bindings_valid(void)
             for (int i = 0; i < 7; i++) {
                 uint16_t x = b->enc[i];
                 if (is_param(x)) seen[x] = 1;
-                else if (x != B_NONE && !(B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT)) bad++, printf("  enc %d.%d.%d %x\n", s, r, i, x);
+                else if (x != B_NONE && !(B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) && !(B_IS_PROG(x) && (x & 0xFFu) < PRG_COUNT))
+                    bad++, printf("  enc %d.%d.%d %x\n", s, r, i, x);
             }
             for (int i = 0; i < 4; i++) {
                 uint16_t x = b->fader[i];
@@ -37,7 +40,8 @@ static void bindings_valid(void)
             for (int i = 0; i < 8; i++) {
                 uint16_t x = b->pad_top[i];
                 if (is_param(x) && PARAMS[x].kind != PK_KNOB) seen[x] = 1;
-                else if (x != B_NONE && !(B_IS_ACT(x) && (x & 0xFFu) < ACT_COUNT)) bad++, printf("  pad %d.%d.%d %x\n", s, r, i, x);
+                else if (x != B_NONE && !(B_IS_ACT(x) && (x & 0xFFu) < ACT_COUNT) && !(B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT))
+                    bad++, printf("  pad %d.%d.%d %x\n", s, r, i, x);
             }
         }
     int missing = 0;
@@ -67,6 +71,20 @@ static void encoder_steps(void)
            sw_stay, sel, sel0, gpot, gch);
     CHECK(k255 == 102 && k255f == 108 && k60 == 21 && top == 255 && bot == -127);
     CHECK(sw_on == 1 && sw_off == 0 && sw_stay == 1 && sel == 4 && sel0 == 0 && gpot == 2 && gch == 16);
+}
+
+/* the program digits (Program screen K2 K3 K4): bank 0..PROG_BANKS-1, tens and ones 0..9, each clamps; every global's
+ * pad cycles through its range */
+static void program_digits(void)
+{
+    int a = ctl_prog_digit(123, PRG_TENS, 5), b = ctl_prog_digit(123, PRG_BANK, 9), c = ctl_prog_digit(123, PRG_ONES, -9);
+    int d = ctl_prog_digit(0, PRG_BANK, -1), e = ctl_prog_digit(499, PRG_ONES, 3), f = ctl_prog_digit(7, PRG_TENS, 1);
+    int g = ctl_pad_value(B_GLOBAL(G_LOCAL), 1), h = ctl_pad_value(B_GLOBAL(G_AT_CURVE), 3), k = ctl_pad_value(B_GLOBAL(G_AT_CURVE), 1);
+    int m = ctl_enc_value(B_GLOBAL(G_TRANSPOSE), 0, -20, 0), q = ctl_enc_value(B_GLOBAL(G_TUNE), 49, 3, 1);
+    printf("program_digits: 123 tens +5 -> %d, bank +9 -> %d, ones -9 -> %d; 0 bank -1 -> %d; 499 ones +3 -> %d; 7 tens +1 -> %d;"
+           " LOCAL 1 -> %d, AT CURVE 3 -> %d, 1 -> %d; TRANSPOSE 0 -20 -> %d, TUNE 49 +3 -> %d\n", a, b, c, d, e, f, g, h, k, m, q);
+    CHECK(a == 173 && b == (int)(PROG_BANKS - 1) * 100 + 23 && c == 120 && d == 0 && e == 499 && f == 17);
+    CHECK(g == 0 && h == 0 && k == 2 && m == -12 && q == 50);
 }
 
 /* a top pad: a switch toggles, a select cycles (wrapping) */
@@ -182,6 +200,7 @@ int main(void)
     bindings_valid();
     encoder_steps();
     pad_switches();
+    program_digits();
     seven_bit_map();
     pot_modes();
     pad_aftertouch();

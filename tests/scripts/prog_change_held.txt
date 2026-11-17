@@ -1,0 +1,65 @@
+# Review Focus 3: a program change while a chord is held, and while HOLD latches a drone: no stuck voice; the held
+# notes release cleanly (the change releases every note, as synth_program does) with no click: tests/wav_check.py
+# (run by tests/run_tests.sh) checks the steps of the waveform around each change. Program 1 is written first (while
+# silent): the filter at 100 (a smooth waveform, so a click stands out) and PROGRAM VOLUME 50; the edit then goes back
+# to volume 127, so the change jumps the level of the sounding voices.
+50 btn 12
+100 vel 100
+110 expect 0 set 14 100
+110 expect 0 set 60 50
+150 btn 11
+200 enc 3 1
+250 pad 3 100
+260 pad 3 0
+500 expect 1 writes
+500 expect 1 prog
+500 expect 50 stored 1 60
+520 btn 12
+550 expect 0 set 60 127
+# a chord held, MIDI program change 1 (bank 0)
+600 keys 0x91
+1000 expect 3 voices
+1000 midi 0xC0 1 0
+1010 expect 1 prog
+1010 expect 50 param 60
+1010 expect 0 sounding 53
+1010 expect 0 sounding 57
+1010 expect 0 sounding 60
+# the keys are still down; another key plays, then all go up: everything ends
+1300 keys 0x95
+1350 expect 1 sounding 55
+1600 keys 0
+1900 expect 0 voices
+# HOLD latches a chord, the program changes under it: released, nothing left latched
+2000 expect 0 set 60 127
+2050 keys 0x91
+2100 pad 3 100
+2110 pad 3 0
+2150 keys 0
+2200 expect 3 voices
+2500 midi 0xC0 1 0
+2510 expect 0 sounding 60
+2510 expect 1 holdpad
+2800 expect 0 voices
+2900 keys 0x80
+2950 keys 0
+3000 expect 1 sounding 60
+3100 pad 3 100
+3110 pad 3 0
+3500 expect 0 voices
+# the globals (the program now 1) were saved once, while silent (2528 ms, the program change released the drone)
+3550 expect 1 saves
+# MANUAL (Program screen pad 4): the program shows as -1, MIDI program change is ignored; turning a digit loads
+3600 btn 10
+3650 btn 2
+3700 expect 7 screen
+3750 pad 4 100
+3760 pad 4 0
+3800 expect -1 prog
+3800 shot
+3850 midi 0xC0 3 0
+3900 expect -1 prog
+3950 enc 3 2
+4000 expect 3 prog
+4000 expect 164 param 14
+4100 end

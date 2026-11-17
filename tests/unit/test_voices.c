@@ -483,7 +483,8 @@ static void free_resets(void)
     CHECK(synth_active(&S) == 0 && S.voice[v].svf.s1 == 0 && S.voice[v].svf.s2 == 0 && mx == 0);
 }
 
-/* parameter smoothing: FREQ, MODE, BP jumps glide (time constant ~5.8 ms); synth_program snaps */
+/* parameter smoothing: FREQ, MODE, BP jumps glide (time constant ~5.8 ms); synth_program snaps when nothing sounds,
+ * and glides like an edit while voices still sound (a program change under held notes: they release, no click) */
 static void smoothing(void)
 {
     fresh();
@@ -501,10 +502,19 @@ static void smoothing(void)
     CHECK(c1 > 150 && c1 < 160 && m1 > 10 && m1 < 25 && b1 > 1000 && b1 < 3000);
     CHECK(t63 * 16000.0 / FS > 4.5 && t63 * 16000.0 / FS < 7);
     CHECK(S.ctx.cut == 0 && S.ctx.mode == 255 * 65536 && S.ctx.bp == 32768);
-    /* a program load snaps */
+    /* a program load while the note sounds glides; with nothing sounding it snaps */
     program_t p;
     program_init(&p);
     synth_program(&S, &p);
+    int32_t g0 = S.ctx.cut;
+    run(VOICE_CTL);
+    int32_t g1 = S.ctx.cut;
+    synth_panic(&S);
+    set(P_FLT_FREQ, 0);
+    synth_program(&S, &p);
+    printf("smoothing: program load under a sounding note: cut %d -> %d after a tick (glides); silent: snapped to %d\n",
+           g0 >> 16, g1 >> 16, S.ctx.cut >> 16);
+    CHECK(g0 == 0 && g1 > 0 && g1 < 164 * 65536);
     CHECK(S.ctx.cut == 164 * 65536 && S.ctx.mode == 0 && S.ctx.bp == 0);
 }
 

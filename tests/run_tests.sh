@@ -32,6 +32,13 @@ run "faders through the pot mode: passthru, jump, relative (expect)" sh tests/ru
 run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change stub (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
 run "chord memory: hold CHORD and play, the chord plays from a key (expect)" sh tests/run_host.sh tests/scripts/chord_memory.txt
 run "the screens: every one drawn and shot, the bindings drawn, only what changed redrawn (expect)" sh tests/run_host.sh tests/scripts/screens.txt
+run "the globals: transpose, tune, velocity curve, LOCAL, MONO, sustain polarity, AT curve; saved while silent (expect)" sh tests/run_host.sh tests/scripts/globals.txt
+run "Review Focus 3: WRITE during a HOLD drone: stored, the drone sounds on (expect)" sh tests/run_host.sh tests/scripts/write_held.txt
+run "Review Focus 3: WRITE's WAV: no click, only the deliberate fade (10 ms out, 10 ms in) around the save's silence" \
+    python3 tests/wav_check.py build/host/app.wav --steady 600 1450 --check 1450 2050 --fade-max 25 --gap-max 300
+run "Review Focus 3: program change under a held chord and a HOLD drone, MANUAL: nothing sticks (expect)" sh tests/run_host.sh tests/scripts/prog_change_held.txt
+run "Review Focus 3: the program change under the chord: no click" python3 tests/wav_check.py build/host/app.wav --steady 700 990 --check 990 1300
+run "Review Focus 3: the program change under the HOLD drone: no click" python3 tests/wav_check.py build/host/app.wav --steady 2250 2490 --check 2490 2800
 
 $CC -DBOARD_SMK37=1 -Ifirmware/hal -o "$OUT/smk_flash_test" tests/smk_flash_test.c
 run "SMK-37 flash map: settings, blobs, owner tag, slots in the store; never the head, BTIF/USRTRIM, USR, key_mac" "$OUT/smk_flash_test"

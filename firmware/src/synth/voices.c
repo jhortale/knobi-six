@@ -70,7 +70,7 @@ static void synth_derive(synth_t *s)
     c->detune = v[P_DETUNE] * v[P_DETUNE] * VOICE_DETUNE_MAX / (127 * 127);
     /* bend: +-range at the ends (8191 up, 8192 down), Q16 semitones */
     int32_t d = s->bend14 - 8192, r = v[P_BEND_RANGE];
-    c->bend = d >= 0 ? d * r * 8 + d * r * 8 / 8191 : d * r * 8;
+    c->bend = (d >= 0 ? d * r * 8 + d * r * 8 / 8191 : d * r * 8) + s->tune;   /* (+ the master tune: the globals) */
 }
 
 static void synth_rates(synth_t *s)
@@ -300,18 +300,19 @@ static void synth_mono_follow(synth_t *s)
 
 void synth_program(synth_t *s, const program_t *p)
 {
+    int sounding = synth_active(s);   /* voices still sounding (they release now): glide to the new values, no click */
     synth_all_off(s);
     s->last_pitch = VOICE_NO_PITCH;   /* a new program does not glide from the old one's notes */
     s->prog = *p;
     for (unsigned i = 0; i < P_COUNT_PHASE1; i++) s->prog.v[i] = param_clamp((uint16_t)i, p->v[i]);
     synth_targets(s);
-    for (int i = 0; i < SM_COUNT; i++) s->sm[i] = s->tgt[i];
+    if (!sounding) for (int i = 0; i < SM_COUNT; i++) s->sm[i] = s->tgt[i];
     synth_rates(s);
     synth_xmod(s);
     synth_lfo_set(s);
     s->ctx.kres = 0;
     synth_derive(s);
-    for (int i = 0; i < 4; i++) s->ctx.lvl0[i] = s->ctx.lvl[i];   /* snapped: no ramp */
+    if (!sounding) for (int i = 0; i < 4; i++) s->ctx.lvl0[i] = s->ctx.lvl[i];   /* snapped: no ramp */
 }
 
 void synth_init(synth_t *s)
@@ -391,6 +392,8 @@ void synth_volume(synth_t *s, int v)
     s->midi_vol = synth_clampi(v, 0, 127);
     s->tgt[SM_VOL] = s->prog.v[P_PRG_VOL] * s->midi_vol * 65536 / 127;   /* glides like PROGRAM VOLUME (no zipper) */
 }
+
+void synth_tune(synth_t *s, int cents) { s->tune = synth_clampi(cents, -1250, 1250) * 65536 / 100; }
 
 void synth_panic(synth_t *s)
 {

@@ -12,9 +12,10 @@ SysEx come later.
 | channel pressure | aftertouch; the synth gets the higher of it and the bottom pads' pressure |
 | pitch bend | added to the pitch wheel's bend (±BEND RANGE at the ends) |
 | CC 1 | mod wheel (the higher of it and the panel's wheel); only adds LFO depth |
-| CC 64 | sustain: ≥ 64 = HOLD on (with the HOLD pad: either) |
-| CC 0, CC 32 | bank select (the next program change's bank) |
-| program change | Task 10 loads programs; until then the request is only recorded |
+| CC 64 | sustain: ≥ 64 = HOLD on (with the HOLD pad: either); the global SUSTAIN = N.C. reads it upside down (< 64 = on) |
+| CC 32 | bank select 0..4: the next program change's bank (kept until another CC 32; before any, the current program's bank). 5 and up: the program change is ignored |
+| CC 0 | ignored: CC 32 alone picks the bank (as the OB-6 receives it; 5 banks need no second byte) |
+| program change | 0..99: that program of the bank, loaded (notes sounding release, no click); ignored in MANUAL |
 | CC 7 | volume: times PROGRAM VOLUME (the master volume, K1, after both); glides like PROGRAM VOLUME (no zipper); kept across program changes; 127 at power-on |
 | CC 120 | all sound off: PANIC (every voice silent at once, HOLD off) |
 | CC 123 | all notes off: every note released (the envelopes run their release); HOLD (pad or sustain) stays as it is |

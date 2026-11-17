@@ -9,7 +9,7 @@
  * stores the event, then (compiler barrier) advances eng_qw; the consumer reads eng_qw once, applies up to it, then
  * advances eng_qr. One core: an interrupt sees either the old index or the new one, never half an event. Events:
  * note on/off, param edit, bend, mod wheel, pressure, HOLD, panic, program load, chord memory slot, all notes off
- * (released, HOLD unchanged), MIDI volume.
+ * (released, HOLD unchanged), MIDI volume, master tune (the globals TRANSPOSE + TUNE, cents).
  * Overflow policy: the consumer empties the queue at every block (5.8 ms), so it fills only if more than 256 events
  * arrive within one block (37 keys pressed and released together are 74). Nothing that would leave the synth wrong is
  * ever lost:
@@ -37,7 +37,13 @@
  *
  * Main-loop side: eng_edit is the producer's copy of the program in play (what the queue will have applied once it
  * drains): screens and probes read it, never the synth. eng_voices: voices sounding after the last block (consumer).
- * The audio side does nothing until eng_init has set the synth up (eng_ready), so app_audio may start first. */
+ * The audio side does nothing until eng_init has set the synth up (eng_ready), so app_audio may start first.
+ *
+ * The output fade (WRITE's deliberate dropout, ui/controls.c): eng_fade(1) asks the consumer to take the output to
+ * silence along a straight line of ENG_FADE_MS (10 ms), eng_fade(0) back to full; the synth plays on underneath.
+ * eng_faded() is true once ENG_FADE_QUIET whole blocks have gone out silent (both halves of the audio DMA's double
+ * buffer hold zeros): a flash erase that holds the interrupts off then stalls on silence, not mid-waveform. The fade
+ * scales what eng_render added into lr (app_audio's buffer starts at zero). */
 #ifndef KNOBI_ENGINE_C
 #define KNOBI_ENGINE_C
 #include <stdint.h>
@@ -46,7 +52,8 @@
 #define ENG_RESERVE 64u                   /* the last slots: note-offs, HOLD and PANIC only */
 #define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
-enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME };
+enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME,
+       EV_TUNE };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383;
                                                               CHORD a slot 0..5 b note (0 = empty) */
 
@@ -56,7 +63,14 @@ static volatile uint32_t eng_qw, eng_qr, eng_drops;
 static program_t eng_pbuf, eng_edit;
 static volatile uint32_t eng_pw, eng_pr;
 static volatile uint8_t eng_ready, eng_voices;
-static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127;
+static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127, eng_last_tune;
+#define ENG_FADE_ONE 32768                /* the fade's gain, Q15 */
+#define ENG_FADE_MS 10
+#define ENG_FADE_STEP (ENG_FADE_ONE / (ENG_FADE_MS * 441 / 10))   /* a frame: 74 -> 443 frames = 10.0 ms */
+#define ENG_FADE_QUIET 2u                 /* whole silent blocks before eng_faded() */
+static volatile uint8_t eng_fade_out;     /* producer: 1 = to silence */
+static volatile int32_t eng_fade_g = ENG_FADE_ONE;   /* consumer: the gain now */
+static volatile uint8_t eng_fade_quiet;   /* consumer: whole blocks gone out at gain 0 (saturates) */
 
 static uint32_t eng_off_pend[4];          /* note-offs waiting for room: bit n = note n (producer only) */
 static uint32_t eng_par_pend[(P_COUNT_PHASE1 + 31u) / 32u];   /* param ids whose latest eng_edit value is not queued */
@@ -89,7 +103,8 @@ static void eng_init(void)                /* the init program; call before audio
     for (unsigned i = 0; i < sizeof eng_par_pend / sizeof eng_par_pend[0]; i++) eng_par_pend[i] = 0;
     eng_panic_pend = eng_alloff_pend = eng_chord_pend = 0;
     eng_voices = 0;
-    eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127;
+    eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127, eng_last_tune = 0;
+    eng_fade_out = 0, eng_fade_g = ENG_FADE_ONE, eng_fade_quiet = 0;
     ENG_BARRIER();
     eng_ready = 1;
 }
@@ -143,6 +158,9 @@ static int eng_wheel(int32_t v) { return eng_level(EV_WHEEL, &eng_last_wheel, v 
 static int eng_pressure(int32_t v) { return eng_level(EV_PRESSURE, &eng_last_press, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_volume(int32_t v) { return eng_level(EV_VOLUME, &eng_last_vol, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_hold(int on) { return eng_level(EV_HOLD, &eng_last_hold, on != 0, 0); }
+static int eng_tune(int32_t cents) { return eng_level(EV_TUNE, &eng_last_tune, cents < -1250 ? -1250 : cents > 1250 ? 1250 : cents, ENG_RESERVE); }
+static void eng_fade(int out) { eng_fade_out = (uint8_t)(out != 0); }
+static int eng_faded(void) { return eng_fade_out && eng_fade_quiet >= ENG_FADE_QUIET; }
 static int eng_panic(void)                /* 0 queued, 1 kept for eng_flush */
 {
     eng_last_hold = 0;                    /* (panic clears HOLD) */
@@ -220,6 +238,7 @@ static void eng_drain(void)
         case EV_PANIC: synth_panic(&eng_synth); break;
         case EV_ALLOFF: synth_all_notes_off(&eng_synth); break;
         case EV_VOLUME: synth_volume(&eng_synth, e->b); break;
+        case EV_TUNE: synth_tune(&eng_synth, e->b); break;
         case EV_CHORD: if (e->a < 6u) eng_synth.prog.chord[e->a] = (uint8_t)e->b; break;
         case EV_PROGRAM:
             synth_program(&eng_synth, &eng_pbuf);
@@ -231,11 +250,26 @@ static void eng_drain(void)
     ENG_BARRIER();
     eng_qr = r;
 }
-static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 */
+static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
 {
+    int32_t g = eng_fade_g, tgt;
     if (!eng_ready) return;
     eng_drain();
     synth_render(&eng_synth, lr, frames);
     eng_voices = (uint8_t)synth_active(&eng_synth);
+    tgt = eng_fade_out ? 0 : ENG_FADE_ONE;
+    if (g == ENG_FADE_ONE && tgt == ENG_FADE_ONE) return;   /* (the usual case: nothing to do) */
+    if (g == 0 && tgt == 0) {                  /* silent the whole block */
+        for (uint32_t i = 0; i < 2u * frames; i++) lr[i] = 0;
+        if (eng_fade_quiet < 255u) eng_fade_quiet = (uint8_t)(eng_fade_quiet + 1u);
+        return;
+    }
+    eng_fade_quiet = 0;
+    for (uint32_t i = 0; i < frames; i++) {    /* a straight line to the target, a step a frame */
+        g = g < tgt ? (g + ENG_FADE_STEP > tgt ? tgt : g + ENG_FADE_STEP) : g > tgt ? (g - ENG_FADE_STEP < tgt ? tgt : g - ENG_FADE_STEP) : g;
+        lr[2u * i] = lr[2u * i] * g >> 15;
+        lr[2u * i + 1u] = lr[2u * i + 1u] * g >> 15;
+    }
+    eng_fade_g = g;
 }
 #endif

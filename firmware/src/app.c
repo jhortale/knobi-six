@@ -3,20 +3,24 @@
  * below does the rest: updates, the USB rescue, MIDI, USB audio, the keys, pads, knobs, faders, wheels, LEDs, the
  * screen, flash).
  *
- *   keys       the synth (synth/, engine.c), with the key's velocity; the notes go out over USB-MIDI (MIDI CH)
- *   OCTAVE-/+  the octave, -2..+2 (kept in flash: settings_save)
+ *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global; the notes go out
+ *              over USB-MIDI (MIDI CH); LOCAL OFF: MIDI only
+ *   OCTAVE-/+  the octave, -2..+2 (kept in flash with the globals)
  *   K1         the volume (platform.c)
  *   K2..K8, faders, pads, the other buttons: ui/controls.c (the map: docs/CONTROLS.md): the screen's knobs, the
  *              faders through the pot mode, top pads = switches, bottom pads = pressure (aftertouch), sections
  *   pitch      the wheel bends +-BEND RANGE (the program's) at its ends (plus MIDI pitch bend)
  *   mod wheel  0..127: adds LFO depth (the higher of it and MIDI CC 1)
  *   buttons    lit while held
- *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), program change (Task 10 stub)
+ *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change
+ *   programs   params/store_prog.c: 500 in the flash slots (bank / tens / ones), WRITE (fade out, save, fade in),
+ *              MANUAL; the globals (params/globals.c) and the last program in the settings sector, saved while silent
  *   screen     the panels (ui/screens.c, panel_gfx.c): a screen a section, its knobs, switches and faders as bound;
  *              the header shows the octave and the last value edited; Globals shows the raw wheels and faders
  *
  * The synth is not thread-safe: the main loop talks to it only through engine.c's event queue (eng_*), which
- * app_audio drains before each render. The program at boot: program_init (every default).
+ * app_audio drains before each render. The program at boot: the last one loaded (the globals), else program 0;
+ * nothing stored there: program_init (every default).
  * Rules of the road (the chip has no FPU and no libgcc): integers only, no float, no 64-bit division.
  * tests/run_host.sh runs this file on a computer: the screen as PNG, the sound as WAV.
  * What platform.c offers: docs/API.md. The chip's rules: docs/RULES.md. */
@@ -32,6 +36,8 @@ static void app_idle(void);
 
 /* ---- the sound: the synth, through the event queue (engine.c); app_audio runs in the audio ISR */
 #include "params/params.c"
+#include "params/store_prog.c"                  /* programs in the flash slots */
+#include "params/globals.c"                     /* the globals in the settings sector */
 #include "synth/osc.c"
 #include "synth/filter.c"
 #include "synth/env.c"
@@ -44,14 +50,17 @@ static void app_idle(void);
 #include "ui/panel_gfx.c"                       /* the panel's drawing parts: knobs, 7-segment digits, wood... */
 #include "ui/screens.c"                         /* the screens (after controls.c: they show its bindings) */
 
+static volatile uint8_t app_mono;               /* the STEREO global = MONO: both sides the sum (main loop sets it) */
 static void app_audio(int32_t *out, uint32_t n)
 {
-    eng_render(out, n);                         /* the queued events, then n frames added into out */
+    eng_render(out, n);                         /* the queued events, then n frames added into out (WRITE's fade) */
+    if (app_mono)
+        for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
 }
 
 /* ---- notes (main loop) */
-static void play(uint32_t note, uint32_t vel) { if (note <= 127u && vel) eng_note((int)note, (int)vel); }
-static void stop(uint32_t note) { if (note <= 127u) eng_note((int)note, 0); }
+static void play(uint32_t note, uint32_t vel) { if (note <= 127u && vel && ctl_glob[G_LOCAL]) eng_note((int)note, (int)vel); }
+static void stop(uint32_t note) { if (note <= 127u) eng_note((int)note, 0); }   /* (even LOCAL OFF: never a stuck note) */
 
 /* the mod wheel, raw ADC -> 0..127. Self-calibrating like the pitch wheel (smk_wheel.h), as its direction and travel
  * on a unit are not known yet: 0 at the first reading (where the wheel rests at power-up: its bottom, we assume),
@@ -76,8 +85,19 @@ static int screen = SCR_BOOT;                   /* enum screen_id (ui/controls.h
 #define enc_pos ctl_enc_pos                     /* detents per encoder (controls.c counts K2..K8, the app K1 on the host) */
 
 /* ---- MIDI in: from the main loop, and from app_idle while the screen draws (idle_ok) */
-static struct { int8_t oct; } set;              /* what survives a power-off (add yours, up to SECTOR_MAX bytes) */
-static uint32_t idle_ok;
+static globals_t set;                           /* what survives a power-off: the globals, the octave, the last program */
+static uint32_t idle_ok, set_saves;
+static void set_now(globals_t *g)               /* the globals as they are now */
+{
+    for (unsigned i = 0; i < G_COUNT; i++) g->v[i] = ctl_glob[i];
+    g->oct = set.oct;
+    g->last_prog = (uint16_t)(ctl_prog >= 0 && ctl_prog < (int32_t)PROG_COUNT ? ctl_prog : 0);
+}
+static int set_same(const globals_t *a, const globals_t *b)
+{
+    for (unsigned i = 0; i < G_COUNT; i++) if (a->v[i] != b->v[i]) return 0;
+    return a->oct == b->oct && a->last_prog == b->last_prog;
+}
 
 static void midi_in(void)
 {
@@ -96,18 +116,21 @@ static void app_main(void)
 {
     uint8_t key_note[FM1_NKEY] = {0};           /* the note each key started (0: none) */
     uint32_t prev = 0, k, t_change = 0, dirty = 0;
+    globals_t saved, now, last;
     smk_pw_t wheel = {0};
     eng_init();                                 /* the synth with the init program; app_audio renders from now on */
     controls_init();                            /* the pads are the app's (events), the faders' positions now */
-    if (settings_load(&set, sizeof set) || set.oct < -2 || set.oct > 2)
-        set.oct = 0;
+    globals_load(&set);                         /* (nothing saved or broken: the defaults) */
+    for (k = 0; k < G_COUNT; k++) ctl_glob[k] = set.v[k];
+    ctl_prog_select(set.last_prog);             /* the program last loaded (nothing stored there: init) */
+    saved = last = set;
 
     scr_oct = set.oct;
     screen_draw(screen, &eng_edit, &eng_synth, 1);   /* the boot screen, whole, before the sound starts mattering */
     while (scr_strip < 240u) screen_draw(screen, &eng_edit, &eng_synth, 0);
 
     for (;;) {
-        uint32_t keys, down, up, b, base = (uint32_t)((int32_t)KEY0 + 12 * set.oct), ch;
+        uint32_t keys, down, up, b, base = (uint32_t)((int32_t)KEY0 + 12 * set.oct), ch, vc = (uint32_t)ctl_glob[G_VEL_CURVE];
         int32_t e;
         platform_poll();
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
@@ -118,7 +141,7 @@ static void app_main(void)
         up = prev & ~keys;
         prev = keys;
         for (k = 0; k < 27u; k++) {             /* (a key stops the note it started: the octave may change meanwhile) */
-            uint32_t key = SMK_KEY_F3 + k, vel = fm1_in.key_vel[key];
+            uint32_t key = SMK_KEY_F3 + k, vel = (uint32_t)glob_vel_curve((int)vc, fm1_in.key_vel[key]);
             if (down >> k & 1u) {
                 key_note[key] = (uint8_t)(base + k);
                 play(key_note[key], vel);
@@ -128,7 +151,7 @@ static void app_main(void)
             if (up >> k & 1u && key_note[key]) { stop(key_note[key]); midi_send(0x80u | ch, key_note[key], 0); key_note[key] = 0; }
         }
         while ((e = smk_extkey_take()) >= 0) {  /* the keys left and right of those 27: key << 8 | velocity (0 = up) */
-            uint32_t key = (uint32_t)e >> 8, vel = (uint32_t)e & 0x7Fu;
+            uint32_t key = (uint32_t)e >> 8, vel = (uint32_t)glob_vel_curve((int)vc, (int)((uint32_t)e & 0x7Fu));
             if (key >= FM1_NKEY) continue;
             if (vel) {
                 key_note[key] = (uint8_t)(base + key - SMK_KEY_F3);
@@ -144,8 +167,9 @@ static void app_main(void)
         }
 
         b = ctl_pressed;                        /* buttons pressed since the last pass (controls_poll took them) */
-        if (b & (1u << BTN_OCT_DOWN) && set.oct > -2) { set.oct--; dirty = 1; t_change = fm1_ms; }
-        if (b & (1u << BTN_OCT_UP) && set.oct < 2) { set.oct++; dirty = 1; t_change = fm1_ms; }
+        if (b & (1u << BTN_OCT_DOWN) && set.oct > -2) set.oct--;
+        if (b & (1u << BTN_OCT_UP) && set.oct < 2) set.oct++;
+        app_mono = (uint8_t)(ctl_glob[G_STEREO] != 0);
 #ifdef DINGHY_HOST
         if ((e = fm1_enc_take(0)) != 0) enc_pos[0] += e;   /* (K1: no MASTER on the host) */
 #endif
@@ -160,9 +184,14 @@ static void app_main(void)
         screen_draw(screen, &eng_edit, &eng_synth, 0);   /* what changed, or a strip of a new screen */
         idle_ok = 0;
 
-        if (dirty && !eng_active() && fm1_ms - t_change > 2000u) {   /* 2 s after the change, when silent (an erase stalls the sound) */
-            settings_save(&set, sizeof set);
-            dirty = 0;
+        set_now(&now);                          /* a global, the octave or the program changed: save it later */
+        if (!set_same(&now, &last)) { last = now; t_change = fm1_ms; }
+        dirty = !set_same(&now, &saved);
+        if (dirty && !eng_active() && !ctl_wr && fm1_ms - t_change > 2000u) {   /* 2 s after the last change, when silent
+                                                                                    (an erase stalls the sound) */
+            globals_save(&now);
+            saved = now;
+            set_saves++;
         }
     }
 }
@@ -193,8 +222,21 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "vol")) *got = eng_last_vol;                /* the MIDI volume sent (CC 7), 0..127 */
     else if (!strcmp(name, "glob")) *got = a0 < G_COUNT ? ctl_glob[a0] : -1;   /* glob G: a global (controls.h G_*) */
     else if (!strcmp(name, "ccout")) *got = midi_cc_sent[a0 & 127u];   /* ccout N: the last value sent on CC N, -1 */
-    else if (!strcmp(name, "prgreq")) *got = ctl_prg_req;              /* the last program change (Task 10 stub) */
-    else if (!strcmp(name, "prgbank")) *got = ctl_prg_bank;            /* its bank select */
+    else if (!strcmp(name, "prgreq")) *got = ctl_prg_req;              /* the last program change received */
+    else if (!strcmp(name, "prgbank")) *got = ctl_prg_bank;            /* its bank select (CC 32; -1 none) */
+    else if (!strcmp(name, "prog")) *got = ctl_manual ? -1 : ctl_prog; /* the program in play (-1: MANUAL) */
+    else if (!strcmp(name, "wr")) *got = ctl_wr;                       /* WRITE: 0 idle, 1 armed, 2 fading / saving */
+    else if (!strcmp(name, "wrdest")) *got = ctl_wr_dest;              /* WRITE's destination */
+    else if (!strcmp(name, "writes")) *got = (int)ctl_writes;          /* WRITEs stored */
+    else if (!strcmp(name, "fade")) *got = eng_fade_g;                 /* the output gain, 32768 = full */
+    else if (!strcmp(name, "stored")) {                                /* stored N ID: param ID of program N in flash */
+        static program_t p;
+        prog_load(a0, &p);
+        *got = n >= 2 && a[1] >= 0 && a[1] < P_COUNT_PHASE1 ? p.v[a[1]] : -1;
+    }
+    else if (!strcmp(name, "saves")) *got = (int)set_saves;            /* the globals saved (settings) so far */
+    else if (!strcmp(name, "tune")) *got = eng_last_tune;              /* the master tune sent, cents */
+    else if (!strcmp(name, "mono")) *got = app_mono;                   /* STEREO global = MONO */
     else if (!strcmp(name, "chord")) *got = eng_edit.chord[a0 % 6u];   /* chord I: chord memory slot I */
     else if (!strcmp(name, "pending")) *got = eng_flush();             /* events the queue still owes (0) */
     else if (!strcmp(name, "scrcheck")) *got = screen_check();         /* the screens' tables: faults (0) */

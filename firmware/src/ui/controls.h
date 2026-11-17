@@ -8,22 +8,24 @@
 #include <stdint.h>
 #include "../params/params.h"
 #include "../synth/voices.h"
+#include "../params/globals.h"
 
 enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_XMOD, SCR_AT_MISC, SCR_PROGRAM, SCR_GLOBALS,
                  SCR_COUNT };
 
-/* a binding: a param id (< P_COUNT_PHASE1), a global (B_GLOBAL), an action (B_ACT, top pads only) or B_NONE */
+/* a binding: a param id (< P_COUNT_PHASE1), a global (B_GLOBAL, params/globals.h G_*), a program digit (B_PROG,
+ * encoders only), an action (B_ACT, top pads only) or B_NONE */
 #define B_NONE 0xFFFFu
+#define B_PROG(d) (0x2000u | (d))
 #define B_GLOBAL(g) (0x4000u | (g))
 #define B_ACT(a) (0x8000u | (a))
+#define B_IS_PROG(x) (((x) & 0xFF00u) == 0x2000u)
 #define B_IS_GLOBAL(x) (((x) & 0xFF00u) == 0x4000u)
 #define B_IS_ACT(x) (((x) & 0xFF00u) == 0x8000u)
-enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_ARP, ACT_COUNT };   /* section back / on, the other row, HOLD, ARP
-                                                                        (phase 2: does nothing yet) */
-/* globals edited here (Task 10 stores them with the others): MIDI channel 0 = ALL, 1..16; pot mode; PARAM TX / RX
- * 0 OFF, 1 CC (NRPN later) */
-enum { G_MIDI_CH, G_POT_MODE, G_PARAM_TX, G_PARAM_RX, G_COUNT };
-enum { POT_RELATIVE, POT_PASSTHRU, POT_JUMP };
+enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_ARP, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_COUNT };
+/* section back / on, the other row, HOLD, ARP (phase 2: does nothing yet), WRITE (arm / cancel), ENTER (commit the
+ * armed WRITE), MANUAL (the live panel) */
+enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };   /* the program number's digits (OB-6: bank / tens / ones) */
 
 typedef struct { uint16_t enc[7]; uint16_t fader[4]; uint16_t pad_top[8]; } binding_t;  /* param ids or 0xFFFF; pad_top may be actions */
 extern const binding_t BINDINGS[SCR_COUNT];
@@ -37,7 +39,8 @@ const char *ctl_row_name(int screen, int row);       /* a screen with two rows: 
 int32_t ctl_from7(uint16_t id, uint32_t x);         /* 0..127 -> the param's range (bipolar: 64 = 0) */
 uint32_t ctl_to7(uint16_t id, int32_t v);           /* the inverse, 0..127 */
 int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast);   /* a param or global after det detents */
-int32_t ctl_pad_value(uint16_t id, int32_t cur);    /* a top pad pressed: a switch toggles, a select cycles */
+int32_t ctl_pad_value(uint16_t id, int32_t cur);    /* a top pad pressed: a switch toggles, a select (or global) cycles */
+int32_t ctl_prog_digit(int32_t n, uint32_t d, int32_t det);   /* program n with digit d (PRG_*) turned det, clamped */
 int ctl_pad_at(const uint8_t *press);               /* the highest pressure of pads 8..15 */
 typedef struct { uint16_t id; int16_t last_v, anchor_v; uint8_t anchor_p, caught, mode; } ctl_fader_t;
 void ctl_fader_reset(ctl_fader_t *f);

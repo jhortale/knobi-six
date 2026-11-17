@@ -105,8 +105,14 @@ static void lcd_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint1
 #endif
 #include "gfx.c"
 
-/* storage in RAM (lost at exit), store.h's sizes */
+/* storage in RAM (lost at exit), store.h's sizes. A save as the chip does it (store_sliced 0) erases with the
+ * interrupts off, some 50 ms a sector (docs/API.md): the host stands still for that long, no audio rendered (the
+ * WAV gets that much silence: what the DMA plays meanwhile on the chip is not known, silence is the model) and the
+ * script's events wait. A sliced save (store_sliced 1) costs the host nothing: how the flash part takes the suspends is
+ * the chip's to show, not the host's */
 static uint8_t store_sliced;                    /* (as platform.c: a save while playing) */
+#define HOST_ERASE_MS 50u
+static void host_stall(uint32_t ms);
 #include "store.h"
 static uint8_t host_set[SECTOR_MAX + 4], host_blob[NBLOB][SECTOR_MAX + 4], host_slot[NSLOT][SLOT_MAX + 4];
 static int host_load(uint8_t *a, uint32_t max, void *p, uint32_t n)   /* a[0] used, a[1..3] the length */
@@ -117,10 +123,12 @@ static int host_load(uint8_t *a, uint32_t max, void *p, uint32_t n)   /* a[0] us
 }
 static int host_save(uint8_t *a, uint32_t max, const void *p, uint32_t n, const char *what, uint32_t i)
 {
+    uint32_t sectors = (max + 12u) / 0x1000u;
     if (n > max) return -1;
     a[0] = 1; a[1] = (uint8_t)n; a[2] = (uint8_t)(n >> 8); a[3] = (uint8_t)(n >> 16);
     memcpy(a + 4, p, n);
-    printf("%6u ms  %s %u saved (%u B)\n", fm1_ms, what, i, n);
+    printf("%6u ms  %s %u saved (%u B)%s\n", fm1_ms, what, i, n, store_sliced ? ", sliced" : "");
+    if (!store_sliced) host_stall(sectors * HOST_ERASE_MS);
     return 0;
 }
 static int settings_load(void *p, uint32_t n) { return host_load(host_set, SECTOR_MAX, p, n); }
@@ -252,6 +260,15 @@ static void read_script(const char *path)
 static const char *host_out = "build/host/dinghy";
 static int16_t *wav;
 static uint32_t wav_n;
+static void host_stall(uint32_t ms)             /* the chip busy with its interrupts off: ms of silence, time moves on */
+{
+    uint32_t n = ms * FS / 1000u;
+    wav = realloc(wav, (wav_n + n) * 4u);
+    memset(wav + 2u * wav_n, 0, n * 4u);
+    wav_n += n;
+    fm1_ms += ms;
+    printf("%6u ms  (stalled %u ms: a flash erase)\n", fm1_ms, ms);
+}
 
 static void write_ppm_as(const char *name)
 {

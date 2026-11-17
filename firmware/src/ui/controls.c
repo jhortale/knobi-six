@@ -10,6 +10,7 @@
  * action runs; a release, a held pad's pressure, do nothing); bottom pads (8..15) never switch: their highest pressure
  * is the aftertouch (with MIDI channel pressure: the higher of the two). */
 #include "controls.h"
+#include "../params/store_prog.h"
 
 #define N B_NONE
 #define A(x) B_ACT(ACT_##x)
@@ -34,9 +35,10 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_AT_MISC] = {{P_AT_AMT, P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_RATE},  /* row 1: AT pads */
                      {P_AT_AMT, P_DETUNE, P_PORTA_RATE, P_PRG_VOL},
                      {A(PREV), A(NEXT), P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE}},
-    [SCR_PROGRAM] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {A(PREV), A(NEXT), N, N, N, N, N, N}},   /* Task 10 fills it */
-    [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), N, N, N}, {N, N, N, N},
-                     {A(PREV), A(NEXT), N, N, N, N, N, N}},
+    [SCR_PROGRAM] = {{B_PROG(PRG_BANK), B_PROG(PRG_TENS), B_PROG(PRG_ONES), N, N, N, N}, {N, N, N, N},
+                     {A(PREV), A(NEXT), A(WRITE), A(ENTER), A(MANUAL), N, N, N}},
+    [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), G(TRANSPOSE), G(TUNE), G(VEL_CURVE)}, {N, N, N, N},
+                     {A(PREV), A(NEXT), G(LOCAL), G(STEREO), G(SUSTAIN), G(AT_CURVE), N, N}},
 };
 const binding_t BINDINGS_ROW2[SCR_COUNT] = {
     [SCR_ENV] = {{P_LENV_A, P_LENV_D, P_LENV_S, P_LENV_R, P_LENV_AMT, N, N},           /* row 2: LOUDNESS */
@@ -57,7 +59,6 @@ const uint8_t SCR_ROWS[SCR_COUNT] = {[SCR_BOOT] = 1, [SCR_PLAY] = 1, [SCR_VCO] =
 const char *const SCR_NAME[SCR_COUNT] = {"KNOBI-SIX", "PLAY", "VCO 1 + 2", "MIX + FILTER", "ENVELOPES", "LFO + X-MOD",
                                          "AT + MISC", "PROGRAM", "GLOBALS"};
 static const char *const CTL_ROW_NAME[3][2] = {{"FILTER ENV", "LOUDNESS ENV"}, {"LFO", "X-MOD"}, {"AFTERTOUCH", "MISC"}};
-static const uint8_t CTL_GLOBAL_MAX[G_COUNT] = {16, 2, 1, 1};
 
 const binding_t *ctl_binding(int screen, int row)
 {
@@ -102,7 +103,7 @@ int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast)
     int32_t lo = 0, hi, v;
     if (B_IS_GLOBAL(id)) {
         if ((id & 0xFFu) >= G_COUNT) return cur;
-        hi = CTL_GLOBAL_MAX[id & 0xFFu];
+        lo = GLOB_MIN[id & 0xFFu], hi = GLOB_MAX[id & 0xFFu];
         v = cur + det;
     } else {
         const param_t *p;
@@ -118,12 +119,27 @@ int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast)
 int32_t ctl_pad_value(uint16_t id, int32_t cur)
 {
     const param_t *p;
+    if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT)
+        return cur >= GLOB_MAX[id & 0xFFu] ? GLOB_MIN[id & 0xFFu] : cur + 1;
     if (id >= P_COUNT_PHASE1) return cur;
     p = &PARAMS[id];
     if (p->kind == PK_SWITCH) return cur ? 0 : 1;
     if (p->kind == PK_SELECT) return cur >= p->max ? p->min : cur + 1;
     return cur;
 }
+/* the program number's digits: bank 0..PROG_BANKS-1, tens and ones 0..9; a digit clamps (no carry, no wrap) */
+int32_t ctl_prog_digit(int32_t n, uint32_t d, int32_t det)
+{
+    int32_t dig[PRG_COUNT], i;
+    if (n < 0) n = 0;
+    if (n >= (int32_t)PROG_COUNT) n = PROG_COUNT - 1;
+    if (d >= PRG_COUNT) return n;
+    dig[PRG_BANK] = n / 100, dig[PRG_TENS] = n / 10 % 10, dig[PRG_ONES] = n % 10;
+    i = dig[d] + det;
+    dig[d] = i < 0 ? 0 : i > (d == PRG_BANK ? (int32_t)PROG_BANKS - 1 : 9) ? (d == PRG_BANK ? (int32_t)PROG_BANKS - 1 : 9) : i;
+    return dig[PRG_BANK] * 100 + dig[PRG_TENS] * 10 + dig[PRG_ONES];
+}
+
 int ctl_pad_at(const uint8_t *press)
 {
     int m = 0;
@@ -170,7 +186,7 @@ int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint3
 #ifndef CONTROLS_PURE
 /* ---- the main loop's: state */
 #define CTL_BOOT_MS 1000u                              /* the boot screen, then Play (or at the first button) */
-static uint8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1};
+static int8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1, 0, 0, 0, 1, 0, 0, 0};   /* (GLOB_DEF; app.c loads them) */
 static uint8_t ctl_row[SCR_COUNT];
 static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY;
 static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel, ctl_midi_vol = 127;
@@ -181,7 +197,15 @@ static uint32_t ctl_enc_ms[8];
 static uint8_t ctl_fpos[4];
 static ctl_fader_t ctl_fad[4];
 static uint8_t ctl_chord_on, ctl_chord_n, ctl_chord_cap[6];
-static int32_t ctl_prg_bank = -1, ctl_prg_req = -1, ctl_bank_sel;   /* program change: the Task 10 stub */
+static int32_t ctl_prg_bank = -1, ctl_prg_req = -1, ctl_bank_sel = -1;   /* the last program change received, its bank;
+                                                                            CC 32's bank (-1: the current one) */
+/* programs: the one in play, MANUAL, a load to retry (the engine's buffer busy), WRITE (0 idle, 1 armed: the digits
+ * pick the destination, 2 committed: fading out, then the save, then the fade back in) */
+static int32_t ctl_prog, ctl_prog_want = -1, ctl_wr_dest;
+static uint8_t ctl_manual, ctl_wr;
+static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, 0 none yet */
+static uint32_t ctl_wr_t, ctl_writes;
+#define CTL_FADE_WAIT_MS 100u                          /* the fade-out not confirmed (no audio running): save anyway */
 static uint16_t ctl_last_id = B_NONE;                  /* the last edit (screen) */
 static int32_t ctl_last_v;
 static uint32_t ctl_edits, ctl_scr_n;                  /* counters: an edit, a screen / row change */
@@ -195,9 +219,9 @@ static void ctl_set(program_t *edit, uint16_t id, int32_t v, int panel)   /* pan
     if (B_IS_GLOBAL(id)) {
         uint32_t g = id & 0xFFu;
         if (g >= G_COUNT) return;
-        v = v < 0 ? 0 : v > CTL_GLOBAL_MAX[g] ? CTL_GLOBAL_MAX[g] : v;
+        v = v < GLOB_MIN[g] ? GLOB_MIN[g] : v > GLOB_MAX[g] ? GLOB_MAX[g] : v;
         if (ctl_glob[g] == v) return;
-        ctl_glob[g] = (uint8_t)v;
+        ctl_glob[g] = (int8_t)v;
     } else {
         if (id >= P_COUNT_PHASE1) return;
         c = param_clamp(id, v);
@@ -230,13 +254,79 @@ static void ctl_other_row(int screen)
     ctl_scr_n++;
 }
 
+/* ---- programs (main loop): load, MANUAL, WRITE */
+static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL off); retried while the engine is busy */
+{
+    static program_t p;
+    if (n < 0 || n >= (int32_t)PROG_COUNT) return;
+    ctl_prog = n, ctl_manual = 0;
+    if (ctl_wr == 2) { ctl_prog_want = n; return; }   /* (not under a WRITE: it saves the edit as it was) */
+    prog_load((uint32_t)n, &p);                        /* (nothing stored there: the init program) */
+    ctl_prog_want = eng_program(&p) ? n : -1;
+}
+static void ctl_manual_press(program_t *edit)          /* MANUAL: the sound is the panel; the faders (Play's: FILTER FREQ,
+                                                        * RESO, MODE, ENV AMT) set where they stand. MIDI program change
+                                                        * is ignored meanwhile; turning a program digit loads it */
+{
+    const binding_t *b = ctl_binding(SCR_PLAY, 0);
+    ctl_manual ^= 1u;
+    if (!ctl_manual) return;
+    for (unsigned k = 0; k < 4u; k++)
+        if (b->fader[k] < P_COUNT_PHASE1) ctl_set(edit, b->fader[k], ctl_from7(b->fader[k], ctl_fpos[k]), 1);
+}
+static void ctl_write_press(int *screen);
+/* WRITE saves at once (spec, Our calls): the output fades out (10 ms, engine.c), the slot is saved as the base saves
+ * (its erases hold the interrupts off: the sound stops, on silence), it fades back in (10 ms). The base's sliced save
+ * (store_sliced) might keep the sound playing instead, but only the chip can show whether it is click-free (the host
+ * does not model the flash part's suspends): build with -DKNOBI_WRITE_SLICED to try it there (no fade, a sliced
+ * save); -DKNOBI_WRITE_NOFADE (host evidence) saves without the fade */
+static void ctl_enter(void)                            /* commit an armed WRITE: the fade out starts */
+{
+    if (ctl_wr != 1) return;
+    ctl_wr = 2, ctl_wr_t = fm1_ms;
+#if !defined KNOBI_WRITE_SLICED && !defined KNOBI_WRITE_NOFADE
+    eng_fade(1);
+#endif
+}
+static void ctl_write_poll(const program_t *edit)      /* faded out (or waited long enough): save, fade back in */
+{
+#ifdef KNOBI_WRITE_SLICED
+    if (ctl_wr != 2) return;
+    store_sliced = 1;
+#else
+    if (ctl_wr != 2 || (!eng_faded() && fm1_ms - ctl_wr_t < CTL_FADE_WAIT_MS)) return;
+#endif
+    ctl_wr_rc = prog_save((uint32_t)ctl_wr_dest, edit) ? -1 : 1;   /* (blocks: the slot's erase; the sound is silent) */
+    store_sliced = 0;
+    eng_fade(0);
+    if (ctl_wr_rc > 0) ctl_prog = ctl_wr_dest, ctl_manual = 0, ctl_writes++;
+    ctl_wr = 0;
+}
+static void ctl_prog_turn(uint32_t d, int32_t det)     /* a program digit's encoder (Program screen) */
+{
+    int32_t n;
+    if (ctl_wr == 2) return;
+    n = ctl_prog_digit(ctl_wr == 1 ? ctl_wr_dest : ctl_prog, d, det);
+    if (ctl_wr == 1) ctl_wr_dest = n;
+    else if (n != ctl_prog || ctl_manual) ctl_prog_select(n);
+}
+
 static void ctl_action(int *screen, uint32_t a)
 {
     if (a == ACT_PREV) ctl_goto(screen, *screen - 1);
     else if (a == ACT_NEXT) ctl_goto(screen, *screen + 1);
     else if (a == ACT_ROW) ctl_other_row(*screen);
     else if (a == ACT_HOLD) { ctl_hold ^= 1u; ctl_last_id = B_ACT(ACT_HOLD), ctl_last_v = ctl_hold; ctl_edits++; }
+    else if (a == ACT_WRITE) ctl_write_press(screen);
+    else if (a == ACT_ENTER) ctl_enter();
+    else if (a == ACT_MANUAL) ctl_manual_press(&eng_edit);
     /* ACT_ARP: the arpeggiator is phase 2 */
+}
+static void ctl_write_press(int *screen)               /* WRITE (the pad, BT): arm (Program screen, the destination the
+                                                        * current program) or cancel */
+{
+    if (ctl_wr == 0) { ctl_wr = 1, ctl_wr_dest = ctl_prog; ctl_goto(screen, SCR_PROGRAM); }
+    else if (ctl_wr == 1) ctl_wr = 0;
 }
 
 /* chord memory: hold CHORD (BTN_ENV) and play up to 6 notes; on release they are the program's chord (absolute MIDI
@@ -263,7 +353,7 @@ static void ctl_chord_commit(program_t *edit)
     ctl_set(edit, P_UNISON_ON, 1, 1);
 }
 
-int controls_aftertouch(void) { return ctl_pad_at(fm1_in.pad_press); }
+int controls_aftertouch(void) { return glob_at_curve(ctl_glob[G_AT_CURVE], ctl_pad_at(fm1_in.pad_press)); }
 
 void controls_init(void)
 {
@@ -281,7 +371,11 @@ static void ctl_leds(int screen, const program_t *edit)   /* top pads lit when o
         if (i < 8u) {
             uint16_t x = b->pad_top[i];
             if (x < P_COUNT_PHASE1) col = edit->v[x] != PARAMS[x].min ? 0xFF0000u : 0x180000u;   /* red / dim red */
+            else if (B_IS_GLOBAL(x)) col = ctl_glob[x & 0xFFu] != GLOB_MIN[x & 0xFFu] ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_HOLD)) col = ctl_hold ? 0xFF0000u : 0x180000u;
+            else if (x == B_ACT(ACT_WRITE)) col = ctl_wr == 2 || (ctl_wr == 1 && fm1_ms >> 8 & 1u) ? 0xFF0000u : 0x180000u;   /* armed: blinks */
+            else if (x == B_ACT(ACT_ENTER)) col = ctl_wr == 1 ? 0xFF0000u : 0x180000u;
+            else if (x == B_ACT(ACT_MANUAL)) col = ctl_manual ? 0xFF0000u : 0x180000u;
             else if (B_IS_ACT(x)) col = 0x282828u;                                            /* dim white */
             else col = 0;
         } else {
@@ -318,6 +412,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         if (p >> BTN_GLO & 1u) ctl_goto(screen, *screen == SCR_GLOBALS ? ctl_before_glob : SCR_GLOBALS);
         if (p >> BTN_SEL & 1u) ctl_other_row(*screen);
     }
+    if (*screen != SCR_BOOT && ctl_pressed >> BTN_SAVE & 1u) ctl_write_press(screen);   /* BT = WRITE */
     if (ctl_pressed >> BTN_ENV & 1u) { ctl_chord_on = 1; ctl_chord_n = 0; }
     if (ctl_released >> BTN_ENV & 1u && ctl_chord_on) ctl_chord_commit(edit);
 
@@ -330,6 +425,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
             ctl_enc_ms[k] = fm1_ms;
             if (id < P_COUNT_PHASE1) ctl_set(edit, id, ctl_enc_value(id, edit->v[id], e, fast), 1);
             else if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) ctl_set(edit, id, ctl_enc_value(id, ctl_glob[id & 0xFFu], e, 0), 1);
+            else if (B_IS_PROG(id)) ctl_prog_turn(id & 0xFFu, e);
         }
     for (k = 0; k < 4u; k++) {
         uint32_t pos = fm1_in.fader[k];
@@ -347,13 +443,17 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         b = ctl_binding(*screen, ctl_row[*screen]);    /* (a pad may have changed the screen) */
         x = b->pad_top[pad];
         if (x < P_COUNT_PHASE1) ctl_set(edit, x, ctl_pad_value(x, edit->v[x]), 1);
+        else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) ctl_set(edit, x, ctl_pad_value(x, ctl_glob[x & 0xFFu]), 1);
         else if (B_IS_ACT(x)) ctl_action(screen, x & 0xFFu);
     }
+    if (ctl_prog_want >= 0 && ctl_wr != 2) ctl_prog_select(ctl_prog_want);   /* a load the engine could not take yet */
+    ctl_write_poll(edit);
 
     {
-        int at = controls_aftertouch();
+        int at = ctl_glob[G_LOCAL] ? controls_aftertouch() : 0;   /* LOCAL OFF: the pads' pressure goes nowhere */
         eng_pressure(at > ctl_midi_at ? at : ctl_midi_at);
     }
+    eng_tune(ctl_glob[G_TRANSPOSE] * 100 + ctl_glob[G_TUNE]);   /* the master transpose + tune (sent when it changes) */
     eng_hold(ctl_hold || ctl_sustain);
     eng_volume(ctl_midi_vol);                          /* MIDI CC 7 (sent every pass: a refused one is retried) */
     ctl_leds(*screen, edit);

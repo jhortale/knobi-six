@@ -16,7 +16,7 @@ top row of pads is switches, the bottom row is pressure only.
 | SCALE | `BTN_SEL` | the other row of a two-row screen: Envelopes FILTER / LOUDNESS, LFO + X-Mod pads LFO / X-MOD, Aftertouch + Misc pads AFTERTOUCH / MISC |
 | CHORD | `BTN_ENV` | chord memory: hold it, play up to 6 notes (keys or MIDI), let go: those notes are the program's chord and UNISON goes on with UNISON VOICES = CHD. Tapped with no note: nothing changes |
 | OCTAVE- / + | `BTN_OCT_DOWN` / `UP` | the keys' octave, -2..+2 |
-| BT | `BTN_SAVE` | (Task 10: WRITE) |
+| BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
 | KNOB BANK, FADER BANK, ARP, NOTE REPEAT, FX, SEQ, SEQ PLAY, SEQ REC | | nothing yet (arp, effects, sequencer: phases 2 and 3) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
@@ -65,11 +65,10 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 | LFO + X-Mod, X-MOD row | the same | the same | ◀, ▶, X-MOD > VCO1, SHAPE1, PW1, F FREQ, F MODE, NORM-BP |
 | Aftertouch + Misc, AFTERTOUCH row | AT AMOUNT, DETUNE, PAN SPREAD, BEND RANGE, KEY MODE, PROGRAM VOLUME, PORTA RATE | AT AMOUNT, DETUNE, PORTA RATE, PRG VOLUME | ◀, ▶, AT > VCO1, VCO2, LFO AMT, LOUDNESS, F FREQ, F MODE |
 | Aftertouch + Misc, MISC row | the same | the same | ◀, ▶, UNISON, UNISON VOICES (1..6, CHD), PORTAMENTO, PORTA MODE |
-| Program | — (Task 10: bank / program, WRITE) | — | ◀, ▶ |
-| Globals | MIDI CH (ALL, 1..16), POT MODE, PARAM TX (OFF / CC), PARAM RX (OFF / CC) | — | ◀, ▶ |
+| Program | BANK (0..4), TENS (0..9), ONES (0..9) | — | ◀, ▶, WRITE, ENTER, MANUAL |
+| Globals | MIDI CH (ALL, 1..16), POT MODE, PARAM TX (OFF / CC), PARAM RX (OFF / CC), TRANSPOSE (-12..+12), TUNE (-50..+50 cents), VEL CURVE (0..7) | — | ◀, ▶, LOCAL (ON / OFF), STEREO / MONO, SUSTAIN (N.O. / N.C.), AT CURVE (0..3) |
 
-Every phase-1 parameter is on some screen (unit test `bindings_valid`). The globals here are kept in RAM until Task 10
-stores them with the others.
+Every phase-1 parameter is on some screen (unit test `bindings_valid`). The globals are kept in flash (below).
 
 Play's pad 0 is **SYNC** (VCO1 sync): the Play mockup's X-MOD performance slot, as ruled for Task 8 (the schema has no
 X-Mod on/off; sync is the performance switch the OB-6 player reaches for there). It is the same switch as VCO 1 + 2's
@@ -85,3 +84,48 @@ the section the top pads switch (the other section's pad labels are greyed). The
 LED per section (the current one lit), the octave and, on a small red display, the last value edited. Globals also
 shows the wheels' and faders' raw readings (for checking a unit's travel). The host probe `scrcheck`
 (`tests/scripts/screens.txt`) proves the drawing matches the bindings and that every label fits.
+
+## Programs
+
+500 programs, OB-6 style: **bank** 0..4, then **tens** and **ones** 0..9 (program 2-35 = bank 2, 35). The number is
+set by the flash: the base's 8 slots of 16 KB hold 74 records each at 221 B a record (the largest a program may become
+in later phases), 592 in all, so 5 whole banks of 100 (`firmware/src/params/store_prog.h`). A program is its 66 values,
+its 20-character name and its chord memory, with a CRC; one that was never stored (or is broken) loads as the init
+program.
+
+- **Select:** on Program, K2 / K3 / K4 turn the bank, tens and ones digits; the program loads as a digit moves (a digit
+  stops at its ends, it does not carry). MIDI: program change 0..99 in the current bank, CC 32 picks the bank
+  ([MIDI.md](MIDI.md)). A change while notes sound releases them (their release runs; the values glide, no click).
+- **WRITE** (pad 2, or BT on any screen): arms (the pad blinks; the digits now pick the destination, nothing loads);
+  **ENTER** (pad 3) stores the sound as it is (the program in play with its edits) there, and that program is then the
+  one in play. WRITE again cancels. Storing rewrites the program's 16 KB slot, whose erase stops the chip for some
+  200 ms: the sound fades out (10 ms), goes silent while the flash works, and fades back in (10 ms). A deliberate
+  dropout, never a click (`tests/scripts/write_held.txt`, `tests/wav_check.py`). The status line under the pads says
+  WRITE TO b-tt?, STORED or WRITE FAILED.
+- **MANUAL** (pad 4): the live panel. The sound is what the panel says: the four faders' Play parameters (FILTER FREQ,
+  RESONANCE, MODE, ENV AMOUNT) jump to where the faders stand; the program number shows as dashes and MIDI program
+  change is ignored. MANUAL again leaves it (the sound stays); turning a digit loads that program. WRITE works from
+  MANUAL too.
+- **At power-on** the program last loaded or stored comes back (kept with the globals).
+
+## Globals and what is kept
+
+The globals (GLOBE), the keys' octave and the last program are kept in the base's settings sector, saved 2 s after the
+last change once nothing sounds (an erase stalls the sound), and loaded at power-on; nothing saved, a broken record or
+another version gives the defaults (`firmware/src/params/globals.c`). What each does:
+
+| Global | Range (default) | Does |
+| --- | --- | --- |
+| MIDI CH | ALL, 1..16 (ALL) | the channel heard; sent on (ALL = 1) |
+| POT MODE | RELATIVE / PASSTHRU / JUMP (RELATIVE) | the faders (above) |
+| PARAM TX / RX | OFF / CC (CC) | panel edits sent as CCs / CCs received ([MIDI.md](MIDI.md)) |
+| TRANSPOSE | -12..+12 semitones (0) | the master coarse tune: both VCOs (not the MIDI notes sent) |
+| TUNE | -50..+50 cents (0) | the master fine tune |
+| VEL CURVE | 0..7 (0) | the keybed's velocity, for the synth and MIDI out: 0 linear, 1..3 softer (more at a light touch), 4..6 harder, 7 fixed at 127 |
+| LOCAL | ON / OFF (ON) | OFF: the keybed and the pads' pressure go to MIDI only; MIDI in still plays the synth |
+| STEREO | STEREO / MONO (STEREO) | MONO: both outputs carry the sum |
+| SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
+| AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
+
+The OB-6 globals not here: MIDI clock and clock port (phase 2), the sequencer jack, alternative tunings, the SysEx and
+MIDI-out ports and program dumps (later, with SysEx), arp beat sync (phase 2).
