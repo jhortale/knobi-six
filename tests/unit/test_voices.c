@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846   /* (not in strict C11 on glibc) */
+#endif
 #include "params/params.c"
 #include "synth/osc.c"
 #include "synth/filter.c"

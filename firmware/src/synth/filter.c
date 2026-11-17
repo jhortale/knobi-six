@@ -178,7 +178,7 @@ SVF_COLD struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_c
 int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c)
 {
     int32_t s1 = f->s1, s2 = f->s2;
-    if (__builtin_expect(((uint32_t)s1 + (1u << 29) | (uint32_t)s2 + (1u << 29)) < 1u << 30, 1)) {
+    if (__builtin_expect((((uint32_t)s1 + (1u << 29)) | ((uint32_t)s2 + (1u << 29))) < 1u << 30, 1)) {
         int32_t x = svf_drive(in_q15);
         int32_t v1 = 2 * svf_soft((int32_t)(((int64_t)c->a1 * s1 + (int64_t)c->a2 * (x - s2) + SVF_HALF31) >> 31));
         int32_t gv = (int32_t)(((int64_t)c->g * v1) >> 28), v2 = s2 + gv;

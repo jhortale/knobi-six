@@ -399,7 +399,7 @@ static void test_fast_equals_slow(void)
         svf_t f = {s1, s2};
         int32_t y = svf_tick(&f, in, &c);
         struct svf_res o = svf_slow(s1, s2, in, &c);
-        if (((uint32_t)s1 + (1u << 29) | (uint32_t)s2 + (1u << 29)) < 1u << 30) fast++;
+        if ((((uint32_t)s1 + (1u << 29)) | ((uint32_t)s2 + (1u << 29))) < 1u << 30) fast++;
         if (y == o.y && f.s1 == o.s1 && f.s2 == o.s2) same++;
         else if (diff++ < 5) printf("  differs: cut %d reso %d mode %d bp %d s %d %d in %d\n", cut, reso, mode, bp,
                                     s1, s2, in);

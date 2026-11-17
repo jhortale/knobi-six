@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")/.."
 mkdir -p build/host
 N=app
-cc -O2 -Wall -Wno-unused-function -DDINGHY_HOST -DBOARD_SMK37=1 -DAPP_VER="\"${APP_VER:-dev}\"" -Ifirmware/hal -Ifirmware/src -Ifirmware/gen -o build/host/$N firmware/src/app.c
+cc -O2 -Wall -Wno-unused-function -DDINGHY_HOST -DBOARD_SMK37=1 -DAPP_VER="\"${APP_VER:-dev}\"" -Ifirmware/hal -Ifirmware/src -Ifirmware/gen -o build/host/$N firmware/src/app.c -lm
 build/host/$N build/host/$N ${1:+"$1"}
 python3 - "$N" <<'PY'
 import sys
