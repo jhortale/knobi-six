@@ -494,14 +494,14 @@ static void smoothing(void)
     run(VOICE_CTL);
     double c1 = S.ctx.cut / 65536.0, m1 = S.ctx.mode / 65536.0, b1 = S.ctx.bp;
     int t63 = 1;
-    while (S.ctx.cut > (int32_t)(164 * 65536 * 0.368) && t63 < 1000) run(VOICE_CTL), t63++;
+    while (S.ctx.cut > SVF_KNOB_LO + (int32_t)(SVF_KNOB_SPAN * 0.368) && t63 < 1000) run(VOICE_CTL), t63++;
     run(FS / 10);
     printf("smoothing: one tick after FREQ 164 -> 0, MODE 0 -> 127, BP on: cut %.1f, mode %.1f, bp %.0f; 63 %% after "
            "%.2f ms; settled cut %d, mode %d, bp %d\n", c1, m1, b1, t63 * 16000.0 / FS, S.ctx.cut, S.ctx.mode,
            S.ctx.bp);
     CHECK(c1 > 150 && c1 < 160 && m1 > 10 && m1 < 25 && b1 > 1000 && b1 < 3000);
     CHECK(t63 * 16000.0 / FS > 4.5 && t63 * 16000.0 / FS < 7);
-    CHECK(S.ctx.cut == 0 && S.ctx.mode == 255 * 65536 && S.ctx.bp == 32768);
+    CHECK(S.ctx.cut == SVF_KNOB_LO && S.ctx.mode == 255 * 65536 && S.ctx.bp == 32768);
     /* a program load while the note sounds glides; with nothing sounding it snaps */
     program_t p;
     program_init(&p);
@@ -514,7 +514,7 @@ static void smoothing(void)
     synth_program(&S, &p);
     printf("smoothing: program load under a sounding note: cut %d -> %d after a tick (glides); silent: snapped to %d\n",
            g0 >> 16, g1 >> 16, S.ctx.cut >> 16);
-    CHECK(g0 == 0 && g1 > 0 && g1 < 164 * 65536);
+    CHECK(g0 == SVF_KNOB_LO && g1 > SVF_KNOB_LO && g1 < 164 * 65536);
     CHECK(S.ctx.cut == 164 * 65536 && S.ctx.mode == 0 && S.ctx.bp == 0);
 }
 
@@ -617,6 +617,24 @@ static void output_level(void)
     CHECK(pk > -8 && pk < -4 && mx <= 32767);
 }
 
+/* key track in the re-anchored cutoff (semitones, not knob steps): FULL follows the key an octave an octave, HALF half
+ * an octave; the cutoff in Hz from the voice's coefficient position (FREQ 82, envelope amount 0, no modulation) */
+static void key_track_octaves(void)
+{
+    double r[3];
+    for (int t = 0; t <= 2; t++) {
+        fresh();
+        set(P_FLT_FREQ, 82), set(P_FLT_ENV_AMT, 0), set(P_FLT_TRACK, t);
+        synth_note(&S, 48, 100), synth_note(&S, 72, 100);
+        run(256);
+        double lo = svf_cutoff_hz(S.voice[voice_of(48)].cut), hi = svf_cutoff_hz(S.voice[voice_of(72)].cut);
+        r[t] = log2(hi / lo) / 2;   /* octaves of cutoff per octave of key */
+    }
+    printf("key_track_octaves: C3 -> C5, cutoff octaves per key octave: OFF %.3f, HALF %.3f, FULL %.3f\n", r[0], r[1],
+           r[2]);
+    CHECK(fabs(r[0]) < 0.01 && fabs(r[1] - 0.5) < 0.01 && fabs(r[2] - 1) < 0.01);
+}
+
 static void mode_mapping(void)
 {
     fresh();
@@ -675,6 +693,7 @@ int main(void)
     xmod_filter_audio_rate();
     filter_states_flush();
     output_level();
+    key_track_octaves();
     mode_mapping();
     cost();
     if (fails) { printf("test_voices: %d FAILED\n", fails); return 1; }

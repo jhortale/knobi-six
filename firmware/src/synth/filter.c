@@ -4,7 +4,7 @@
  * Ported from the ANALOG engine (João Hortale, smk37-analog, branch analog-engine, web/synth/analog.c, MIT): the
  * zero-delay-feedback (TPT, Zavalishin / Simper) SVF, the soft clip soft / soft_shoulder (band-pass node, output) and
  * coef_at's coefficients, the cutoff table interpolation and reso_k's exponential Q map; and its exp2 polynomial
- * (web/synth/fixed.c, fm_exp2_fixed). New here: the 165-step semitone cutoff table, the damping floor at low cutoffs,
+ * (web/synth/fixed.c, fm_exp2_fixed). New here: the 165-entry semitone cutoff table (the knob's 16 Hz .. 18.8 kHz map: filter.h), the damping floor at low cutoffs,
  * the input drive polynomial, the band-pass output and its crossfade with the MODE output.
  *
  * The audio path runs in single-precision float on the AC79's FPU (-mfprev1, tools/build.py; docs/RULES.md): the
@@ -33,8 +33,9 @@
 #error "svf_gtab is computed for 44100 Hz"
 #endif
 
-/* g = tan(pi fc / fs) in Q28 at every FILTER FREQ step, fc = 440 * 2^((step - 99) / 12) (1.44 Hz .. 18.8 kHz).
- * Generated offline (python: round(tan(pi * 440 * 2 ** ((s - 99) / 12) / 44100) * 2 ** 28)); linear interpolation
+/* g = tan(pi fc / fs) in Q28 at every cutoff semitone, fc = 440 * 2^((step - 99) / 12) (1.44 Hz .. 18.8 kHz).
+ * Generated offline (python: round(tan(pi * 440 * 2 ** ((s - 99) / 12) / 44100) * 2 ** 28)); the table is in semitones, the
+ * FILTER FREQ knob's 0.746-semitone steps land between its entries (svf_knob_q16); linear interpolation
  * between steps stays within 9 cents (worst just under the top). */
 static const int32_t svf_gtab[166] = {   /* the last entry twice: svf_g interpolates without a test */
     27638, 29281, 31023, 32867, 34822, 36892, 39086, 41410,
@@ -157,7 +158,7 @@ SVF_HOT int32_t svf_clampb(int32_t v, int32_t lo, int32_t hi)
     return lo + (d & ~(d >> 31));
 }
 
-/* g at a Q16 FILTER FREQ position (clamped), interpolated linearly between the table's steps, Q28 */
+/* g at a Q16 cutoff position in semitones (clamped), interpolated linearly between the table's steps, Q28 */
 SVF_HOT int32_t svf_g(int32_t cut)
 {
     unsigned i = (unsigned)cut >> 16;
@@ -205,7 +206,7 @@ void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_
  * interpolation, bit for bit), the damping floor from svf_ktab (its value at every step where it can win, interpolated
  * linearly: <= 0.05 % off the exp2, 2 % at the cap's kink near step 8.7). */
 
-/* the damping floor k = ALPHA / (pi fc), Q28, capped at 2, at FILTER FREQ steps 0..80; from step 80 up it is below
+/* the damping floor k = ALPHA / (pi fc), Q28, capped at 2, at cutoff semitones 0..80 (1.44 .. 147 Hz); from 80 up it is below
  * RESO 255's k (0.04) and never wins. Generated with svf_coef's own expression (svf_exp2 of SVF_FLOOR_C + ...). */
 static const int32_t svf_ktab[82] = {   /* + the last entry twice (svf_gk at step 80 exactly) */
     536870912, 536870912, 536870912, 536870912, 536870912, 536870912, 536870912, 536870912,

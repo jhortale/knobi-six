@@ -18,7 +18,8 @@ static int fails;
 #define AMP 8192.0                                   /* test sine: -12 dB below Q15 full scale */
 #define CUT_Q16(step) ((int32_t)lrint((step) * 65536.0))
 
-/* the FILTER FREQ position (Q16) of a frequency under the documented mapping: 1 semitone per step, 99 = 440 Hz */
+/* the cutoff position (Q16 semitones; "step" below = one semitone, not one FILTER FREQ knob step) of a frequency:
+ * 99 = 440 Hz */
 static int32_t cut_for_hz(double hz) { return CUT_Q16(99 + 12 * log2(hz / 440)); }
 
 /* steady-state gain (dB) of the filter at f: 1 s settle, then project 1 s of output on sin / cos */
@@ -53,6 +54,30 @@ static void test_cutoff_map(void)
     printf("cutoff_map: worst %.2f cents off 440 * 2^((step - 99) / 12) (steps 24..164, half steps)\n", worst);
     CHECK(worst < 10);
     CHECK(svf_cutoff_hz(-5 * 65536) == lo && svf_cutoff_hz(300 * 65536) == hi);   /* clamped */
+}
+
+/* the FILTER FREQ knob (svf_knob_q16): 0 = 16 Hz, 164 = 18.8 kHz, exponential in between (0.746 semitone a step),
+ * monotone; the old one-semitone map put 0 at 1.44 Hz */
+static void test_knob_map(void)
+{
+    uint32_t k0 = svf_cutoff_hz(svf_knob_q16(0)), k82 = svf_cutoff_hz(svf_knob_q16(82));
+    uint32_t k164 = svf_cutoff_hz(svf_knob_q16(164));
+    double worst = 0, smin = 1e9, smax = 0;
+    for (int k = 0; k <= 164; k++) {
+        double want = 16 * pow(18794.5 / 16, k / 164.0), got = svf_cutoff_hz(svf_knob_q16(k));
+        double cents = fabs(1200 * log2(got / want)) - 1200 * log2(1 + 0.5 / want);
+        if (cents > worst) worst = cents;
+        if (k) {
+            double st = (svf_knob_q16(k) - svf_knob_q16(k - 1)) / 65536.0;
+            if (st < smin) smin = st;
+            if (st > smax) smax = st;
+        }
+    }
+    printf("knob_map: FREQ 0 = %u Hz, 82 = %u Hz, 164 = %u Hz; worst %.2f cents off 16 Hz * (18794.5 / 16)^(k / 164); "
+           "a step %.4f .. %.4f semitones\n", k0, k82, k164, worst, smin, smax);
+    CHECK(k0 == 16 && k82 >= 545 && k82 <= 552 && k164 >= 18700 && k164 <= 18900);
+    CHECK(worst < 10 && smin > 0.745 && smax < 0.748);
+    CHECK(svf_knob_q16(-3) == svf_knob_q16(0) && svf_knob_q16(200) == SVF_CUT_MAX && svf_knob_q16(164) == SVF_CUT_MAX);
 }
 
 static void test_lp_hp_notch(void)
@@ -495,6 +520,7 @@ static void bench(void)
 int main(void)
 {
     test_cutoff_map();
+    test_knob_map();
     test_lp_hp_notch();
     test_bp_switch();
     test_bp_crossfade();

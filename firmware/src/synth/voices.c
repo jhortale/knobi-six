@@ -23,7 +23,7 @@ static int32_t synth_clampi(int32_t v, int32_t lo, int32_t hi) { return v < lo ?
 static void synth_targets(synth_t *s)
 {
     const int16_t *v = s->prog.v;
-    s->tgt[SM_CUT] = v[P_FLT_FREQ] * 65536;
+    s->tgt[SM_CUT] = svf_knob_q16(v[P_FLT_FREQ]);              /* FREQ 0..164 -> 16 Hz .. 18.8 kHz, Q16 st */
     s->tgt[SM_RESO] = v[P_FLT_RESO] * 65536;
     s->tgt[SM_MODE] = v[P_FLT_MODE] * 255 * 65536 / 127;     /* MODE 0..127 -> filter mode 0..255 */
     s->tgt[SM_BP] = v[P_FLT_BP] ? 32768 : 0;

@@ -16,6 +16,7 @@
 /* C4, the key-track pivot, Q16, as a variable the compiler cannot fold: key - 60 x 65536 would carry 0xFFC40000,
  * which lies in the chip's ROM window, and tools/build.py fails such a build (osc.c osc_note_lo_neg). Never written. */
 int32_t voice_c4_q16 = 60 * 65536;
+_Static_assert(FENV_RANGE_Q16 == SVF_KNOB_SPAN, "a full filter envelope spans the FILTER FREQ knob's range");
 
 /* sin(i pi / 64) x 32767, i = 0..32: the constant-power pan law, R = sin, L = cos */
 static const int16_t voice_pan_tab[33] = {
@@ -87,7 +88,8 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
     osc_set_shape(&v->osc, voice_r16(v->shape1), voice_r16(v->pw1), voice_r16(c->shape2),
                   voice_r16(c->pw2 + v->ctl.vco2_pw));
 
-    /* filter: FREQ + key track (FULL: one step per semitone from C4, HALF: half) + envelope + modulation */
+    /* filter, in semitones (Q16): FREQ (svf_knob_q16, smoothed) + key track (FULL: one semitone per semitone from C4,
+     * an octave an octave; HALF: half) + envelope + modulation */
     int32_t kt = prog[P_FLT_TRACK] == 2 ? key - voice_c4_q16 : prog[P_FLT_TRACK] == 1 ? (key - voice_c4_q16) >> 1 : 0;
     v->cut = c->cut + kt + fenv_mod(fenv, prog[P_FLT_ENV_AMT], prog[P_FLT_VEL], v->vel) + v->ctl.flt_freq;
     v->mode = c->mode + v->ctl.flt_mode;

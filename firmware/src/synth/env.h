@@ -13,10 +13,11 @@
  * releases from wherever the envelope is. Velocity never touches the envelope (rule 2): it scales amounts only. No
  * minimum gate here: a zero-length note is the voice layer's to stretch (ANALOG's 2 ms MIN_GATE).
  *
- * fenv_mod: the filter envelope's offset in the filter's cutoff units (filter.h: Q16, 65536 = one FILTER FREQ step =
- * one semitone). FILTER ENV AMOUNT -127..127 is bipolar and linear: +-127 at full envelope is +-164 steps, the whole
- * cutoff range (FENV_RANGE), so from FREQ 0 a full envelope opens the filter completely and from FREQ 164 a full
- * negative one closes it. With the VELOCITY switch on, the amount is scaled by velocity / 127 (sign kept).
+ * fenv_mod: the filter envelope's offset in the filter's cutoff units (filter.h: Q16 semitones). FILTER ENV AMOUNT
+ * -127..127 is bipolar and linear: +-127 at full envelope is +-122.4 semitones (FENV_RANGE_Q16 = SVF_KNOB_SPAN), the
+ * FILTER FREQ knob's whole range (16 Hz .. 18.8 kHz), so from FREQ 0 a full envelope opens the filter completely and
+ * from FREQ 164 a full negative one closes it to the knob's bottom. With the VELOCITY switch on, the amount is scaled by
+ * velocity / 127 (sign kept).
  *
  * vca_control: Q15 gain, 0 .. VCA_CEIL (32768 = unity). The loudness envelope times LOUDNESS ENV AMOUNT 0..127
  * (unipolar: negative amounts count as 0; velocity / 127 scales the amount when the switch is on), PLUS the LFO's
@@ -32,7 +33,8 @@
 
 #define ADSR_RATE 44100                   /* sample rate the rates are computed for */
 #define ADSR_ONE (INT32_C(1) << 30)       /* full level, Q30 */
-#define FENV_RANGE 164                    /* cutoff steps at full envelope and |FILTER ENV AMOUNT| 127 */
+#define FENV_RANGE_Q16 8020054           /* cutoff semitones (Q16) at full envelope and |FILTER ENV AMOUNT| 127:
+                                             filter.h SVF_KNOB_SPAN, 122.376 semitones */
 #define VCA_CEIL 32768                    /* VCA control ceiling, Q15 (unity gain) */
 
 enum { ADSR_IDLE, ADSR_ATTACK, ADSR_DECAY, ADSR_RELEASE };   /* adsr_t.stage; DECAY is also the sustain stage */

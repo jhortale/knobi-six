@@ -28,7 +28,7 @@
  *   vco1_pitch, vco2_pitch  Q16 MIDI notes (osc_set_pitch; 65536 = one semitone)
  *   vco1_shape              Q16 of VCO1 SHAPE units (osc_set_shape, 0..255)
  *   vco1_pw, vco2_pw        Q16 of PW units (osc_set_shape, 0..255; 127 = square)
- *   flt_freq                Q16 cutoff steps (svf_coef; 65536 = one step = one semitone)
+ *   flt_freq                Q16 cutoff semitones (svf_coef; 65536 = one semitone, not one FILTER FREQ step)
  *   flt_mode                Q16 of filter MODE units 0..255 (svf_coef's mode; the MODE param maps m * 255 / 127)
  *   bp_mix                  svf_coef's bp_mix units (0..32768 = Norm -> BP), an offset from the BP switch's 0 / 32768
  *   amp                     Q15 VCA control (vca_control's lfo_q15 argument; 32768 = a full VCA)
@@ -38,13 +38,15 @@
  * amount +-127; X-Mod VCO 2: VCO 2 at +-OSC_ONE (its nominal +-1) at amount +-127; aftertouch: at_q15 = +-32768). The
  * reference gives no depths; these are our calls, linear in the amount, to be checked by ear:
  *              VCO pitch   VCO1 shape   PW         filter freq        filter mode   Norm<->BP   AMP
- *   LFO        +-12 st     -            +-128      +-82 steps         +-255         -           +-32768 (full VCA)
- *   X-Mod      +-48 st     +-255        +-128      +-164 steps        +-255         +-32768     -
- *   AT         +-12 st     -            -          +-164 steps        +-255         -           +-32768
- * (164 steps = FENV_RANGE, the filter envelope's own full scale: a full X-Mod / AT amount sweeps the whole cutoff
- * range like FILTER ENV AMOUNT 127; the LFO's 82 makes a full bipolar sine span the whole range peak to peak. PW 128
- * and mode / shape 255 reach the ends of their ranges from the centre / either end.) The LFO PW destination is the
- * 4-state select: 0 none, 1 VCO1 PW, 2 VCO2 PW, 3 both.
+ *   LFO        +-12 st     -            +-128      +-82 st            +-255         -           +-32768 (full VCA)
+ *   X-Mod      +-48 st     +-255        +-128      +-164 st           +-255         +-32768     -
+ *   AT         +-12 st     -            -          +-164 st           +-255         -           +-32768
+ * (Filter freq in semitones, the cutoff's own unit, kept when the FILTER FREQ knob was re-anchored to 16 Hz .. 18.8 kHz
+ * in 0.746-semitone steps: 164 st is the filter's whole 1.44 Hz .. 18.8 kHz range and more than the knob's 122.4 st,
+ * so a full X-Mod / AT amount still sweeps from any FREQ to either end, a little further than FILTER ENV AMOUNT 127
+ * (FENV_RANGE_Q16 = the knob's span); the LFO's 82 st makes a full bipolar sine span the knob's range and more, peak to
+ * peak. PW 128 and mode / shape 255 reach the ends of their ranges from the centre / either end.) The LFO PW
+ * destination is the 4-state select: 0 none, 1 VCO1 PW, 2 VCO2 PW, 3 both.
  *
  * Where each part runs:
  *   control rate (every 16 frames in app_audio): lfo_set (on edit), lfo_tick (shared), lfo_depth (shared), mods_at

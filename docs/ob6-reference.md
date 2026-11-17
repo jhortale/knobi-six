@@ -98,6 +98,10 @@ full Loudness Env Amount can clip the outputs (pp. 20, 22).
 | BP | switch | Off/On | Selects band-pass | BP only via this switch; a continuous normal<->BP crossfade is reachable only via X-Mod "Norm-BP" destination. |
 | Track | 3-state switch (two LEDs HALF / FULL) | Off / Half / Full (0-2) | Keyboard -> cutoff | Higher notes open the filter. Exact scaling of Half/Full (e.g. 50%/100% of 1 V/oct): not specified. |
 
+KNOBI-SIX's calls (the controller's ruling after the listening round, `firmware/src/synth/filter.h`): Frequency
+0-164 spans 16 Hz .. 18.8 kHz exponentially (0.746 semitone a step); Track HALF / FULL = 0.5 / 1 octave of cutoff
+per octave; Envelope Amount +-127 sweeps the whole 0-164 range.
+
 ### 2.5 ENVELOPES
 
 #### Filter Envelope (pp. 23-25, 84)

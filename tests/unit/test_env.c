@@ -17,10 +17,10 @@ static int fails;
 static void test_fenv_bipolar(void)
 {
     int32_t full = fenv_mod(ONE, 127, 0, 0), neg = fenv_mod(ONE, -127, 0, 0);
-    printf("fenv_bipolar: amt +127 -> %d (%.3f steps), -127 -> %d, 0 -> %d\n", full, full / 65536.0, neg,
+    printf("fenv_bipolar: amt +127 -> %d (%.3f semitones), -127 -> %d, 0 -> %d\n", full, full / 65536.0, neg,
            fenv_mod(ONE, 0, 0, 0));
     CHECK(neg < 0 && neg == -full);
-    CHECK(abs(full - FENV_RANGE * 65536) <= 1);           /* the whole cutoff range */
+    CHECK(abs(full - FENV_RANGE_Q16) <= 1);           /* the whole cutoff range */
     CHECK(fenv_mod(ONE, 0, 0, 0) == 0 && fenv_mod(0, 127, 0, 0) == 0 && fenv_mod(0, -127, 0, 0) == 0);
     int sym = 1, mono = 1;
     int32_t prev = INT32_MIN;
@@ -34,10 +34,10 @@ static void test_fenv_bipolar(void)
         prev = v;
     }
     int32_t half = fenv_mod(ONE / 2, 127, 0, 0);
-    printf("fenv_bipolar: env 0.5, amt 127 -> %.3f steps; symmetric %d, monotone in amount %d\n", half / 65536.0,
+    printf("fenv_bipolar: env 0.5, amt 127 -> %.3f semitones; symmetric %d, monotone in amount %d\n", half / 65536.0,
            sym, mono);
     CHECK(sym && mono);
-    CHECK(abs(half - FENV_RANGE * 32768) <= 1);
+    CHECK(abs(half - FENV_RANGE_Q16 / 2) <= 1);
     CHECK(fenv_mod(-5, 127, 0, 0) == 0 && fenv_mod(ONE + 100, 127, 0, 0) == full);   /* env clamped to 0..1 */
 }
 
@@ -110,10 +110,10 @@ static void test_velocity_scales_amounts_only(void)
     CHECK(vca_control(ONE, 127, 1, 127, 0, 0) == vca_control(ONE, 127, 0, 0, 0, 0));
     CHECK(fenv_mod(ONE, -127, 1, 127) == fenv_mod(ONE, -127, 0, 0));
     int32_t v64 = vca_control(ONE, 127, 1, 64, 0, 0), f64 = fenv_mod(ONE, 127, 1, 64), fn64 = fenv_mod(ONE, -127, 1, 64);
-    printf("velocity_scales_amounts_only: vel 64 -> VCA %d (want %d), fenv %+.3f / %+.3f steps (want %+.3f)\n", v64,
-           64 * 32768 / 127, f64 / 65536.0, fn64 / 65536.0, FENV_RANGE * 64 / 127.0);
+    printf("velocity_scales_amounts_only: vel 64 -> VCA %d (want %d), fenv %+.3f / %+.3f semitones (want %+.3f)\n", v64,
+           64 * 32768 / 127, f64 / 65536.0, fn64 / 65536.0, FENV_RANGE_Q16 / 65536.0 * 64 / 127.0);
     CHECK(abs(v64 - 64 * 32768 / 127) <= 1);
-    CHECK(fabs(f64 / 65536.0 - FENV_RANGE * 64 / 127.0) < 0.001 && fn64 == -f64);
+    CHECK(fabs(f64 / 65536.0 - FENV_RANGE_Q16 / 65536.0 * 64 / 127.0) < 0.001 && fn64 == -f64);
     CHECK(vca_control(ONE, 127, 1, 0, 0, 0) == 0 && fenv_mod(ONE, 127, 1, 0) == 0);
     /* harder = more: monotone in velocity, for both polarities of the filter amount (positive brighter, negative darker) */
     int mono = 1;

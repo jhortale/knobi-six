@@ -28,10 +28,10 @@
 /* per knob step, the time grows by 5000^(1/127) (attack) and 2000^(1/127) (decay / release): log2 of it, Q24 */
 #define ADSR_A_STEP 1623257
 #define ADSR_D_STEP 1448625
-/* amount x velocity (each 0..127, so 0..16129) to a fraction: 2^32 / 16129 and FENV_RANGE x 65536 x 2^32 / 16129 /
- * 65536 (the env is taken in Q16), rounded; at full both land exactly on VCA_CEIL and FENV_RANGE x 65536. */
+/* amount x velocity (each 0..127, so 0..16129) to a fraction: 2^32 / 16129 and FENV_RANGE_Q16 x 2^32 / 16129 / 65536
+ * (the env is taken in Q16), rounded; at full both land exactly on VCA_CEIL and FENV_RANGE_Q16. */
 #define VCA_K 266288u
-#define FENV_K 43671315u
+#define FENV_K 32587405u
 
 #if ADSR_RATE != 44100
 #error "the envelope constants are computed for 44100 Hz"

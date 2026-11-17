@@ -35,7 +35,7 @@
 
 /* what every voice reads at a control tick: the smoothed program values, the shared modulation (voices.c fills it) */
 typedef struct {
-    int32_t cut;                          /* FILTER FREQ, Q16 steps (smoothed) */
+    int32_t cut;                          /* FILTER FREQ as a cutoff, Q16 semitones (svf_knob_q16, smoothed) */
     int32_t reso;                         /* RESONANCE, Q16 (smoothed); kres = svf_reso_k of it */
     int32_t mode;                         /* filter mode 0..255, Q16 (MODE param m -> m * 255 / 127, smoothed) */
     int32_t bp;                           /* BP switch 0..32768 (smoothed: the switch crossfades) */
@@ -63,7 +63,7 @@ typedef struct {
     mods_t ctl;                           /* this tick's mods_sum (VCO 2 term 0) */
     uint32_t inc1, inv1;                  /* VCO 1's increment and inverse at note1 (mods_fm1's base) */
     int32_t note1;                        /* VCO 1 note at this tick, Q16 */
-    int32_t cut, mode, bp;                /* this tick's filter inputs (Q16 steps, Q16 mode, 0..32768): fast path's */
+    int32_t cut, mode, bp;                /* this tick's filter inputs (Q16 semitones, Q16 mode, 0..32768): fast path's */
     int32_t shape1, pw1;                  /* this tick's VCO 1 shape / PW, Q16 (X-Mod per-sample base) */
     int32_t amp;                          /* AMP modulation (LFO + AT) x activity, Q15 */
     int32_t pitch, target, glide;         /* key pitch (Q16 notes, gliding), its target, step per tick (0: jump) */
