@@ -1,10 +1,11 @@
-# KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) on every push to phase1 and on demand; uploads the package, map and
-# disassembly. (release.yml publishes tagged releases.) Toolchain and SDK as in release.yml.
+# KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) + the second core in fm1-emu (cpu1-emu job, KNOBI_CPU1=1,
+# never the default) on every push to phase1 or phase2 and on demand; uploads the package, map and disassembly. (release.yml
+# publishes tagged releases.) Toolchain and SDK as in release.yml.
 name: build
 
 on:
   push:
-    branches: [phase1]
+    branches: [phase1, phase2]
   workflow_dispatch:
 
 jobs:
@@ -102,4 +103,59 @@ jobs:
             build/emu/*.cost
             build/emu/*.log
             build/emu/*.nm
+          if-no-files-found: warn
+
+  # The second core (Phase 2 Task 2, docs/MEASUREMENTS.md "Dual core"): the default build has no CPU1 code (build.py
+  # says so); the KNOBI_CPU1=1 build (hal/fm1_cpu1.h, from felucca-bsp) and its test hooks booted in fm1-emu (MIT,
+  # pinned, dual core): start + ping, nostart, hang, flaky core 1 (tests/cpu1_emu/). Builds and emulates only.
+  cpu1-emu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FM1_EMU_SHA: 60645a58d6cd1597ed565a3f00e4981964623232
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python packages
+        run: python3 -m pip install --break-system-packages Pillow || sudo apt-get install -y python3-pil
+
+      - name: JieLi toolchain (pkgman.jieliapp.com)
+        run: sh tools/get_toolchain.sh
+
+      - name: JieLi AC79 SDK
+        run: |
+          for i in 1 2 3; do
+            git clone --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
+                https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK && break
+            rm -rf ~/fw-AC79_AIoT_SDK
+            sleep 20
+          done
+          test -d ~/fw-AC79_AIoT_SDK
+
+      - name: fm1-emu (pinned)
+        run: |
+          git clone --filter=blob:none https://github.com/joakimeriksson/fm1-emu.git ~/fm1-emu
+          cd ~/fm1-emu && git checkout -q "$FM1_EMU_SHA"
+          CARGO_PROFILE_RELEASE_LTO=false cargo build --release -p fm1-emu 2>&1 | tail -3
+
+      - name: Default build (no CPU1)
+        run: |
+          ./build.sh | tee build-default.log
+          grep -q 'ok    CPU1: absent' build-default.log
+          { echo '### Default build'; echo '```'; grep -E 'ok   |app  ' build-default.log; sha256sum build/app.bin; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky)
+        run: |
+          bash tests/cpu1_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/cpu1emu
+          { cat build/cpu1emu/summary.md; echo; echo '```'; cat build/cpu1emu/plain.checks; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: knobi-six-cpu1-emu
+          path: |
+            build/cpu1emu/summary.md
+            build/cpu1emu/*.log
+            build/cpu1emu/*.checks
+            build/cpu1emu/*.map
           if-no-files-found: warn

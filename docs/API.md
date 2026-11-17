@@ -253,6 +253,31 @@ Flash (1 MiB): the head (0x0-0x3FFF), the app (0x4000-0x9CFFF), the store above 
 (`FL_RANGE_OK`, store.h) keeps a bug from erasing anything else, and the RAM flash driver refuses the protected ranges
 on its own as well (`FL_GUARD`, hal/fm1_flash_map.h; tests/smk_flash_test.c checks every sector).
 
+## Second core
+
+Off by default: only a build with `KNOBI_CPU1=1 ./build.sh` (package `knobi-six-cpu1.fwsc`, never a release: build.py
+refuses `--release` with it) has the AC791N's second core (CPU1). The HAL is felucca-bsp's (`hal/fm1_cpu1.h`,
+`fm1_cpu1.S`, `fm1_cpu1_stop.h`, `fm1_flash_access.h`; MPL-2.0, see LICENSING.md). Without the flag the calls below
+exist as stubs (`cpu1_post` says no, `cpu1_state` says `CPU1_OFF`), so code can call them either way and runs every
+job on CPU0.
+
+| | |
+| --- | --- |
+| `int cpu1_start(void)` | `fm1_cstart` calls it (with the flag), after the RAM is set up and before the audio and the timers, never in the rescue and never on a boot after a failed one. 0 = CPU1 runs and a ping came back; < 0 = one core |
+| `int cpu1_post(void (*job)(void *), void *arg)` | 0 = CPU1 has `job(arg)`; < 0 = not handed over (off, failed, a job outstanding): run it yourself |
+| `int cpu1_join(uint32_t timeout_ticks)` | 0 = done; < 0 = late, a misread or a fault: CPU1 is **retired** (held, one core until power-off) and the job dropped, never run twice: render that part yourself. Keep the timeout under one audio block (5.8 ms = 139,319 ticks at `FM1_TICKS_PER_US` 24) and above the job's worst case |
+| `int cpu1_state(void)` | `CPU1_OFF`, `CPU1_IDLE`, `CPU1_BUSY`, `CPU1_FAIL`; reads only, from anywhere |
+| `void cpu1_hold(void)` | hold CPU1 and mark it off |
+| `int cpu1_ping(uint32_t timeout_ticks)` | (with the flag) a round trip through CPU1; < 0 = retired |
+
+The rules: post and join from one context (the audio interrupt). A job runs from the flash, so it may only be
+outstanding while the flash is on: every flash erase or write runs with interrupts off and refuses to start unless
+CPU1 is held or idle in its RAM loop (`fm1_flash_access_ok`), and the audio interrupt joins every job before it
+returns. Name a job `cpu1_job_*`: build.py adds its stack to CPU1's (2,560 B for the loop and the deepest job) and
+fails the build above that. CPU1 runs no interrupts. Every reset, the UBOOT entry and the update hold CPU1 first;
+CPU0's crash holds it and bars it until power-off. A failure of CPU1 never restarts the keyboard, so it never counts
+against the boot guard. Results in the emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
+
 ## Build options
 
 `./build.sh` takes `--release X.Y` and `--model pro|elite|mke` (or `MODEL=`): the SMK-37 Pro, Elite and MKE-P37 are
@@ -267,6 +292,7 @@ its own package. `DINGHY_DEFS="-DFELUCCA_UAC=0" ./build.sh` adds defines for a t
 | `FELUCCA_OTA` | 1 | the updater. **Leave it on**: without it nothing can install over your firmware but the rescue |
 | `CV_MAX` | 240 x 64 | the biggest canvas, in pixels |
 | `SMK_MASTER_FROM_APP` | 0 | 1: K1 is the app's, the app sets the volume |
+| `KNOBI_CPU1` | 0 | 1: the second core (an environment variable: `KNOBI_CPU1=1 ./build.sh`; "Second core" above) |
 
 The app is built with `-Os`. Leave it so: with `-O2` (the unity build puts usb.c in it) the USB-MIDI IN babbled on an
 FM-1 and the host dropped the port.

@@ -20,3 +20,13 @@
 #if BOARD_SMK37 && !defined(SMK_MODEL)
 #define SMK_MODEL "SMK-37 Pro"
 #endif
+
+/* KNOBI_CPU1: 1 = a build with the second core (CPU1: fm1_cpu1.h, tools/build.py KNOBI_CPU1=1). 0, the default (CI
+ * and every release), builds exactly the single-core image: CPU1 is never started, held or checked. FM1_CPU1 is
+ * felucca-bsp's name for the same switch (fm1_flash_access.h, fm1_cpu1.h). */
+#ifndef KNOBI_CPU1
+#define KNOBI_CPU1 0
+#endif
+#ifndef FM1_CPU1
+#define FM1_CPU1 KNOBI_CPU1
+#endif

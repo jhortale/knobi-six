@@ -71,6 +71,8 @@ IDENT = "956"                       # KNOBI-SIX, every build: free in the Firmwa
                                     # the installers' resume wants _9NN
 PRODUCT = "SMK-37 Pro_" + IDENT
 VERSION = None                      # APP_VER for release builds
+CPU1 = os.environ.get("KNOBI_CPU1", "0") == "1"   # the second core (hal/fm1_cpu1.h; docs/API.md "Second core"): off
+                                    # by default, in CI and in every release; KNOBI_CPU1=1 ./build.sh -> knobi-six-cpu1*.fwsc
 FACTORY_H = FW / "gen" / "factory_bank.h"   # the user's own imported OB-6 bank (never committed, never published)
 
 
@@ -202,10 +204,18 @@ def build_app():
             raise SystemExit("DATA_FAMILY: 1..7 of A-Z 0-9")
         flags.append(f'-DDATA_FAMILY="{DATA_FAMILY}"')
     flags += os.environ.get("DINGHY_DEFS", "").split()   # (a test build: DINGHY_DEFS=-DFELUCCA_UAC=0 ./build.sh)
-    cmds = [("cc", "-c", FW / "crt0.S", "-o", OUT / "crt0.o"),
-            ("cc", "-c", FW / "hal" / "fm1_vec.S", "-o", OUT / "fm1_vec.o"),
-            ("cc", "-c", FW / "hal" / "fm1_isr.S", "-o", OUT / "fm1_isr.o"),
+    sdefs = []
+    if CPU1:                         # the second core: its entry, its stacks and the fault resume (fm1_cpu1.S, fm1_vec.S)
+        flags.append("-DKNOBI_CPU1=1")
+        sdefs = ["-DKNOBI_CPU1=1"]
+    cmds = [("cc", *sdefs, "-c", FW / "crt0.S", "-o", OUT / "crt0.o"),
+            ("cc", *sdefs, "-c", FW / "hal" / "fm1_vec.S", "-o", OUT / "fm1_vec.o"),
+            ("cc", *sdefs, "-c", FW / "hal" / "fm1_isr.S", "-o", OUT / "fm1_isr.o"),
             ("cc", *flags, "-c", FW / "src" / "app.c", "-o", OUT / "app.o")]
+    objs = []
+    if CPU1:
+        cmds.append(("cc", *sdefs, "-c", FW / "hal" / "fm1_cpu1.S", "-o", OUT / "fm1_cpu1.o"))
+        objs = [OUT / "fm1_cpu1.o"]
     tc_all(*cmds)
     elf = OUT / "app.elf"
     ld = FW / "app.ld"
@@ -216,7 +226,7 @@ def build_app():
         ld = OUT / "app.ld"
         ld.write_text(txt.replace("LENGTH = 0x8DFBC", f"LENGTH = {APP_SLOT:#X}".replace("0X", "0x")))
     tc("pi32v2/bin/ld", "--gc-sections", "-e", "_start", "-T", ld, OUT / "crt0.o", OUT / "fm1_vec.o",
-       OUT / "fm1_isr.o", OUT / "app.o", "-o", elf)
+       OUT / "fm1_isr.o", OUT / "app.o", *objs, "-o", elf)
     for sect in ("text.bin", "data.bin", "ramtext.bin"):
         (OUT / sect).unlink(missing_ok=True)
     *_, syms, dis, rt = tc_all(("common/bin/objcopy", "-O", "binary", "-j", ".text", elf, OUT / "text.bin"),
@@ -247,6 +257,116 @@ def build_app():
     return bytes(img), syms, dis, rt
 
 
+def sym_of(syms, name):
+    mm = re.search(r"^([0-9a-f]+) .*\s" + re.escape(name) + r"$", syms, re.M)
+    return int(mm.group(1), 16) if mm else None
+
+
+def stack_depths(syms, dis):
+    """per function (objdump -t sizes, objdump -d): its own frame (every push and sp decrement in it, an upper bound)
+    and its calls (direct targets; None for a call through a register)"""
+    funcs = []
+    for mm in re.finditer(r"^([0-9a-f]+) .{6}F (\S+)\s+([0-9a-f]+) (\S+)$", syms, re.M):
+        funcs.append((int(mm.group(1), 16), int(mm.group(3), 16), mm.group(4)))
+    funcs.sort()
+    starts = [f[0] for f in funcs]
+    import bisect
+
+    def owner(a):
+        i = bisect.bisect_right(starts, a) - 1
+        return funcs[i] if i >= 0 and a < funcs[i][0] + max(funcs[i][1], 1) else None
+    frame, calls = {}, {}
+    for ln in dis.splitlines():
+        mm = LINE.match(ln)
+        if not mm:
+            continue
+        a, nbytes, insn = int(mm.group(1), 16), len(mm.group(2).split()), mm.group(3).strip()
+        f = owner(a)
+        if not f:
+            continue
+        name = f[2]
+        fr = frame.setdefault(name, 0)
+        calls.setdefault(name, set())
+        p = re.match(r"\[--sp\] = \{?([^}]*)\}?$", insn)
+        if p:
+            n = 0
+            for item in p.group(1).split(","):
+                r = re.match(r"\s*r(\d+)-r(\d+)\s*$", item)
+                n += abs(int(r.group(1)) - int(r.group(2))) + 1 if r else 1
+            frame[name] = fr + 4 * n
+        p = re.match(r"sp \+= -(\d+)$", insn)
+        if p:
+            frame[name] = fr + int(p.group(1))
+        p = re.match(r"call (r\d+|-?\d+)(?: <[^:>]*: ([0-9a-f]+) >)?", insn)
+        if p:
+            if p.group(1).startswith("r"):
+                calls[name].add(None)
+            else:
+                t = int(p.group(2), 16) if p.group(2) else a + nbytes + int(p.group(1))
+                g = owner(t)
+                calls[name].add(g[2] if g else None)
+    return frame, calls
+
+
+def cpu1_check(img, syms, dis, rt, c1_lo, c1_hi):
+    """KNOBI_CPU1: CPU1's idle loop is in the image's RAM code (.c1_text, inside .ram_text and its PC window), calls
+    nothing but its job, and its stack holds the loop and the deepest job (functions named cpu1_job_*). Without it:
+    none of it is there"""
+    errors, notes = [], []
+    main = sym_of(syms, "fm1_cpu1_main")
+    if not CPU1:
+        if main is not None or sym_of(syms, "fm1_cpu1_entry") is not None or (c1_lo is not None and c1_hi != c1_lo):
+            errors.append("CPU1 code in a build without KNOBI_CPU1")
+        else:
+            notes.append("CPU1: absent (KNOBI_CPU1=0, one core)")
+        return errors, notes
+    rt_lo, rt_hi, rt_load = sym_of(syms, "_rt_start"), sym_of(syms, "_rt_end"), sym_of(syms, "_rt_load")
+    if None in (main, c1_lo, c1_hi, rt_lo, rt_hi, rt_load) or not (rt_lo <= c1_lo <= main < c1_hi <= rt_hi):
+        errors.append(".c1_text: fm1_cpu1_main is not in the RAM code (.ram_text, _c1_start.._c1_end)")
+        return errors, notes
+    off = rt_load + (c1_lo - rt_lo) - APP_XIP
+    blob = bytes(img[off:off + (c1_hi - c1_lo)])
+    if len(blob) != c1_hi - c1_lo or blob.count(0xFF) == len(blob) or blob.count(0) == len(blob):
+        errors.append(f".c1_text ({c1_hi - c1_lo} B) is not in the image at {off:#x}")
+    nostart = "-DKNOBI_CPU1_TEST=1" in os.environ.get("DINGHY_DEFS", "").split()   # (tests/cpu1_emu: no entry)
+    for name in ("fm1_cpu1_resume",) if nostart else ("fm1_cpu1_entry", "fm1_cpu1_resume"):
+        a = sym_of(syms, name)
+        if a is None or not APP_XIP <= a < APP_XIP + len(img):
+            errors.append(f"{name} is not in the image")
+    c1_calls = [ln for ln in rt.splitlines() if re.search(r"\bcall\b", ln) and (mm := LINE.match(ln))
+                and c1_lo <= int(mm.group(1), 16) < c1_hi]
+    if any(not re.search(r"\bcall r\d+\b", ln) for ln in c1_calls) or len(c1_calls) > 1:
+        errors.append(f".c1_text calls more than its job: {c1_calls[:3]}")
+    lo, hi = sym_of(syms, "fm1_cpu1_ustack"), sym_of(syms, "fm1_cpu1_ustack_top")
+    frame, calls = stack_depths(syms, dis)
+
+    def depth(f, seen=()):
+        if f is None:
+            return 0, True
+        if f in seen:
+            return 0, False                         # recursion: unbounded
+        d, ok = 0, True
+        for g in calls.get(f, ()):
+            if g is None:
+                ok = False                          # a call through a register: not followed
+                continue
+            dg, okg = depth(g, (*seen, f))
+            d, ok = max(d, dg), ok and okg
+        return frame.get(f, 0) + d, ok
+    loop = frame.get("fm1_cpu1_main", 0)
+    jobs = sorted(n for n in frame if n.startswith("cpu1_job_"))
+    deep = max(((depth(j)[0], j) for j in jobs), default=(0, "none"))
+    unbounded = [j for j in jobs if not depth(j)[1]]
+    budget = (hi - lo - 256) if None not in (lo, hi) else 0
+    used = loop + deep[0]
+    notes.append(f"CPU1: .c1_text {c1_hi - c1_lo} B at {c1_lo:#x} in the image; stack: loop {loop} B + deepest job "
+                 f"{deep[1]} {deep[0]} B = {used} B of {budget} B" +
+                 (f" (not followed past a call through a register: {', '.join(unbounded)})" if unbounded else ""))
+    if not jobs or used > budget:
+        errors.append(f"CPU1 stack: {used} B > {budget} B (FM1_CPU1_USTACK_BYTES less its 256 B guard)")
+    return errors, notes
+
+
 def check(img, syms, dis, rt):
     errors, notes = [], []
     m = re.search(r"^([0-9a-f]+) .*\s_start$", syms, re.M)
@@ -254,11 +374,19 @@ def check(img, syms, dis, rt):
         errors.append(f"_start is not at {APP_XIP:#x}")
     if img[:4] != bytes.fromhex("04818000"):
         errors.append(f"image starts with {img[:4].hex()}, not the entry stub")
-    rt_calls = [ln for ln in rt.splitlines() if re.search(r"\bcall\b", ln)]
+    c1_lo, c1_hi = sym_of(syms, "_c1_start"), sym_of(syms, "_c1_end")
+    def in_c1(ln):
+        mm = LINE.match(ln)
+        return mm and None not in (c1_lo, c1_hi) and c1_lo <= int(mm.group(1), 16) < c1_hi
+    rt_calls = [ln for ln in rt.splitlines() if re.search(r"\bcall\b", ln) and not in_c1(ln)]
     if rt_calls:                    # RAM code runs with the flash off: no calls into XIP
         errors.append(f".ram_text contains calls: {rt_calls[:3]}")
     else:
-        notes.append(f".ram_text: {len([ln for ln in rt.splitlines() if LINE.match(ln)])} insns, no calls")
+        notes.append(f".ram_text: {len([ln for ln in rt.splitlines() if LINE.match(ln)])} insns, no calls"
+                     + (" (but CPU1's job call in .c1_text)" if CPU1 else ""))
+    e, n = cpu1_check(img, syms, dis, rt, c1_lo, c1_hi)
+    errors += e
+    notes += n
     for ln in dis.splitlines():     # nothing may call or load an address in the chip ROM
         mm = LINE.match(ln)
         if not mm:
@@ -345,6 +473,8 @@ def main():
         suffix += "-" + model
     PRODUCT = BOARD_PREFIX[BOARD] + IDENT
     local = factory_guard(a.release)    # (before anything is built)
+    if CPU1:                        # never the default package: a build with the second core is named so
+        suffix = "-cpu1" + suffix
     name = f"knobi-six{local}{suffix}.fwsc"
     if a.release:                   # one digit each (X.Y; a .Z only in the text)
         m = re.fullmatch(r"(\d)\.(\d)(\.\d)?(-[A-Za-z0-9]+)?", a.release)
@@ -352,6 +482,8 @@ def main():
             raise SystemExit(f"--release {a.release}: use X.Y, X.Y.Z or X.Y-suffix, one digit each")
         VERSION = m[1] + "." + m[2] + (m[3] or "")
         name = f"knobi-six-{a.release}{suffix}.fwsc"
+    if a.release and CPU1:
+        raise SystemExit("KNOBI_CPU1=1: a release never runs the second core (docs/API.md \"Second core\")")
     fm1pkg_make.SDK = a.sdk
     for rel, sha in SDK_SHA256.items():          # fail early without the SDK
         if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:

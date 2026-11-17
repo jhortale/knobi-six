@@ -11,7 +11,11 @@
  */
 #pragma once
 #include <stdint.h>
+#include "fm1_cc.h"                             /* KNOBI_CPU1 */
 #include "fm1_xip.h"
+#if KNOBI_CPU1
+#include "fm1_flash_access.h"                   /* the flash gate and irq_save / irq_restore (felucca-bsp's) */
+#endif
 
 #define RAMFN  __attribute__((section(".ram_text"), noinline, used))
 #define RAMINL static inline __attribute__((always_inline))
@@ -86,6 +90,10 @@ RAMINL int fl_enter(fl_saved_t *s)
     mode = (s->sfc_con >> 8) & 0xFu;
     if (mode == 6u || mode == 7u)                 /* continuous-read XIP: not handled here */
         return -1;
+#if KNOBI_CPU1
+    if (!fm1_flash_access_ok())                   /* CPU0, interrupts off, CPU1 held or idle in its RAM loop */
+        return -1;
+#endif
     fl_csync();
     while ((int32_t)SFC_CON < 0) ;                /* SFC idle */
     SFC_CON = 0;                                  /* XIP OFF from here on */
@@ -256,8 +264,11 @@ static void fl_plain_window_init(void)
     __asm__ volatile("csync\n\tsti" ::: "memory");
 }
 
+#if !KNOBI_CPU1                                   /* (KNOBI_CPU1: fm1_flash_access.h's clear ICFG bits 8 and 9 and
+                                                   * give the caller's ICFG back) */
 static inline uint32_t irq_save(void) { __asm__ volatile("cli" ::: "memory"); return 0; }
 static inline void irq_restore(uint32_t f) { (void)f; __asm__ volatile("csync\n\tsti" ::: "memory"); }
+#endif
 
 static int fl_erase4k(uint32_t off, uint32_t *took_us)
 {
