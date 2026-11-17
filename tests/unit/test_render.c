@@ -439,6 +439,41 @@ static void fade_and_tune(void)
     CHECK(t12 == 12 * 65536 && tmax == 1250 * 65536 / 100);
 }
 
+/* The CPU guard (voices.h synth_guard) on the host's fake clock (engine.c: each render advances it by eng_fake_per_voice
+ * ticks per voice sounding): at 120 % of the block for six voices it sheds down to the voices that fit under 80 %
+ * (four), with no step in the output beyond the steady sound's (each shed voice fades in 5 ms, like a steal), keeps
+ * them while it stays above 55 %, and gives a voice back after SYNTH_GUARD_HOLD calm blocks each. */
+static void cpu_guard_sheds(void)
+{
+    const uint32_t budget = BLK * ENG_TICKS_PER_FRAME_X10 / 10;
+    eng_init();
+    eng_param(P_MIX_VCO1, 0), eng_param(P_MIX_VCO2, 127), eng_param(P_VCO2_SHAPE, 0);   /* triangles: small steps */
+    for (int k = 0; k < 6; k++) eng_note(48 + 5 * k, 100);
+    eng_fake_per_voice = 0;
+    render(FS / 4 / BLK * BLK);
+    int a6 = synth_active(&eng_synth);
+    int32_t s0 = max_step(FS / 8, FS / 4 / BLK * BLK);
+    eng_fake_per_voice = budget * 12 / 10 / 6;                 /* six voices: 120 % */
+    const uint32_t n = FS / 4 / BLK * BLK;
+    render(n);
+    int32_t st = max_step(1, n);
+    int lim = eng_synth.vlimit, live = synth_active(&eng_synth);
+    eng_note(90, 100);                                         /* a new note steals under the limit */
+    render(BLK * 4);
+    int after_note = synth_active(&eng_synth);
+    eng_fake_per_voice = budget / 10;                          /* calm: 10 % a voice */
+    render(BLK * (SYNTH_GUARD_HOLD - 2));
+    int lim_early = eng_synth.vlimit;
+    render(BLK * (2 * SYNTH_GUARD_HOLD + 4));
+    int lim_back = eng_synth.vlimit;
+    eng_fake_per_voice = 0;
+    printf("cpu_guard_sheds: 6 voices at 120 %%: limit %d, %d voices sounding, max step %d (steady %d); a new note: "
+           "%d sounding; calm: limit %d after %d blocks, %d after %d\n", lim, live, st, s0, after_note, lim_early,
+           SYNTH_GUARD_HOLD - 2, lim_back, 3 * SYNTH_GUARD_HOLD + 2);
+    CHECK(a6 == 6 && lim == 4 && live == 4 && st <= 2 * s0 && after_note == 4);
+    CHECK(lim_early == 4 && lim_back == NVOICE);
+}
+
 int main(void)
 {
     voice_worst_case_bounded();
@@ -452,6 +487,7 @@ int main(void)
     all_notes_off_releases();
     midi_volume();
     fade_and_tune();
+    cpu_guard_sheds();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;

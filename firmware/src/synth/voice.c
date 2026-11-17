@@ -43,7 +43,7 @@ void voice_reset(voice_t *v, uint32_t rnd)
     v->act = 0, v->amp = 0;
     v->le0 = v->led = v->voff = 0;
     v->pitch = v->target = VOICE_NO_PITCH, v->glide = 0;   /* nothing to glide from: the manager's last_pitch decides */
-    v->busy = v->key = v->latched = v->pend_off = v->min_gate = 0;
+    v->busy = v->key = v->latched = v->pend_off = v->min_gate = v->shed = 0;
 }
 
 void voice_init(voice_t *v, uint32_t seed)
@@ -107,7 +107,7 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 void voice_env(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 {
     adsr_tick16(&v->fenv, &c->fr);
-    int32_t l0 = v->lenv.level, l1 = adsr_tick16(&v->lenv, &c->lr);
+    int32_t l0 = v->lenv.level, l1 = adsr_tick16(&v->lenv, v->shed ? &c->shed : &c->lr);
     v->le0 = l0;
     v->led = (int32_t)(((int64_t)l1 - l0) >> 4);   /* per frame of the 16 */
     v->vk = vca_env_k(prog[P_LENV_AMT], prog[P_LENV_VEL], v->vel);

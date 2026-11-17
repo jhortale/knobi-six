@@ -49,6 +49,7 @@ typedef struct {
     int32_t bend;                         /* pitch bend, Q16 semitones */
     int32_t lfo, depth, at;               /* lfo_tick, lfo_depth, mods_at of this tick */
     adsr_rates_t fr, lr;                  /* filter / loudness envelope rates */
+    adsr_rates_t shed;                    /* the CPU guard's fade: RELEASE 0 (5 ms), for a shed voice's loudness */
     mods_xm_t xm;                         /* X-Mod VCO 2 gains (mods_xm_gains) */
     uint8_t xm_pitch, xm_shape, xm_flt;   /* per-sample paths on: VCO1 pitch, VCO1 shape / PW, filter */
     uint8_t pos;                          /* frames of the current control period already rendered (0..15) */
@@ -87,6 +88,7 @@ typedef struct {
     uint8_t latched;                      /* key up while HOLD is on: keeps sounding */
     uint8_t pend_off;                     /* key up before the minimum gate elapsed: release when it does */
     uint8_t min_gate;                     /* control ticks left of the 2 ms minimum gate */
+    uint8_t shed;                         /* the CPU guard took it: fading out (5 ms release) until free */
 } voice_t;
 
 void voice_init(voice_t *v, uint32_t seed);

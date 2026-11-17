@@ -73,6 +73,8 @@ struct synth {
     int32_t last_pitch;                   /* the latest note-on's key, Q16: where a new poly voice glides from */
     int32_t tune;                         /* the globals TRANSPOSE + TUNE, Q16 semitones (added like the bend) */
     uint8_t hold, ctl_left, rates_dirty;
+    uint8_t vlimit;                       /* the CPU guard's voice limit, 1..NVOICE (synth_guard) */
+    uint16_t calm;                        /* blocks in a row under SYNTH_GUARD_LO */
 };
 
 void synth_init(synth_t *s);
@@ -89,5 +91,15 @@ void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times
 void synth_tune(synth_t *s, int cents);             /* master transpose + tune, -1250..+1250 cents, both VCOs */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
 int  synth_active(const synth_t *s);                /* voices sounding */
+/* The CPU guard: after each render, the time it took (used) and the block's time (budget), in any one unit (the
+ * platform's tick counter). Over SYNTH_GUARD_HI % of the budget the voice limit drops by one and the voices over it are
+ * shed at once (the oldest released first, then the oldest held), each fading out in 5 ms as a steal does (no further
+ * shedding until they are gone: their fade is in the next measurement); after
+ * SYNTH_GUARD_HOLD blocks in a row under SYNTH_GUARD_LO % the limit goes back up by one (hysteresis: a patch on the
+ * edge does not toggle every block). New notes respect the limit (they steal instead of taking a free voice). */
+#define SYNTH_GUARD_HI 80
+#define SYNTH_GUARD_LO 55
+#define SYNTH_GUARD_HOLD 172              /* blocks: ~1 s of 256 frames */
+void synth_guard(synth_t *s, uint32_t used, uint32_t budget);
 
 #endif

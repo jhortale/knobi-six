@@ -165,7 +165,7 @@ static void synth_voice_on(synth_t *s, voice_t *v, int note, int vel, int legato
 {
     int fresh = !v->busy;
     v->note = (uint8_t)note, v->vel = (uint8_t)synth_clampi(vel, 1, 127);
-    v->key = 1, v->latched = 0, v->busy = 1;
+    v->key = 1, v->latched = 0, v->busy = 1, v->shed = 0;
     synth_glide(s, v, note * 65536, legato);
     if (trigger || fresh) {
         v->pend_off = 0;
@@ -197,21 +197,31 @@ static void synth_all_off(synth_t *s)
 
 /* ---- poly ---- */
 
+/* voices sounding that the CPU guard has not shed */
+static int synth_live(const synth_t *s)
+{
+    int n = 0;
+    for (int i = 0; i < NVOICE; i++) n += s->voice[i].busy && !s->voice[i].shed;
+    return n;
+}
+
 static int synth_alloc(const synth_t *s, int note)
 {
     int best = -1;
     for (int i = 0; i < NVOICE; i++)
         if (s->voice[i].busy && s->voice[i].note == note) return i;   /* the same key: retrigger its voice */
-    for (int i = 0; i < NVOICE; i++)   /* free: released longest ago */
-        if (!s->voice[i].busy && (best < 0 || s->voice[i].t_off < s->voice[best].t_off)) best = i;
-    if (best >= 0) return best;
+    if (synth_live(s) < s->vlimit) {   /* free: released longest ago (unless the CPU guard's limit is reached) */
+        for (int i = 0; i < NVOICE; i++)
+            if (!s->voice[i].busy && (best < 0 || s->voice[i].t_off < s->voice[best].t_off)) best = i;
+        if (best >= 0) return best;
+    }
     for (int i = 0; i < NVOICE; i++) {   /* released, still sounding: the oldest release */
         const voice_t *v = &s->voice[i];
-        if (!v->key && !v->latched && (best < 0 || v->t_off < s->voice[best].t_off)) best = i;
+        if (v->busy && !v->key && !v->latched && (best < 0 || v->t_off < s->voice[best].t_off)) best = i;
     }
     if (best >= 0) return best;
     for (int i = 0; i < NVOICE; i++)     /* all held: the oldest note */
-        if ((best < 0 || s->voice[i].t_on < s->voice[best].t_on)) best = i;
+        if (s->voice[i].busy && (best < 0 || s->voice[i].t_on < s->voice[best].t_on)) best = i;
     return best;
 }
 
@@ -254,10 +264,10 @@ static int synth_uni_voices(const synth_t *s, int *chord, int *nchord)
                 while (j > 0 && chord[j - 1] > c) chord[j] = chord[j - 1], j--;
                 chord[j] = c;
             }
-        *nchord = n < NVOICE ? n : NVOICE;
-        return n ? *nchord : NVOICE;
+        *nchord = n < s->vlimit ? n : s->vlimit;
+        return n ? *nchord : s->vlimit;
     }
-    return u + 1 < NVOICE ? u + 1 : NVOICE;
+    return u + 1 < s->vlimit ? u + 1 : s->vlimit;   /* (the CPU guard's limit, NVOICE normally) */
 }
 
 static void synth_mono_go(synth_t *s, int key, int vel, int trigger, int legato)
@@ -327,6 +337,8 @@ void synth_init(synth_t *s)
     s->midi_vol = 127;
     s->mono = -1;
     s->last_pitch = VOICE_NO_PITCH;
+    s->vlimit = NVOICE;
+    adsr_rates(&s->ctx.shed, 0, 0, 0, 0);
     for (int i = 0; i < NVOICE; i++) voice_init(&s->voice[i], synth_rand(s));
     lfo_init(&s->lfo, synth_rand(s));
     program_t p;
@@ -477,3 +489,34 @@ void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
     }
 }
 
+/* the CPU guard (voices.h) */
+void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
+{
+    if ((uint64_t)used * 100u > (uint64_t)budget * SYNTH_GUARD_HI) {
+        s->calm = 0;
+        for (int i = 0; i < NVOICE; i++)   /* voices shed earlier still fading (their cost is in 'used'): wait */
+            if (s->voice[i].busy && s->voice[i].shed) return;
+        if (s->vlimit > 1) s->vlimit--;
+        for (int n = synth_live(s); n > s->vlimit; n--) {
+            int best = -1;
+            for (int i = 0; i < NVOICE; i++) {   /* the oldest released first */
+                const voice_t *v = &s->voice[i];
+                if (v->busy && !v->shed && !v->key && !v->latched && (best < 0 || v->t_off < s->voice[best].t_off))
+                    best = i;
+            }
+            if (best < 0)
+                for (int i = 0; i < NVOICE; i++) {   /* then the oldest held */
+                    const voice_t *v = &s->voice[i];
+                    if (v->busy && !v->shed && (best < 0 || v->t_on < s->voice[best].t_on)) best = i;
+                }
+            voice_t *v = &s->voice[best];
+            v->shed = 1, v->key = 0, v->latched = 0, v->pend_off = 0, v->min_gate = 0;
+            synth_gate(v, 0);
+        }
+    } else if ((uint64_t)used * 100u < (uint64_t)budget * SYNTH_GUARD_LO) {
+        if (s->calm < SYNTH_GUARD_HOLD) s->calm++;
+        if (s->calm >= SYNTH_GUARD_HOLD && s->vlimit < NVOICE) s->vlimit++, s->calm = 0;
+    } else {
+        s->calm = 0;
+    }
+}

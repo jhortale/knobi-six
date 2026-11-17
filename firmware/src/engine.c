@@ -250,12 +250,30 @@ static void eng_drain(void)
     ENG_BARRIER();
     eng_qr = r;
 }
+/* The CPU guard's clock (voices.h synth_guard): the platform's tick counter (TIMER4, FM1_TICKS_PER_US); on the host a
+ * fake clock that each render advances by eng_fake_per_voice ticks per voice sounding (the tests set it). */
+#define ENG_TICKS_PER_FRAME_X10 5442u      /* 24 ticks per us x 10 / 44.1 kHz */
+#ifdef DINGHY_HOST
+uint32_t eng_fake_ticks, eng_fake_per_voice;
+static uint32_t eng_ticks(void) { return eng_fake_ticks; }
+#else
+#if FM1_TICKS_PER_US != 24
+#error "ENG_TICKS_PER_FRAME_X10 is computed for 24 ticks per microsecond"
+#endif
+static uint32_t eng_ticks(void) { return fm1_ticks(); }
+#endif
+
 static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
 {
     int32_t g = eng_fade_g, tgt;
     if (!eng_ready) return;
     eng_drain();
+    uint32_t t0 = eng_ticks();
     synth_render(&eng_synth, lr, frames);
+#ifdef DINGHY_HOST
+    eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);
+#endif
+    synth_guard(&eng_synth, eng_ticks() - t0, frames * ENG_TICKS_PER_FRAME_X10 / 10u);
     eng_voices = (uint8_t)synth_active(&eng_synth);
     tgt = eng_fade_out ? 0 : ENG_FADE_ONE;
     if (g == ENG_FADE_ONE && tgt == ENG_FADE_ONE) return;   /* (the usual case: nothing to do) */
