@@ -2,7 +2,7 @@
 /* KNOBI-SIX globals: the OB-6's global settings that apply here (docs/ob6-reference.md section 7; the spec's list),
  * the keys' octave and the last program, kept in two of the base's blobs (0 and 1) taken in turn, each record with a
  * sequence number: a save goes to the other blob, so one cut by a power loss leaves the previous record. Restored at
- * power-on. Saved only while silent (an erase stalls the sound). Integers only. */
+ * power-on. Saved only once nothing has played for 3 s (app.c; an erase stalls the sound). Integers only. */
 #ifndef KNOBI_GLOBALS_H
 #define KNOBI_GLOBALS_H
 #include <stdint.h>

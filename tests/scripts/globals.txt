@@ -2,7 +2,7 @@
 # cents), K8 VEL CURVE (7: every key at 127), pad 2 LOCAL (OFF: the keys go to MIDI only, MIDI in still plays), pad 3
 # STEREO / MONO ("mono"), pad 4 SUSTAIN polarity (N.C.: CC 64 upside down), pad 5 AT CURVE (the pads' pressure, "at").
 # "glob G": global G (globals.h order: 0 MIDI CH, 1 POT, 2 TX, 3 RX, 4 TRANSPOSE, 5 TUNE, 6 VEL, 7 LOCAL, 8 STEREO,
-# 9 SUSTAIN, 10 AT CURVE). They are saved 2 s after the last change, once silent ("saves").
+# 9 SUSTAIN, 10 AT CURVE). They are saved 2 s after the last change, once nothing has played for 3 s ("saves").
 50 btn 12
 100 btn 10
 150 expect 8 screen
@@ -57,6 +57,8 @@
 2100 pad 9 32
 2150 expect 55 at
 2200 pad 9 0
-# saved once, 2 s after the last change, while silent
-4300 expect 1 saves
-4400 end
+# saved once: 2 s after the last change (2030) is not enough, nothing may have played for 3 s (the pad's pressure
+# until 2200, the note before): not at 4300, at ~5200
+4300 expect 0 saves
+5300 expect 1 saves
+5400 end

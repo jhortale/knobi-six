@@ -1,0 +1,107 @@
+# The globals' autosave and the sound. A save erases a flash sector: the sound stalls ~50 ms. The listening round
+# caught one in the 70 ms gap between two staccato notes (the next note 31 ms late): the old rule saved 2 s after a
+# change as soon as no voice sounded. Now it waits for 3 s with nothing played: no voice sounding, no key or pad held
+# (a bottom pad's pressure too), no MIDI note in. "saves": the globals saved so far.
+50 vel 100
+100 btn 5
+150 expect 1 oct
+# LOUDNESS RELEASE 0: each note is silent well within its gap ("expect 0 voices" in a gap: the old rule's chance)
+200 expect 0 set 28 0
+# staccato from the keys, 1.0 .. 3.4 s: 50 ms notes, 70 ms gaps
+1000 keys 0x80
+1050 keys 0
+1120 keys 0x80
+1170 keys 0
+1240 keys 0x80
+1290 keys 0
+1360 keys 0x80
+1410 keys 0
+1480 keys 0x80
+1530 keys 0
+1600 keys 0x80
+1650 keys 0
+1720 keys 0x80
+1770 keys 0
+1840 keys 0x80
+1890 keys 0
+1960 keys 0x80
+2010 keys 0
+2080 keys 0x80
+2130 keys 0
+2200 keys 0x80
+2250 keys 0
+2320 keys 0x80
+2370 keys 0
+2440 keys 0x80
+2490 keys 0
+2560 keys 0x80
+2610 keys 0
+2680 keys 0x80
+2730 keys 0
+2800 keys 0x80
+2850 keys 0
+2920 keys 0x80
+2970 keys 0
+3040 keys 0x80
+3090 keys 0
+3160 keys 0x80
+3210 keys 0
+3280 keys 0x80
+3330 keys 0
+2185 expect 0 voices
+# then from MIDI in, 3.4 .. 5.8 s
+3400 midi 0x90 64 100
+3450 midi 0x80 64 0
+3520 midi 0x90 64 100
+3570 midi 0x80 64 0
+3640 midi 0x90 64 100
+3690 midi 0x80 64 0
+3760 midi 0x90 64 100
+3810 midi 0x80 64 0
+3880 midi 0x90 64 100
+3930 midi 0x80 64 0
+4000 midi 0x90 64 100
+4050 midi 0x80 64 0
+4120 midi 0x90 64 100
+4170 midi 0x80 64 0
+4240 midi 0x90 64 100
+4290 midi 0x80 64 0
+4360 midi 0x90 64 100
+4410 midi 0x80 64 0
+4480 midi 0x90 64 100
+4530 midi 0x80 64 0
+4600 midi 0x90 64 100
+4650 midi 0x80 64 0
+4720 midi 0x90 64 100
+4770 midi 0x80 64 0
+4840 midi 0x90 64 100
+4890 midi 0x80 64 0
+4960 midi 0x90 64 100
+5010 midi 0x80 64 0
+5080 midi 0x90 64 100
+5130 midi 0x80 64 0
+5200 midi 0x90 64 100
+5250 midi 0x80 64 0
+5320 midi 0x90 64 100
+5370 midi 0x80 64 0
+5440 midi 0x90 64 100
+5490 midi 0x80 64 0
+5560 midi 0x90 64 100
+5610 midi 0x80 64 0
+5680 midi 0x90 64 100
+5730 midi 0x80 64 0
+4105 expect 0 voices
+# no save inside the phrase; the last note off at 5730 ms: none before 8730, then one
+5850 expect 0 saves
+8630 expect 0 saves
+9030 expect 1 saves
+# a bottom pad held (pressure only, no note: nothing sounds) also counts as playing: no save while it is held
+9300 btn 5
+9350 expect 2 oct
+9400 pad 8 60
+13900 expect 0 voices
+13900 expect 1 saves
+14000 pad 8 0
+16900 expect 1 saves
+17200 expect 2 saves
+17300 end

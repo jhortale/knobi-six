@@ -14,7 +14,8 @@
  *   buttons    lit while held
  *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change
  *   programs   params/store_prog.c: 500 in the flash slots (bank / tens / ones), WRITE (fade out, save, fade in),
- *              MANUAL; the globals (params/globals.c) and the last program in blobs 0 / 1 (A/B), saved while silent
+ *              MANUAL; the globals (params/globals.c) and the last program in blobs 0 / 1 (A/B), saved after
+ *              3 s with nothing played
  *   screen     the panels (ui/screens.c, panel_gfx.c): a screen a section, its knobs, switches and faders as bound;
  *              the header shows the octave and the last value edited; Globals shows the raw wheels and faders
  *
@@ -89,7 +90,10 @@ static int screen = SCR_BOOT;                   /* enum screen_id (ui/controls.h
 /* ---- MIDI in: from the main loop, and from app_idle while the screen draws (idle_ok) */
 static globals_t set;                           /* what survives a power-off: the globals, the octave, the last program */
 static uint32_t idle_ok, set_saves;
+static volatile uint32_t set_busy_ms;           /* the last time anything played: a voice, a key or pad, a MIDI note */
 #define SET_PROG_MS 30000u                      /* the last program alone: saved at most this often */
+#define SET_QUIET_MS 3000u                      /* a save (a ~50 ms flash erase stalls the sound) waits for this long
+                                                 * with nothing played: not in the gap between two staccato notes */
 static void set_now(globals_t *g)               /* the globals as they are now */
 {
     for (unsigned i = 0; i < G_COUNT; i++) g->v[i] = ctl_glob[i];
@@ -105,8 +109,10 @@ static int set_same(const globals_t *a, const globals_t *b)
 static void midi_in(void)
 {
     uint8_t st, d1, d2;
-    while (midi_get(&st, &d1, &d2))             /* ui/midi_map.c: the MIDI CH global, the CC map */
+    while (midi_get(&st, &d1, &d2)) {           /* ui/midi_map.c: the MIDI CH global, the CC map */
+        if ((st & 0xE0u) == 0x80u) set_busy_ms = fm1_ms;   /* a note on or off (any channel): playing */
         controls_midi(st, d1, d2);
+    }
 }
 static void app_idle(void)
 {
@@ -187,6 +193,10 @@ static void app_main(void)
         screen_draw(screen, &eng_edit, &eng_synth, 0);   /* what changed, or a strip of a new screen */
         idle_ok = 0;
 
+        for (k = 0; k < FM1_NKEY && !key_note[k]; k++) {}
+        if (eng_active() || k < FM1_NKEY || fm1_in.notes) set_busy_ms = fm1_ms;   /* a voice sounding, a key held */
+        for (k = 0; k < 16u; k++) if (fm1_in.pad_press[k]) set_busy_ms = fm1_ms; /* a pad pressed (pressure) */
+
         set_now(&now);                          /* a global, the octave or the program changed: save it later */
         if (!set_same(&now, &last)) { last = now; t_change = fm1_ms; }
         dirty = !set_same(&now, &saved);
@@ -197,8 +207,9 @@ static void app_main(void)
             dirty = !set_same(&now, &saved) || !set_saves || fm1_ms - t_saved >= SET_PROG_MS;
             saved.last_prog = lp;
         }
-        if (dirty && !eng_active() && !ctl_wr && fm1_ms - t_change > 2000u) {   /* 2 s after the last change, when silent
-                                                                                    (an erase stalls the sound) */
+        if (dirty && !ctl_wr && fm1_ms - t_change > 2000u && fm1_ms - set_busy_ms >= SET_QUIET_MS) {
+                                                /* 2 s after the last change, after 3 s with nothing played (an erase
+                                                 * stalls the sound) */
             now.seq = set.seq;
             if (globals_save(&now) == 0) {      /* (the other blob of the two; now.seq the saved one's) */
                 set = saved = now;

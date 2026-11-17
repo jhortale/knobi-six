@@ -125,7 +125,7 @@ would be lost) brings factory program N back into the edit buffer, to keep with 
 
 The globals (GLOBE), the keys' octave and the last program are kept in the base's blobs 0 and 1, in turn (a save
 goes to the other one, with a sequence number: one cut by a power loss leaves the previous record), saved 2 s after
-the last change once nothing sounds (an erase stalls the sound) and loaded at power-on; nothing saved, broken records
+the last change once nothing has played for 3 s (no voice, key, pad or MIDI note; an erase stalls the sound) and loaded at power-on; nothing saved, broken records
 or another version give the defaults (`firmware/src/params/globals.c`). A change of program alone is saved at most once
 every 30 s (flash wear). What each does:
 

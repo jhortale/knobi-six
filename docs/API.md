@@ -227,7 +227,8 @@ data it is. At boot, anything that is not yours (the stock settings, another fir
 tag written; it is never read.
 
 **Save when nothing sounds, or in slices.** Erasing holds the interrupts off for some 50 ms a sector (a slot: four):
-the sound drops out. `app.c` saves 2 s after the last change, once all voices are silent. To save while it plays, set
+the sound drops out. `app.c` saves 2 s after the last change, once nothing has played for 3 s (no voice
+sounding, no key or pad held, no MIDI note: not in the gap between two staccato notes). To save while it plays, set
 `store_sliced = 1` before the save: each erase and write then runs in slices of 400 us (`FL_SLICE_US`), suspended
 between them so the audio interrupt runs (`fl_slice_ram` in [fm1_flash.h](../firmware/hal/fm1_flash.h), from
 ciapibox). A save takes longer, and `settings_save` and the others still block the main loop until done. If the flash

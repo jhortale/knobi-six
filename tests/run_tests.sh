@@ -35,7 +35,8 @@ run "faders through the pot mode: passthru, jump, relative (expect)" sh tests/ru
 run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change + CC 32 bank (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
 run "chord memory: hold CHORD and play, the chord plays from a key (expect)" sh tests/run_host.sh tests/scripts/chord_memory.txt
 run "the screens: every one drawn and shot, the bindings drawn, only what changed redrawn (expect)" sh tests/run_host.sh tests/scripts/screens.txt
-run "the globals: transpose, tune, velocity curve, LOCAL, MONO, sustain polarity, AT curve; saved while silent (expect)" sh tests/run_host.sh tests/scripts/globals.txt
+run "the globals: transpose, tune, velocity curve, LOCAL, MONO, sustain polarity, AT curve; saved when quiet (expect)" sh tests/run_host.sh tests/scripts/globals.txt
+run "the autosave: not inside a staccato phrase (keys, MIDI) nor while a pad is held; 3 s after (expect)" sh tests/run_host.sh tests/scripts/autosave.txt
 run "Review Focus 3: WRITE during a HOLD drone: stored, the drone sounds on (expect)" sh tests/run_host.sh tests/scripts/write_held.txt
 run "Review Focus 3: WRITE's WAV: no click, only the deliberate fade (10 ms out, 10 ms in) around the save's silence" \
     python3 tests/wav_check.py build/host/app.wav --steady 600 1450 --check 1450 2050 --fade-max 25 --gap-max 300
