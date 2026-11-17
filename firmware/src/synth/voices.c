@@ -176,6 +176,7 @@ static void synth_voice_on(synth_t *s, voice_t *v, int note, int vel, int legato
     voice_control(v, &s->ctx, s->prog.v);   /* the right pitch and filter from the first sample */
     v->g0[0] = v->coef.lp, v->g0[1] = v->coef.hp, v->g0[2] = v->coef.bp;   /* its filter gains too: no ramp from the
                                                                               voice's previous note */
+    voice_xm_sync(v);                       /* nor X-Mod's interpolation */
 }
 
 static void synth_voice_off(synth_t *s, voice_t *v)
@@ -210,7 +211,7 @@ static int synth_alloc(const synth_t *s, int note)
     }
     if (best >= 0) return best;
     for (int i = 0; i < NVOICE; i++)     /* all held: the oldest note */
-        if (best < 0 || s->voice[i].t_on < s->voice[best].t_on) best = i;
+        if ((best < 0 || s->voice[i].t_on < s->voice[best].t_on)) best = i;
     return best;
 }
 
@@ -436,6 +437,7 @@ static void synth_tick(synth_t *s)
         if (!live && !vo->act) { voice_reset(vo, synth_rand(s)); continue; }   /* silent: free, states cleared */
         voice_glide(vo);
         voice_control(vo, c, v);
+        voice_env(vo, c, v);
     }
 }
 
@@ -474,3 +476,4 @@ void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
         s->ctl_left = (uint8_t)(s->ctl_left - n);
     }
 }
+

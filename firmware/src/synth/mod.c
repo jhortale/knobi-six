@@ -246,6 +246,15 @@ static inline __attribute__((always_inline)) uint32_t mods_exp2f(int32_t f24)
     return (uint32_t)LFO_Q30 + (uint32_t)mods_mul30(p, f);
 }
 
+/* clamp without branches (v - lo, v - hi must not overflow) */
+static inline __attribute__((always_inline)) int32_t mods_clampb(int32_t v, int32_t lo, int32_t hi)
+{
+    int32_t d = v - hi;
+    v = hi + (d & (d >> 31));
+    d = v - lo;
+    return lo + (d & ~(d >> 31));
+}
+
 /* per sample: inlined into voice_render (the CPU gate); mods_fm1 is the external wrapper */
 static inline __attribute__((always_inline)) void mods_fm1_hot(osc_t *o, uint32_t inc1, uint32_t inv1,
                                                                int32_t note1_q16, int32_t semis_q16)
@@ -255,14 +264,14 @@ static inline __attribute__((always_inline)) void mods_fm1_hot(osc_t *o, uint32_
      * osc.c osc_log2_inc), and with semis first limited to the range's width (195 semitones), which changes no result
      * and keeps b + semis from overflowing for absurd inputs */
     const int32_t span = MODS_NOTE_HI - MODS_NOTE_LO;
-    int32_t b = note1_q16 + 60 * 65536, s = 0;
-    if (b >= 0 && b <= span) {                                  /* base outside the range: leave it (s = 0) */
-        int32_t m = semis_q16 < -span ? -span : semis_q16 > span ? span : semis_q16;
-        int32_t t = b + m;
-        t = t < 0 ? 0 : t > span ? span : t;
-        s = t - b;                                              /* |s| <= 195 semitones, Q16 */
-    }
-    int32_t x = s * 64 / 3;                                     /* octaves, Q24 (|x| < 2^30); a 32-bit SDIV */
+    int32_t b = (int32_t)((uint32_t)note1_q16 + 60 * 65536);
+    int32_t m = mods_clampb(semis_q16, -span, span);
+    int32_t t = mods_clampb((int32_t)((uint32_t)b + (uint32_t)m), 0, span);
+    int32_t s = (t - b) & -(int32_t)((uint32_t)b <= (uint32_t)span);   /* base outside the range: leave it (s = 0) */
+    /* (no branches: a taken branch costs ~7.5 cycles on this core; |s| <= 195 semitones, Q16) */
+    /* octaves, Q24 (|x| < 2^30): s x 64 / 3, truncated as the division would, with a multiply (the compiler keeps a
+     * 10-cycle SDIV at -Os) */
+    int32_t x = (int32_t)(((int64_t)(s * 64) * 0x55555556) >> 32) - ((s * 64) >> 31);
     int n = x >> 24;                                            /* floor */
     int32_t f = x & (LFO_Q24 - 1);
     /* inc x 2^x = inc x 2^f x 2^n; inv x 2^-x = inv x 2^(1 - f) / 2 x 2^-n. The 64-bit products take constant
@@ -271,8 +280,9 @@ static inline __attribute__((always_inline)) void mods_fm1_hot(osc_t *o, uint32_
      * the final increment below 2^31 and the inverse below 2^32). */
     uint32_t ri = (uint32_t)(((uint64_t)inc1 * mods_exp2f(f)) >> 30);
     uint32_t rv = (uint32_t)(((uint64_t)inv1 * mods_exp2f(LFO_Q24 - f)) >> 31);
-    o->inc1 = n >= 0 ? ri << n : ri >> -n;
-    o->inv1 = n >= 0 ? rv >> n : rv << -n;
+    int nl = n & ~(n >> 31), nr = -n & (n >> 31);              /* max(n, 0), max(-n, 0) */
+    o->inc1 = ri << nl >> nr;
+    o->inv1 = rv << nr >> nl;
 }
 void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t semis_q16)
 {

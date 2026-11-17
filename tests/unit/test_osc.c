@@ -366,9 +366,13 @@ static void bspline_exact(void)
     double worst = 0;
     unsigned nc = sizeof c / sizeof *c;
     static naive_t r;
+    unsigned fast = 0;
     for (unsigned k = 0; k < nc; k++) {
         osc_t o;
         setup(&o, c[k].n1, c[k].n2, c[k].s1, c[k].p1, c[k].s2, c[k].p2, c[k].sync);
+        /* VCO 2 above OSC_SYNC_FAST (4 kHz) with sync: only the restarts are corrected there (osc_vco1_sync_fast, the
+         * CPU gate's simplification; sync_alias_high reports its aliasing), so the exact kernel is not expected */
+        if (c[k].sync && c[k].vco != 2 && o.inc2 > OSC_SYNC_FAST) { fast++; continue; }
         naive_init(&r, &o, c[k].sync, 0, c[k].sync, 1210);
         int32_t out[4];
         for (int n = 0; n < 1200; n++) {
@@ -379,8 +383,8 @@ static void bspline_exact(void)
             if (e > worst) worst = e;
         }
     }
-    printf("bspline_exact: saw, pulse, blends, triangle, sync, sub, VCO 2 at the top (%u cases): worst deviation %.6f"
-           " of full scale\n", nc, worst);
+    printf("bspline_exact: saw, pulse, blends, triangle, sync, sub, VCO 2 at the top (%u cases, %u synced above 4 kHz "
+           "skipped): worst deviation %.6f of full scale\n", nc - fast, fast, worst);
     CHECK(worst < 0.001);
 
     /* LOW FREQ VCO 2 (0.5 and 0.255 Hz) with sync on: VCO 2 starts just before a wrap, VCO 1 anywhere */
@@ -456,6 +460,31 @@ static void sync_alias(void)
                    " free VCO1 %.1f (%.1f)\n", f2, ratio[r], ours[0], ours[1], naive[0], naive[1], free[0], free[1]);
             CHECK(ours[0] < naive[0] - 15 && ours[1] < naive[1] - 30);
             CHECK(ours[0] < free[0] + 3 && ours[1] < free[1] + 6);
+        }
+}
+
+/* above OSC_SYNC_FAST (VCO 2 above 4 kHz) the sync corrects only the restarts (osc.c osc_vco1_sync_fast): the alias
+ * figure there, against the naive sync and the free-running VCO 1 (reported; checked only to beat the naive sync) */
+static void sync_alias_high(void)
+{
+    static const double ratio[] = { 7, 19.3 };
+    static const double base[] = { 108.5, 115, 120 };   /* VCO2 4.3, 6.3 and 8.4 kHz */
+    for (unsigned b = 0; b < 3; b++)
+        for (unsigned r = 0; r < 2; r++) {
+            osc_t o;
+            double w, ours, naive, free;
+            setup(&o, base[b] + ratio[r], base[b], 0, 127, 0, 127, 1);
+            double f2 = hz_of(o.inc2), f1 = hz_of(o.inc1);
+            render(&o, OSC_VCO1); spectrum();
+            ours = alias_below(f2, FS / 2, &w);
+            naive_sync(f1, f2); spectrum();
+            naive = alias_below(f2, FS / 2, &w);
+            o.sync = 0;
+            render(&o, OSC_VCO1); spectrum();
+            free = alias_below(f1, FS / 2, &w);
+            printf("sync_alias_high: VCO2 %7.1f Hz, VCO1 +%4.1f st: worst alias %.1f dB; naive sync %.1f; free VCO1 %.1f\n",
+                   f2, ratio[r], ours, naive, free);
+            CHECK(ours < naive);
         }
 }
 
@@ -604,6 +633,7 @@ int main(void)
     sync_locks_to_vco2();
     bspline_exact();
     sync_alias();
+    sync_alias_high();
     alias_saw_c8();
     alias_tri_c8();
     alias_pulse_c8();

@@ -23,6 +23,7 @@
 #define OSC_NOTE_LO (-60 * 65536)          /* 0.255 Hz */
 #define OSC_NOTE_HI (135 * 65536)          /* 19.9 kHz: the increment stays below 2^31 */
 #define OSC_LOG2_C 425350554               /* log2(2^32 * 440 / 44100) in Q24: inc = 2^(that + (note - 69) / 12) */
+#define OSC_SYNC_FAST 389564868u            /* VCO 2 at 4 kHz, Q32 cycles per sample: above it, osc_vco1_sync_fast */
 #define OSC_PW_STEP 15099494u              /* 0.45 * 2^32 / 128: PW 0..255 -> width 5.35 %..95 %, 127 = 50 % */
 #if OSC_RATE != 44100
 #error "OSC_LOG2_C is computed for 44100 Hz"
@@ -324,6 +325,24 @@ OSC_COLD int32_t osc_vco1_sync(const osc_t *o, uint32_t t1, uint32_t t2, int32_t
     return osc_w1(t1, w, a) + (int32_t)(e.acc >> 25);
 }
 
+/* The same above OSC_SYNC_FAST (VCO 2 above ~4 kHz, a period under 11 samples, where the window around VCO 2's wraps
+ * covers most samples and osc_vco1_sync dominated the cost): only the restarts are corrected, one residual for the
+ * restart behind and one for the restart ahead; VCO 1's own wrap and pulse edges inside the window and the sub's steps
+ * there go uncorrected (the sub stays naive under sync up there). test_osc sync_alias_high reports the aliasing. */
+OSC_COLD int32_t osc_vco1_sync_fast(const osc_t *o, uint32_t t1, uint32_t t2)
+{
+    const uint32_t w = o->w1, l2 = 2 * o->inc2;
+    const int32_t a = o->a1, w0 = osc_w1(0, w, a);
+    int64_t acc = 0;
+    if (o->synced && t2 < l2)
+        acc += osc_step(w0 - osc_w1(o->sync_tb, w, a), (int32_t)osc_dist(t2, o->inv2));
+    if (o->sync && (0u - t2) - 1u < l2) {
+        int32_t tau = (int32_t)osc_dist(0u - t2, o->inv2);
+        acc += osc_step(w0 - osc_w1(t1 + osc_mul24((uint32_t)tau, o->inc1), w, a), -tau);
+    }
+    return osc_w1(t1, w, a) + (int32_t)(acc >> 25);
+}
+
 /* VCO 2 wrapped during this sample (n2 = its phase at the next one): VCO 1 restarts from 0 at that instant,
  * n2 / dt2 samples before the next sample. Returns VCO 1's next phase and keeps its phase at the restart in sync_tb
  * (the sub flips on the restart, and on a natural wrap only if it came first: sync_tb < t1). */
@@ -345,9 +364,13 @@ OSC_INLINE void osc_tick_hot(osc_t *o, int32_t out[4])
 
     /* VCO 1 (saw - a saw(t - w)) and the sub (a divide-by-2 flip-flop on VCO 1: see osc.h) */
     if (__builtin_expect((o->sync | o->synced) && osc_near(t2, l2), 0)) {
-        int32_t res;
-        v1 = osc_vco1_sync(o, t1, t2, &res);
-        sq += res;
+        if (d2 > OSC_SYNC_FAST) {
+            v1 = osc_vco1_sync_fast(o, t1, t2);
+        } else {
+            int32_t res;
+            v1 = osc_vco1_sync(o, t1, t2, &res);
+            sq += res;
+        }
     } else {
         v1 = osc_saw(t1, d1, i1, l1);
         if (o->a1) v1 -= osc_mulh(osc_saw(t1 - o->w1, d1, i1, l1) * 4, o->a1);

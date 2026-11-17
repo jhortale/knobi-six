@@ -478,8 +478,8 @@ static void free_resets(void)
     run(FS / 2);
     int32_t mx = 0;
     for (int i = FS / 4; i < FS / 2; i++) if (abs(BUF[2 * i]) > mx) mx = abs(BUF[2 * i]);
-    printf("free_resets: after release: %d voices, svf state %d / %d, output max %d (LFO square -> AMP at full)\n",
-           synth_active(&S), S.voice[v].svf.s1, S.voice[v].svf.s2, mx);
+    printf("free_resets: after release: %d voices, svf state %g / %g, output max %d (LFO square -> AMP at full)\n",
+           synth_active(&S), (double)S.voice[v].svf.s1, (double)S.voice[v].svf.s2, mx);
     CHECK(synth_active(&S) == 0 && S.voice[v].svf.s1 == 0 && S.voice[v].svf.s2 == 0 && mx == 0);
 }
 
@@ -518,8 +518,9 @@ static void smoothing(void)
     CHECK(S.ctx.cut == 164 * 65536 && S.ctx.mode == 0 && S.ctx.bp == 0);
 }
 
-/* X-Mod VCO 2 -> F FREQ at audio rate: the per-sample coefficients against svf_coef per sample, and the control
- * rate path is used when the amount is 0 */
+/* X-Mod VCO 2 -> F FREQ at audio rate: the coefficients follow svf_coef at VCO 2's value every 2 samples (voice.c:
+ * an even frame of the period gets the mean of the previous and the new target, the odd frame the new target), and the
+ * control rate path is used when the amount is 0 */
 static void xmod_filter_audio_rate(void)
 {
     fresh();
@@ -529,28 +530,32 @@ static void xmod_filter_audio_rate(void)
     synth_note(&S, 48, 100);
     run(1024);
     voice_t *v = &S.voice[voice_of(48)];
-    /* one block by hand: the coefficients change every sample, and match svf_coef at the same inputs */
+    /* one period by hand, frame by frame (the context's pos says which frame of the period it is) */
     voice_t w = *v;
+    voice_ctx_t cx = S.ctx;
     int changes = 0;
     double ea1 = 0;
-    int32_t prev = w.coef.g;
+    float prev = w.coef.g, tgt = w.xc.a1;
     for (int i = 0; i < VOICE_CTL; i++) {
         int32_t bus[2 * VOICE_CTL] = {0};
         voice_t pre = w;
-        voice_render(&w, &S.ctx, S.prog.v, bus, 1);
+        cx.pos = (uint8_t)i;
+        voice_render(&w, &cx, S.prog.v, bus, 1);
         int32_t o[4];
         osc_tick(&pre.osc, o);
         svf_coef_t ref;
         svf_coef(&ref, pre.cut + mods_xm_term(o[OSC_VCO2], S.ctx.xm.freq), (S.ctx.reso + 32768) >> 16,
                  (pre.mode + mods_xm_term(o[OSC_VCO2], S.ctx.xm.mode) + 32768) >> 16, pre.bp);
-        double e = fabs((double)w.coef.a1 / ref.a1 - 1);
+        double want = i & 1 ? tgt : 0.5 * (tgt + ref.a1);
+        if (!(i & 1)) tgt = ref.a1;
+        double e = fabs((double)w.coef.a1 / want - 1);
         if (e > ea1) ea1 = e;
         changes += w.coef.g != prev;
         prev = w.coef.g;
     }
     set(P_XM_VCO2, 0);
-    printf("xmod_filter_audio_rate: g changed on %d of %d samples; a1 vs svf_coef %.1e; amount 0 -> fast path %d\n",
-           changes, VOICE_CTL, ea1, S.ctx.xm_flt);
+    printf("xmod_filter_audio_rate: g changed on %d of %d samples; a1 vs the interpolated svf_coef targets %.1e; "
+           "amount 0 -> fast path %d\n", changes, VOICE_CTL, ea1, S.ctx.xm_flt);
     CHECK(changes >= VOICE_CTL - 1 && ea1 < 1e-3 && S.ctx.xm_flt == 0);
 }
 

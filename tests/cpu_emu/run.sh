@@ -16,12 +16,13 @@ else   # the toolchain is Linux x86-64 only (as build.sh): run it in Docker
     tc() { local t=$1; shift; docker run --rm --platform linux/amd64 -v "$PWD:/work" -v "$(cd "$TC" && pwd -P):/opt/jieli:ro" \
         -w /work debian:bookworm-slim "/opt/jieli/$t" "$@"; }
 fi
-# tools/build.py: CFLAGS + BOARD_DEFS, the app's include paths
-FLAGS=(-target pi32v2 -Os -ffunction-sections -fno-builtin -Wall -Wno-unused-function -DBOARD_SMK37=1
+# tools/build.py: CFLAGS + APP_FPU + BOARD_DEFS, the app's include paths
+FLAGS=(-target pi32v2 -Os -ffunction-sections -fno-builtin -Wall -Wno-unused-function -mcpu=r3 -mfprev1 -ffp-contract=off
+       -DBOARD_SMK37=1
        -Ifirmware/hal -Ifirmware/src -Ifirmware/gen)
 tc pi32v2/bin/clang -target pi32v2 -c $H/crt0.S -o "$OUT/crt0.o"
 for nv in 6 4; do
-  for p in 0 1 2; do
+  for p in 0 3 4 1 2; do
     n="p$p-v$nv"
     for k in 8 40; do
       tc pi32v2/bin/clang "${FLAGS[@]}" -DNVOICE=$nv -DPATCH=$p -DBLOCKS=$k -c $H/harness.c -o "$OUT/$n-$k.o"

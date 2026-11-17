@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX filter (OB-6 schema rule 1): a 2-pole, 12 dB/oct state-variable filter per voice. MODE morphs
  * continuously LP -> notch -> HP; the BP switch and the X-Mod Norm<->BP destination crossfade that output with the
- * band-pass; RESONANCE never self-oscillates; the input and the band-pass node saturate softly. Integers only.
+ * band-pass; RESONANCE never self-oscillates; the input and the band-pass node saturate softly. The audio path is
+ * single-precision float on the FPU (filter.c); the interface stays integer (Q15 in and out, Q16 cutoff).
  *
  * Levels: input and output are Q15 like the oscillators (osc.h: OSC_ONE = 16384 is a waveform's +-1). Unity gain in
  * the pass band. The input drive is an odd polynomial that saturates gradually (no linear zone, no knee): THD -64 dB at
@@ -26,18 +27,18 @@
 #define SVF_RATE 44100                    /* sample rate the cutoff table is computed for */
 #define SVF_CUT_MAX (164 * 65536)         /* top of cutoff_q16 */
 
-typedef struct { int32_t s1, s2; } svf_t;   /* integrator states, Q28 (2^28 = Q15 32768) */
-/* g: Q28 tan(pi fc / fs); a1, a2: Q30 1 / (1 + g (g + k)), g a1; k: Q28 1 / Q; lp, hp, bp: Q15 output gains */
-typedef struct { int32_t g, a1, a2, k, lp, hp, bp; } svf_coef_t;
+typedef struct { float s1, s2; } svf_t;   /* integrator states, float (1.0 = Q15 32768; filter.c: FPU) */
+/* g: tan(pi fc / fs); a1, a2: 1 / (1 + g (g + k)), g a1; k: 1 / Q; lp, hp, bp: output gains (1.0 = unity) */
+typedef struct { float g, a1, a2, k, lp, hp, bp; } svf_coef_t;
 
 /* cutoff_q16: filter FREQ param + modulations, in param units Q16; mode 0..255 LP->notch->HP; bp 0..32768 Norm->BP */
 void svf_coef(svf_coef_t *c, int32_t cutoff_q16, int reso, int mode, int32_t bp_mix);
 int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c);
 /* The per-sample coefficient path, for audio-rate X-Mod into F FREQ / F MODE / Norm<->BP only (the voice uses
  * svf_coef at control rate otherwise): kres = svf_reso_k(RESONANCE), computed at control rate; mode 0..255 and bp_mix
- * as svf_coef's. No division, no exp2: a table g (as svf_coef), the damping floor from a table, a table-seeded
- * reciprocal with one Newton step. Against svf_coef: g exact, k within 0.05 % (2 % at the floor's cap, below 2.4 Hz),
- * a1 / a2 within 1e-5, the gains within 1 LSB (test_filter coef_fast_matches). */
+ * as svf_coef's. No exp2: a table g (as svf_coef), the damping floor from a table, one FPU division. Against svf_coef:
+ * g exact, k within 0.05 % (2 % at the floor's cap, below 2.4 Hz), a1 / a2 within 1e-3 (test_filter
+ * coef_fast_matches). */
 int32_t svf_reso_k(int reso);             /* k = 1 / Q of RESONANCE 0..255 before the damping floor, Q28 */
 void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix);
 #ifdef DINGHY_HOST

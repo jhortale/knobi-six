@@ -167,8 +167,12 @@ def build_loader():
 
 # ---- app
 
+APP_FPU = ["-mcpu=r3", "-mfprev1", "-ffp-contract=off"]   # the app only (not the loader): the filter's float path on
+                                    # the AC79's FPU (docs/RULES.md, docs/MEASUREMENTS.md: measured cheaper)
+
+
 def build_app():
-    flags = [*CFLAGS, *BOARD_DEFS[BOARD], "-Ifirmware/hal", "-Ifirmware/src", "-Ifirmware/gen", f'-DFELUCCA_ID="{PRODUCT}"',
+    flags = [*CFLAGS, *APP_FPU, *BOARD_DEFS[BOARD], "-Ifirmware/hal", "-Ifirmware/src", "-Ifirmware/gen", f'-DFELUCCA_ID="{PRODUCT}"',
              f'-DAPP_VER="{VERSION or "0.0"}"']
     if BOARD == "smk37":
         if not re.fullmatch(r"[A-Z0-9]{1,7}", DATA_FAMILY):

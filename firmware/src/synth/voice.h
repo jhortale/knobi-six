@@ -58,7 +58,7 @@ typedef struct {
     osc_t osc;
     svf_t svf;
     svf_coef_t coef;
-    int32_t g0[3];                        /* the previous tick's filter output gains lp, hp, bp (ramped per sample) */
+    float g0[3];                          /* the previous tick's filter output gains lp, hp, bp (ramped per sample) */
     adsr_t fenv, lenv;
     mods_t ctl;                           /* this tick's mods_sum (VCO 2 term 0) */
     uint32_t inc1, inv1;                  /* VCO 1's increment and inverse at note1 (mods_fm1's base) */
@@ -71,6 +71,15 @@ typedef struct {
     int32_t gl, gr;                       /* output gains Q15 */
     int32_t act;                          /* activity 0..32768: gates the AMP modulation, fades it at the end */
     uint32_t t_on, t_off;                 /* event clock at gate on / release (allocation order) */
+    /* the loudness envelope and VCA at control rate (voice_env): level at the period's frame t = le0 + led x t (Q30,
+     * ramped per sample, clamped to 0..ADSR_ONE); VCA = level x vk (vca_env_k) + voff, clamped to 0..VCA_CEIL */
+    int32_t le0, led, voff;
+    uint32_t vk;
+    /* X-Mod every 2 samples (voice_render): the last computed targets, VCO 1 increment / inverse / pulse amount /
+     * width and the filter coefficients; the sample between two computations takes their mean */
+    uint32_t xi, xv, xw1;
+    int32_t xa1;
+    svf_coef_t xc;
     int32_t pan;                          /* position -32768 (left) .. 32768 (right) at PAN SPREAD 127, Q15 */
     uint8_t note, vel;                    /* sounding note (chord offset included), velocity 1..127 */
     uint8_t busy;                         /* 1 from note-on until silent and reset */
@@ -85,6 +94,10 @@ void voice_init(voice_t *v, uint32_t seed);
 void voice_reset(voice_t *v, uint32_t rnd);
 void voice_glide(voice_t *v);             /* one control tick of portamento (before voice_control) */
 void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog);
+/* the envelopes' next control period (after voice_control at a tick): 16 samples of both ADSRs, the VCA ramp */
+void voice_env(voice_t *v, const voice_ctx_t *c, const int16_t *prog);
+/* X-Mod's held targets = the voice's current (unmodulated) values: at note-on, and while a path is off */
+void voice_xm_sync(voice_t *v);
 /* n <= VOICE_CTL frames, added into bus (L R pairs, int32, Q15 per voice) */
 void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t *bus, int n);
 

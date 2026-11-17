@@ -40,10 +40,20 @@ enum { ADSR_IDLE, ADSR_ATTACK, ADSR_DECAY, ADSR_RELEASE };   /* adsr_t.stage; DE
 typedef struct { int32_t level; uint8_t stage; } adsr_t;           /* level Q30, 0..2^30 */
 /* a_inc, d_coef, r_coef: per-sample stage rates m = 1 - c (c = the RC step's decay factor), Q32;
  * s_level: SUSTAIN level, Q30 */
-typedef struct { int32_t a_inc, d_coef, s_level, r_coef; } adsr_rates_t;
+/* a16, d16, r16: the same stages over VOICE_CTL = 16 samples at once, 1 - c^16 (Q32, unsigned): adsr_tick16 */
+typedef struct { int32_t a_inc, d_coef, s_level, r_coef; uint32_t a16, d16, r16; } adsr_rates_t;
 void adsr_rates(adsr_rates_t *r, int a, int d, int s, int rel);   /* param units -> per-sample rates (fm_exp2_fixed style, no tables) */
 void adsr_gate(adsr_t *e, int on);
 int32_t adsr_tick(adsr_t *e, const adsr_rates_t *r);              /* level Q30 */
+/* 16 samples at once (the voice runs its envelopes at control rate and ramps linearly between ticks): the exact RC
+ * step over 16 samples, target + (level - target) c^16. The state ends as 16 adsr_ticks would leave it (attack
+ * clamped to full and on to DECAY, release clamped to 0 and IDLE, within a few LSB of rounding); the return value is
+ * the level the ramp should aim at, NOT clamped (past full in the attack, below 0 in the release), so a linear ramp
+ * clamped per sample crosses full / zero near the right sample instead of at the tick. */
+int32_t adsr_tick16(adsr_t *e, const adsr_rates_t *r);
+/* the VCA's envelope factor for a per-sample ramp: vca_env(level, k) = level (Q30, clamped 0..ONE) x amount x
+ * velocity in Q15, k = vca_env_k(lenv_amt, vel_on, vel); within 1 LSB of vca_control's env term */
+uint32_t vca_env_k(int lenv_amt, int vel_on, int vel);
 /* VCA control = env*amt + lfo_amp + at_amp, clamped 0..ceiling (Q15); rule 3 */
 int32_t vca_control(int32_t env_q30, int lenv_amt, int vel_on, int vel, int32_t lfo_q15, int32_t at_q15);
 /* filter env contribution in cutoff units Q16; amount bipolar; velocity scales it when vel_on (rule 2) */

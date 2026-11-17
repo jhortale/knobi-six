@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Filter (firmware/src/synth/filter.c): mode responses, band-pass, the Norm<->BP crossfade, no self-oscillation,
- * overdrive, cutoff steps, and the 32-bit fast path against the exact fallback. The measurements use doubles (host
+ * overdrive, cutoff steps, the float path's bounds on extreme states, and the per-sample coefficient path. The measurements use doubles (host
  * only): a sine's level is its projection on sin/cos over a whole second after one second of settling. Every test
  * prints what it measured. */
 #include <math.h>
@@ -333,7 +333,7 @@ static void test_cutoff_smooth(void)
 static void test_decay_to_zero(void)
 {
     int bad = 0, cases = 0, lowest_clean = -1, zeros = 0;
-    int32_t worst_s = 0, worst_out = 0;
+    int32_t worst_s = 0, worst_out = 0;   /* states in the old Q28 units (float x 2^28) */
     for (int q = 4 * 164; q >= 0; q--) {
         int clean = 1;
         for (int r = 0; r < 3; r++) {
@@ -359,8 +359,9 @@ static void test_decay_to_zero(void)
             }
             cases++;
             zeros += s.s1 == 0 && s.s2 == 0;
-            if (abs(s.s1) > worst_s) worst_s = abs(s.s1);
-            if (abs(s.s2) > worst_s) worst_s = abs(s.s2);
+            int32_t q1 = (int32_t)fabs(s.s1 * 268435456.0), q2 = (int32_t)fabs(s.s2 * 268435456.0);
+            if (q1 > worst_s) worst_s = q1;
+            if (q2 > worst_s) worst_s = q2;
             if (out > worst_out) worst_out = out;
             if (out) clean = 0;
             if (out && q >= 4 * 46) bad++;   /* the audio band, from 20.6 Hz: exactly silent */
@@ -375,38 +376,34 @@ static void test_decay_to_zero(void)
     CHECK(bad == 0 && worst_out <= 2 && worst_s < 16384);   /* sub-audio: <= 2 LSB, still decaying or stuck */
 }
 
-/* the 32-bit fast path must give exactly what the 64-bit reference gives, wherever it runs */
+/* the float path on random coefficients, random (also huge) states and any input, int32 extremes included: the output
+ * stays within +-65536 (Q15 + 1 bit), never NaN, and the next states are finite (the integer path this replaced
+ * saturated in its 64-bit fallback; in float nothing wraps) */
 static uint32_t rnd = 12345;
 static uint32_t xs(void) { rnd ^= rnd << 13; rnd ^= rnd >> 17; rnd ^= rnd << 5; return rnd; }
-static void test_fast_equals_slow(void)
+static void test_extreme_states(void)
 {
-    long same = 0, fast = 0, diff = 0;
-    for (int i = 0; i < 4000000; i++) {
+    long bad = 0;
+    int32_t peak = 0;
+    for (int i = 0; i < 2000000; i++) {
         svf_coef_t c;
         int32_t cut = (int32_t)(xs() % (165u * 65536u));
         int reso = (int)(xs() % 256), mode = (int)(xs() % 256);
         int32_t bp = (int32_t)(xs() % 4) == 0 ? 0 : (int32_t)(xs() % 32769);
-        if (i % 7 == 0) cut = (int32_t)(xs() % 8) * 65536;   /* the tightest margins: lowest cutoffs */
-        if (i % 11 == 0) reso = 0;                           /* and k = 2 */
+        if (i % 7 == 0) cut = (int32_t)(xs() % 8) * 65536;
+        if (i % 11 == 0) reso = 0;
         svf_coef(&c, cut, reso, mode, bp);
-        int sh = (int)(xs() % 4);                            /* states: mostly inside the gate, some far out */
-        int32_t lim = sh == 0 ? INT32_MAX : (1 << 29) - 1;
-        int32_t s1 = (int32_t)(xs() % ((uint32_t)lim)) * ((xs() & 1) ? 1 : -1);
-        int32_t s2 = (int32_t)(xs() % ((uint32_t)lim)) * ((xs() & 1) ? 1 : -1);
-        if (sh == 3) s1 = (xs() & 1) ? (1 << 29) - 1 : -((1 << 29) - 1), s2 = -s1;
+        float lim = (xs() % 4) == 0 ? 8.0f : 2.0f;   /* 8 = the old int32 range in Q28 */
+        svf_t f = {lim * ((int32_t)xs() / 2147483648.0f), lim * ((int32_t)xs() / 2147483648.0f)};
         int32_t in = (int32_t)xs();
         if (i % 3) in >>= (xs() % 16);
-        svf_t f = {s1, s2};
         int32_t y = svf_tick(&f, in, &c);
-        struct svf_res o = svf_slow(s1, s2, in, &c);
-        if ((((uint32_t)s1 + (1u << 29)) | ((uint32_t)s2 + (1u << 29))) < 1u << 30) fast++;
-        if (y == o.y && f.s1 == o.s1 && f.s2 == o.s2) same++;
-        else if (diff++ < 5) printf("  differs: cut %d reso %d mode %d bp %d s %d %d in %d\n", cut, reso, mode, bp,
-                                    s1, s2, in);
+        if (abs(y) > peak) peak = abs(y);
+        if (abs(y) > 65536 || !isfinite(f.s1) || !isfinite(f.s2)) bad++;
     }
-    printf("fast_equals_slow: %ld of 4000000 random samples identical (%ld inside the fast-path gate)\n", same,
-           fast);
-    CHECK(diff == 0);
+    printf("extreme_states: 2000000 random samples (states up to +-8 = the old int32 range): peak %d, %ld out of "
+           "bounds or not finite\n", peak, bad);
+    CHECK(bad == 0);
 }
 
 /* svf_coef_fast (the per-sample path for audio-rate X-Mod) against svf_coef: the reciprocal over its whole domain,
@@ -414,11 +411,6 @@ static void test_fast_equals_slow(void)
 static double rel(double a, double b) { return b == 0 ? fabs(a) : fabs(a / b - 1); }
 static void test_coef_fast_matches(void)
 {
-    double er = 0;
-    for (uint32_t d = 1u << 24; d < 1u << 31 && d >= 1u << 24; d += 1 + (d >> 12)) {
-        double e = rel(svf_recip_fast(d), svf_recip_q30(d));
-        if (e > er) er = e;
-    }
     srand(7);
     double eg = 0, ek = 0, ekcap = 0, ea1 = 0, ea2 = 0;
     int dgain = 0;
@@ -436,8 +428,8 @@ static void test_coef_fast_matches(void)
         if (kr > ekcap) ekcap = kr;
         if (rel(b.a1, a.a1) > ea1) ea1 = rel(b.a1, a.a1);
         if (rel(b.a2, a.a2) > ea2) ea2 = rel(b.a2, a.a2);
-        int dg = abs(b.lp - a.lp) + abs(b.hp - a.hp);
-        if (abs(b.bp - a.bp) > a.bp * kr + 2) dg += 100;   /* bp = b max(k, 1): follows k, floors */
+        int dg = (int)lrint(fabs(b.lp - a.lp) * 32768) + (int)lrint(fabs(b.hp - a.hp) * 32768);   /* Q15 LSB */
+        if (fabs(b.bp - a.bp) > a.bp * kr + 1e-4) dg += 100;   /* bp = b max(k, 1): follows k, floors */
         if (dg > dgain) dgain = dg;
     }
     /* a saw through a filter whose cutoff a 300 Hz sine sweeps +-40 steps per sample, both paths */
@@ -453,9 +445,9 @@ static void test_coef_fast_matches(void)
         se += (double)(y1 - y2) * (y1 - y2), sy += (double)y1 * y1;
     }
     double snr = 10 * log10(sy / (se + 1e-9));
-    printf("coef_fast_matches: recip %.1e; g %.1e k %.1e (%.1e below 2.4 Hz) a1 %.1e a2 %.1e; lp/hp %d LSB; swept output "
-           "differs by %.1f dB below the signal\n", er, eg, ek, ekcap, ea1, ea2, dgain, snr);
-    CHECK(er < 2e-7 && eg == 0 && ek < 1e-3 && ekcap < 2e-2 && ea1 < 1e-3 && ea2 < 1e-3 && dgain <= 2 && snr > 60);
+    printf("coef_fast_matches: g %.1e k %.1e (%.1e below 2.4 Hz) a1 %.1e a2 %.1e; lp/hp %d LSB; swept output "
+           "differs by %.1f dB below the signal\n", eg, ek, ekcap, ea1, ea2, dgain, snr);
+    CHECK(eg == 0 && ek < 1e-3 && ekcap < 2e-2 && ea1 < 1e-3 && ea2 < 1e-3 && dgain <= 2 && snr > 60);
     /* cost */
     svf_coef_t c;
     volatile uint32_t sink = 0;
@@ -463,13 +455,13 @@ static void test_coef_fast_matches(void)
     clock_t t0 = clock();
     for (long i = 0; i < total; i++) {
         svf_coef_fast(&c, (int32_t)((i * 40503) & 0x7fffff) + (20 << 16), 0x1234567, (int)(i & 255), (int32_t)(i & 32767));
-        sink += (uint32_t)c.a1;
+        sink += (uint32_t)(c.a1 * 1000);
     }
     double nf = 1e9 * (double)(clock() - t0) / CLOCKS_PER_SEC / total;
     t0 = clock();
     for (long i = 0; i < total; i++) {
         svf_coef(&c, (int32_t)((i * 40503) & 0x7fffff) + (20 << 16), 100, (int)(i & 255), (int32_t)(i & 32767));
-        sink += (uint32_t)c.a1;
+        sink += (uint32_t)(c.a1 * 1000);
     }
     double ns = 1e9 * (double)(clock() - t0) / CLOCKS_PER_SEC / total;
     printf("coef_fast_matches: host cost svf_coef_fast %.2f ns, svf_coef %.2f ns per call (%d)\n", nf, ns, sink != 1);
@@ -507,7 +499,7 @@ int main(void)
     test_overdrive_soft();
     test_cutoff_smooth();
     test_decay_to_zero();
-    test_fast_equals_slow();
+    test_extreme_states();
     test_coef_fast_matches();
     if (getenv("SVF_BENCH")) bench();
     printf(fails ? "test_filter: %d FAILED\n" : "test_filter: ok\n", fails);

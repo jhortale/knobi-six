@@ -61,6 +61,15 @@ static inline __attribute__((always_inline)) int adsr_clamp(int v, int lo, int h
     return v < lo ? lo : v > hi ? hi : v;
 }
 
+/* 1 - (1 - m)^16 in Q32 (four squarings of c = 1 - m, every product rounded down: a few LSB of 2^32) */
+static uint32_t adsr_m16(uint32_t m)
+{
+    if (!m) return 0;
+    uint64_t c = 0x100000000ull - m;
+    for (int i = 0; i < 4; i++) c = (c * c) >> 32;
+    return (uint32_t)(0x100000000ull - c);
+}
+
 /* The stage rate m = 1 - c in Q32 for knob k, with -ln c = x = x0 * 2^-(k step): m = 1 - e^-x = x - x^2/2 + x^3/6
  * (x <= 0.0315, so the next term is < 5e-8 of m). x: x0 (< 2^28) x a Q30 power of two <= 1, then >> 30. */
 static int32_t adsr_m(uint32_t x0, int32_t step, int k)
@@ -77,6 +86,9 @@ void adsr_rates(adsr_rates_t *r, int a, int d, int s, int rel)
     r->d_coef = adsr_m(ADSR_D_X0, ADSR_D_STEP, d);
     r->r_coef = adsr_m(ADSR_D_X0, ADSR_D_STEP, rel);
     r->s_level = s * 8454660 + (s * 4) / 127;   /* s / 127 in Q30: 8454660 = floor(2^30 / 127); 127 -> 2^30 */
+    r->a16 = adsr_m16((uint32_t)r->a_inc);
+    r->d16 = adsr_m16((uint32_t)r->d_coef);
+    r->r16 = adsr_m16((uint32_t)r->r_coef);
 }
 
 void adsr_gate(adsr_t *e, int on)
@@ -156,3 +168,34 @@ ADSR_INLINE int32_t vca_apply_hot(int32_t in, int32_t ctl_q15)
     return (int32_t)(((int64_t)in * ctl_q15) >> 15);
 }
 int32_t vca_apply(int32_t in, int32_t ctl_q15) { return vca_apply_hot(in, ctl_q15); }
+
+/* 16 RC steps as one (env.h) */
+int32_t adsr_tick16(adsr_t *e, const adsr_rates_t *r)
+{
+    int32_t l = e->level, end;
+    switch (e->stage) {
+    case ADSR_ATTACK:
+        end = l + (int32_t)(((int64_t)(ADSR_A_TGT - l) * r->a16) >> 32);
+        l = end;
+        if (l >= ADSR_ONE) l = ADSR_ONE, e->stage = ADSR_DECAY;
+        break;
+    case ADSR_DECAY:
+        end = l = l + (int32_t)(((int64_t)(r->s_level - l) * r->d16) >> 32);
+        break;
+    case ADSR_RELEASE:
+        end = l + (int32_t)(((int64_t)(-ADSR_TAIL - l) * r->r16) >> 32);
+        l = end;
+        if (l <= 0) l = 0, e->stage = ADSR_IDLE;
+        break;
+    default:
+        end = l = 0;
+        break;
+    }
+    e->level = l;
+    return end;
+}
+
+uint32_t vca_env_k(int lenv_amt, int vel_on, int vel)
+{
+    return (uint32_t)(((uint64_t)adsr_amount(adsr_clamp(lenv_amt, 0, 127), vel_on, vel) * VCA_K + 32768) >> 16);   /* <= 2^16 */
+}

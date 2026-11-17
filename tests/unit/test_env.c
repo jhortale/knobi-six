@@ -182,6 +182,44 @@ static long release_samples(int rel, int32_t from)   /* from -> zero */
     return n;
 }
 
+/* The voice runs the envelopes at control rate (adsr_tick16 every 16 samples, a linear ramp between, clamped to
+ * 0..ONE: voice.c voice_env / voice_render). The ramp's crossing of the same thresholds as the per-sample model
+ * (attack: full; decay: 1/1024 of full; release: zero), in samples, for each stage. */
+static long ramp_samples(int stage, int k)
+{
+    adsr_rates_t r;
+    adsr_rates(&r, stage == 0 ? k : 0, stage == 1 ? k : 0, stage == 2 ? 127 : 0, stage == 2 ? k : 0);
+    adsr_t e = {stage == 0 ? 0 : ONE, stage == 0 ? ADSR_ATTACK : ADSR_DECAY};
+    if (stage == 2) adsr_gate(&e, 0);
+    for (long t = 0; t < 20 * FS; t += 16) {
+        int32_t l0 = e.level, d = (int32_t)(((int64_t)adsr_tick16(&e, &r) - l0) >> 4), l = l0;
+        for (int i = 1; i <= 16; i++) {
+            l += d;
+            int32_t v = l < 0 ? 0 : l > ONE ? ONE : l;
+            if (stage == 0 ? v >= ONE : stage == 1 ? v <= (ONE >> 10) : v <= 0) return t + i;
+        }
+    }
+    return 20 * FS;
+}
+static void test_adsr_times16(void)
+{
+    double worst = 0;
+    int in5 = 1;
+    long shortest = 1 << 30;
+    for (int k = 0; k <= 127; k++) {
+        double ta = 0.001 * pow(5000, k / 127.0) * FS, td = 0.005 * pow(2000, k / 127.0) * FS;
+        double e[3] = { ramp_samples(0, k) / ta - 1, ramp_samples(1, k) / td - 1, ramp_samples(2, k) / td - 1 };
+        for (int i = 0; i < 3; i++) {
+            if (fabs(e[i]) > worst) worst = fabs(e[i]);
+            if (fabs(e[i]) > 0.05) in5 = 0;
+        }
+        if (ramp_samples(0, k) < shortest) shortest = ramp_samples(0, k);
+    }
+    printf("adsr_times16: control-rate envelopes (16-sample steps, linear ramps): attack / decay / release of all 128 "
+           "positions within 5 %% %d (worst %.2f %%); fastest attack %ld samples\n", in5, 100 * worst, shortest);
+    CHECK(in5);
+}
+
 static void test_adsr_times(void)
 {
     static const int knob[] = {0, 32, 64, 96, 127};
@@ -342,6 +380,7 @@ int main(void)
     test_vca_sum_clamp();
     test_velocity_scales_amounts_only();
     test_adsr_times();
+    test_adsr_times16();
     test_release_reaches_zero();
     test_cost();
     if (fails) { printf("test_env: %d FAILED\n", fails); return 1; }
