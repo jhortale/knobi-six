@@ -7,23 +7,30 @@
 The whole device image (`KNOBI_CPU1=1 ./build.sh`, the Pro, with the test hooks of `platform.c` /
 `hal/fm1_cpu1.h` where named) booted in fm1-emu `60645a5` (joakimeriksson, MIT) in its dual mode: cpu0 and cpu1 a
 step each; cpu1 released by `0x10008` bit 3 at the word at `0x01C7FFF8`; `--flaky-core1 RATE` flips bit 21 of
-cpu1's RAM loads now and then. 1,500 emulated ms each, `bash tests/cpu1_emu/run.sh EMU OUT` (CI job `cpu1-emu`,
-run 44079859772: the same table as the local run, flaky retired at 468 ms instead of 469).
+cpu1's RAM loads now and then. 1,500 emulated ms each, `bash tests/cpu1_emu/run.sh EMU OUT` (CI job `cpu1-emu`).
 The boot takes ~0.3 s, so a run plays ~203 audio halves (the single-core image: 203).
 
 | case | image | expected | seen |
 |---|---|---|---|
 | plain | no test hook (as it would be installed) | start, boot ping, CPU1 idle in its RAM loop | ready 1, request = complete = 1, jobs 1, rejected 0; no halt, no fault; 203 halves |
-| start | hook 3: a ping every 100 ms from the main loop | every ping back | IDLE, 12 pings back (12 jobs), rejected 0; boot guard failed 0, pending 1; flash_ok 1 (the boot's flash reads passed the gate); 203 halves |
+| start | hook 3: a ping every 17 blocks (~100 ms) inside the audio interrupt; a post and a join from the main loop every 100 ms; at ~600 ms an erase, a page write, a sliced erase and a sliced write of one store sector, each read back | every ping back; the main loop's post refused, its join 0; the flash work through the gate with CPU1 on | IDLE, 12 pings back (12 jobs), rejected 0; main-loop post -1 (11 refused), join 0; flash work at 668 ms, all 6 steps ok, 4 pings before it and 8 after; flash_ok 1; boot guard failed 0, pending 1; 203 halves |
 | nostart | hook 1: CPU1's entry never reports in | one core after 20 ms, boot guard unaffected | FAIL (SILENT), no job; boot guard failed 0, pending 1, no chip reset; 200 halves (the boot 20 ms later) |
-| hang | hook 2: a job that never returns, joined with a 4 ms timeout | retired within one block (5,804 us) | join -1 after 4,003 us; FAIL (LATE), barred until power-off; boot guard failed 0, pending 1; 202 halves |
-| flaky | hook 3 + `--flaky-core1 1e-7 --seed 7 --cpu1-survives` | a misread fails the check, CPU1 retired, audio goes on | 14 misreads injected; FAIL (MISREAD) at 469 ms after 1 good ping, rejected 14, barred; 203 halves |
+| hang | hook 2: a job that never returns, joined with a 4 ms deadline from the post | retired within one block (5,804 us) | join -1 after 4,003 us; FAIL (LATE), barred until power-off; boot guard failed 0, pending 1; 202 halves |
+| flaky | hook 3 + `--flaky-core1 1e-7 --seed 7 --cpu1-survives` | a misread fails the check, CPU1 retired, audio goes on | 14 misreads injected; FAIL (MISREAD) at 441 ms after 1 good ping, rejected 14, barred; join afterwards 0; 203 halves |
+| reset | hook 5: a warm reset (`fm1_reboot`) inside the start window, after CPU1 answered and before the boot ping | the boot guard counts it once; the second boot runs one core (start mark -> bar; bootguard.failed) | 1 chip reset; second boot: OFF, barred 1, no job; boot guard failed 1, pending 1; 194 halves |
+
+`--cpu1-survives` in the flaky case: a misread pointer can send cpu1 to any address, and without the option the
+emulator stops the whole machine there; on the chip that is a fault CPU0 handles (`fm1_cpu1_fault_c`), a path the
+emulator does not have. The hang and flaky cases' "rejected"/spinning after the retirement are the emulator's cpu1
+still running (it does not model the hold); CPU0's side is what the cases check.
 
 Default build (KNOBI_CPU1 unset): `app.bin` sha1 `44541dc3b3f1f62f0021c4c359ae2f3ee1e59ca0`, the loader and the
 package byte for byte the same as before the HAL (e800d7e; local build with the local bank; CI's knobi-six.fwsc and
-app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged); build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
-CPU1 build: image +2,504 B (221,636 B), RAM +3,200 B (CPU1's stacks 3,072 B and the mailbox), `.c1_text` 148 B in
-the RAM code; CPU1's stack 0 B for the loop and the ping (budget 2,560 B).
+app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged). Since fix round 1 the
+update loader holds CPU1 at its start in every build (`ota.bin` 8,509 -> 8,621 B, so the package differs); the app
+stays identical, and the CI job `cpu1-emu` builds e800d7e beside HEAD and compares `app.bin` and `app.dis` byte for byte; build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
+CPU1 build: image +2,760 B (221,892 B), RAM +3,216 B (CPU1's stacks 3,072 B and the mailbox), `.c1_text` 148 B in
+the RAM code, with no flash address in it; CPU1's stack 0 B for the loop and the ping (budget 2,560 B).
 
 What the emulator does not show (only a device can): it does not hold a core through `C1_CON` bits 1/3 (after a
 retirement its cpu1 goes on spinning; the firmware's side, single core, is what is checked), has no PC-limit fault

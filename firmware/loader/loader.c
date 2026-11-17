@@ -22,6 +22,7 @@
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")
 #include "fm1_time.h"
 #include "fm1_sys.h"
+#include "fm1_cpu1_hold.h"                     /* the second core held at the start (fm1_cpu1_hold_regs) */
 /* the loader may write the app area and erase update records; never the head */
 #if BOARD_SMK37
 /* SMK: app area 0x4000..0x9CFFF, records in the VM 0x9D000..0xBFFFF only: never BTIF / USRTRIM
@@ -141,6 +142,7 @@ void ldr_main(void)
 void ldr_cstart(void)
 {
     uint32_t *p;
+    fm1_cpu1_hold_regs();                           /* the second core held before anything (hal/fm1_sys.h) */
     ldr_record_clear();                             /* first thing: a crash below cannot loop through a
                                                      * warm reset; resume after power loss uses the flash record */
     for (p = _bss_start; p < _bss_end; p++)

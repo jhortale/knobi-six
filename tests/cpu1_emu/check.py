@@ -13,7 +13,7 @@ BLOCK_US = 256 * 1_000_000 // 44100                       # one audio block (HAL
 STATE = {0: "OFF", 1: "IDLE", 2: "BUSY", 3: "FAIL"}
 WHY = {0: "-", 1: "MISREAD", 2: "LATE", 3: "BARRED", 4: "FAULT", 5: "SILENT"}
 TEST = ["magic", "state", "why", "post", "join", "took", "failed", "pending", "pings", "rejected", "jobs", "barred",
-        "at_ms", "flash"]
+        "at_ms", "flash", "main_post", "refused", "fl_rc", "fl_at", "pings_after", "join_none"]
 MB = ["request", "fn", "arg", "check", "_", "_", "_", "_", "ready", "complete", "rejected", "misread", "jobs"]
 MIN_HALVES = int((ms - 400) / 1000 * 44100 / 256 * 0.95)   # the audio ran from the end of the boot (~0.3 s in the
                                                             # emulator, one core or two; nostart waits 20 ms more)
@@ -42,9 +42,10 @@ def case(name, what, ok, seen):
             bad.append(f"{name}: {k}")
 
 
-def common(r):
-    return {"no halt": not r["halt"], "no chip reset (the boot guard counts none)": not r["reset"],
-            "cpu1 released": r["released"], f"audio ran (>= {MIN_HALVES} halves)": r["halves"] >= MIN_HALVES}
+def common(r, resets=0, halves=MIN_HALVES):
+    n = r["log"].count("chip reset")
+    return {"no halt": not r["halt"], f"{resets} chip reset(s)": n == resets,
+            "cpu1 released": r["released"], f"audio ran (>= {halves} halves)": r["halves"] >= halves}
 
 
 def test(r):
@@ -66,9 +67,15 @@ case("start", "start -> ping round trip -> join OK, then a ping every 100 ms",
      {**common(r), "magic": t["magic"] == 0x54314B43, "IDLE": t["state"] == 1, "no failure": t["why"] == 0,
       "pings came back (>= 5)": (t["pings"] or 0) >= 5, "jobs = pings": t["jobs"] == t["pings"],
       "boot guard: failed 0, pending 1": (t["failed"], t["pending"]) == (0, 1), "not barred": t["barred"] == 0,
-      "flash_ok (the boot's flash reads passed the gate)": t["flash"] == 1},
+      "flash_ok (the boot's flash reads passed the gate)": t["flash"] == 1,
+      "a post from the main loop refused": t["main_post"] == 0xFFFFFFFF and (t["refused"] or 0) > 0,
+      "join with nothing outstanding = 0": t["join_none"] == 0,
+      "erase + write + sliced erase + sliced write, read back": (t["fl_at"] or 0) > 0 and t["fl_rc"] == 0,
+      "pings went on after the flash work": (t["pings"] or 0) > (t["pings_after"] or 0) > 0},
      f"{STATE.get(t['state'])}, {t['pings']} pings back ({t['jobs']} jobs), rejected {t['rejected']}; boot guard "
-     f"failed {t['failed']} pending {t['pending']}; flash_ok {t['flash']}; {r['halves']} audio halves")
+     f"failed {t['failed']} pending {t['pending']}; flash_ok {t['flash']}; main-loop post {t['main_post'] - (1 << 32)}"
+     f" ({t['refused']} refused), join with none outstanding {t['join_none']}; flash work at {t['fl_at']} ms rc "
+     f"{t['fl_rc']} ({t['pings_after']} pings before it); {r['halves']} audio halves")
 
 r = load("nostart")
 t = test(r)
@@ -94,10 +101,20 @@ t = test(r)
 case("flaky", f"--flaky-core1 {rate} --seed 7: a misread -> the check -> retired",
      {**common(r), "misreads injected": (r["misreads"] or 0) > 0, "FAIL": t["state"] == 3,
       "why MISREAD": t["why"] == 1, "refused a job (rejected > 0)": (t["rejected"] or 0) > 0,
-      "barred until power-off": t["barred"] == 1, "boot guard: failed 0, pending 1": (t["failed"], t["pending"]) == (0, 1)},
+      "barred until power-off": t["barred"] == 1, "boot guard: failed 0, pending 1": (t["failed"], t["pending"]) == (0, 1),
+      "retired: join with nothing outstanding = 0": t["join_none"] == 0},
      f"{r['misreads']} misreads injected; {STATE.get(t['state'])} ({WHY.get(t['why'])}) at {t['at_ms'] or 'boot'} ms "
      f"after {t['pings']} good pings, rejected {t['rejected']}, barred {t['barred']}; {r['halves']} audio halves"
      + ("; the emulator stopped cpu1 on a wild access" if r["c1stop"] else ""))
+
+r = load("reset")
+t = test(r)
+case("reset", "a warm reset in the start window: counted once, then one core (barred)",
+     {**common(r, resets=1, halves=MIN_HALVES - 60), "OFF (not started)": t["state"] == 0,
+      "barred by the start mark": t["barred"] == 1, "boot guard: failed 1, pending 1": (t["failed"], t["pending"]) == (1, 1),
+      "no job ran on the second boot": t["jobs"] == 0},
+     f"1 chip reset; second boot: {STATE.get(t['state'])}, barred {t['barred']}; boot guard failed {t['failed']} "
+     f"pending {t['pending']}; {r['halves']} audio halves")
 
 print(f"### Second core in fm1-emu ({ms} ms each)\n")
 print("| case | what | result | seen |")

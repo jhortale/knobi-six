@@ -15,6 +15,11 @@
 #include "fm1_xip.h"
 #if KNOBI_CPU1
 #include "fm1_flash_access.h"                   /* the flash gate and irq_save / irq_restore (felucca-bsp's) */
+static uint32_t fm1_cpu1_flash_quiesce(void);   /* fm1_cpu1.h: interrupts off, CPU1 idle in RAM or held (it waits
+                                                 * up to a block for the audio interrupt's join, then retires CPU1) */
+#define FL_IRQ_SAVE() fm1_cpu1_flash_quiesce()
+#else
+#define FL_IRQ_SAVE() irq_save()
 #endif
 
 #define RAMFN  __attribute__((section(".ram_text"), noinline, used))
@@ -272,7 +277,7 @@ static inline void irq_restore(uint32_t f) { (void)f; __asm__ volatile("csync\n\
 
 static int fl_erase4k(uint32_t off, uint32_t *took_us)
 {
-    uint32_t f = irq_save();
+    uint32_t f = FL_IRQ_SAVE();
     int rc = FL_FAR(fl_erase4k_ram)(off, took_us);
     irq_restore(f);
     return rc;
@@ -282,14 +287,14 @@ static int fl_erase4k(uint32_t off, uint32_t *took_us)
 #define FL_SLICES 4000u                           /* then to the end in one go (an erase: ~50 ms worst) */
 static int fl_sliced(uint32_t op, uint32_t off, const uint8_t *src, uint32_t n)   /* interrupts on between slices */
 {
-    uint32_t f = irq_save(), k = 0;
+    uint32_t f = FL_IRQ_SAVE(), k = 0;
     int rc = FL_FAR(fl_slice_ram)(op, off, src, n, FL_SLICE_US);
     irq_restore(f);
     while (rc == 1) {
         if (k > FL_SLICES) return -5;             /* the last slice ran to the end and still reads suspended */
         fm1_delay_us(20u);                        /* the interrupts waiting run now */
         fm1_wdt_feed();
-        f = irq_save();
+        f = FL_IRQ_SAVE();
         rc = FL_FAR(fl_slice_ram)(FLS_RESUME, off, src, n, ++k < FL_SLICES ? FL_SLICE_US : 0u);
         irq_restore(f);
     }
@@ -315,7 +320,7 @@ static int fl_write(uint32_t off, const uint8_t *src_ram, uint32_t n)
         int rc;
         uint32_t f;
         if (chunk > n) chunk = n;
-        f = irq_save();
+        f = FL_IRQ_SAVE();
         rc = FL_FAR(fl_prog_ram)(off, src_ram, chunk, &took);
         irq_restore(f);
         if (rc) return rc;

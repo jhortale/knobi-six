@@ -337,6 +337,16 @@ def cpu1_check(img, syms, dis, rt, c1_lo, c1_hi):
                 and c1_lo <= int(mm.group(1), 16) < c1_hi]
     if any(not re.search(r"\bcall r\d+\b", ln) for ln in c1_calls) or len(c1_calls) > 1:
         errors.append(f".c1_text calls more than its job: {c1_calls[:3]}")
+    flash_refs = []                 # the idle loop runs while the flash is off: no address in it may point there
+    for ln in rt.splitlines():      # (a literal of the XIP window or the flash's .rodata, a jump or a load from it)
+        mm = LINE.match(ln)
+        if not mm or not c1_lo <= int(mm.group(1), 16) < c1_hi:
+            continue
+        for v in re.findall(r"(-?\d+) <[^:>]*: ([0-9a-f]+) >", mm.group(3)):
+            if 0x02000000 <= int(v[1], 16) < 0x04000000 or 0x02000000 <= (int(v[0]) & 0xFFFFFFFF) < 0x04000000:
+                flash_refs.append(ln.strip())
+    if flash_refs:
+        errors.append(f".c1_text refers to the flash: {flash_refs[:3]}")
     lo, hi = sym_of(syms, "fm1_cpu1_ustack"), sym_of(syms, "fm1_cpu1_ustack_top")
     frame, calls = stack_depths(syms, dis)
 

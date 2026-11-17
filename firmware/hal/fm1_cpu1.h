@@ -115,6 +115,10 @@ static struct {
 #define FM1_CPU1_CHECK(fn, arg, request) ((uint32_t)(uintptr_t)(fn) ^ (arg) ^ (request) * 0x9E3779B1u)
 
 static uint8_t fm1_cpu1_on;                     /* started and answering: CPU0 may hand it work */
+/* KNOBI-SIX: fm1_cstart writes 0 first and FM1_CPU1_LIVE once .bss is zeroed: before that the fault path does not
+ * read this file's .bss words (left over from the last run) */
+#define FM1_CPU1_LIVE 0x4556494Cu               /* "LIVE" */
+static volatile uint32_t fm1_cpu1_live;
 static inline void fm1_cpu1_sync(void) { FM1_CPU1_SYNC(); }   /* a barrier between the cores (a job's own sharing) */
 static uint8_t fm1_cpu1_gave_up;                /* why it is off (FM1_CPU1_*), 0 = it is not */
 
@@ -123,10 +127,26 @@ static struct { volatile uint32_t count; uint32_t echoes, cpu, dbg, emu, pc, ret
 
 /* one core until power-off. Not static, as fm1_crash: the compiler must not assume a zero start */
 #define FM1_CPU1_BAR_MAGIC 0x52414231u          /* "1BAR" */
-struct { uint32_t magic, barred, build; } fm1_cpu1_bar __attribute__((section(".noinit")));
+/* KNOBI-SIX: `starting` marks the start window (from the release to the boot ping's answer): a CPU0 crash or a reset
+ * inside it leaves the mark, and the mark bars CPU1 at the next boot as a failure does */
+#define FM1_CPU1_STARTING 0x54525453u           /* "STRT" */
+struct { uint32_t magic, barred, build, starting; } fm1_cpu1_bar __attribute__((section(".noinit")));
 static inline int fm1_cpu1_barred(void)
 {
-    return FM1_CPU1_FALLBACK && fm1_cpu1_bar.magic == FM1_CPU1_BAR_MAGIC && fm1_cpu1_bar.barred == 1u;
+    return FM1_CPU1_FALLBACK && fm1_cpu1_bar.magic == FM1_CPU1_BAR_MAGIC &&
+           (fm1_cpu1_bar.barred == 1u || fm1_cpu1_bar.starting == FM1_CPU1_STARTING);
+}
+/* KNOBI-SIX, at the start: what power-on left there (no magic) bars nothing; a start mark left set becomes the bar */
+static void fm1_cpu1_bar_boot(void)
+{
+    if (fm1_cpu1_bar.magic != FM1_CPU1_BAR_MAGIC) {
+        fm1_cpu1_bar.barred = 0;
+        fm1_cpu1_bar.starting = 0;
+        fm1_cpu1_bar.magic = FM1_CPU1_BAR_MAGIC;
+    }
+    if (fm1_cpu1_bar.starting == FM1_CPU1_STARTING)
+        fm1_cpu1_bar.barred = 1;
+    fm1_cpu1_bar.starting = 0;
 }
 static inline void fm1_cpu1_bar_set(void)
 {
@@ -231,8 +251,7 @@ static void fm1_cpu1_retire(uint32_t why)
     fm1_cpu1_bar_set();
     fm1_cpu1_on = 0;
     fm1_cpu1_gave_up = (uint8_t)why;
-    fm1_cpu1_mb.complete = fm1_cpu1_mb.request;
-    FM1_CPU1_SYNC();
+    FM1_CPU1_SYNC();                            /* (KNOBI-SIX: complete stays CPU1's; off, nothing reads it) */
 }
 
 static int fm1_cpu1_start(void)
@@ -241,6 +260,7 @@ static int fm1_cpu1_start(void)
     if (fm1_cpu1_on)
         return 0;
     fm1_cpu1_stop();
+    fm1_cpu1_bar_boot();
     if (fm1_cpu1_barred()) {
         fm1_cpu1_gave_up = FM1_CPU1_BARRED;
         return -1;
@@ -248,12 +268,12 @@ static int fm1_cpu1_start(void)
     for (i = 0; i < FM1_CPU1_USTACK_WORDS; i++)
         fm1_cpu1_ustack[i] = FM1_CPU1_MARK;
     fm1_flash_cpu1_idle = 0;
-    fm1_cpu1_mb.ready = 0;
+    /* (KNOBI-SIX: once per boot, cpu1_start: CPU1's words ready, complete, rejected and the fault count are still the
+     * zeros of .bss, and only CPU1 writes them) */
     fm1_cpu1_mb.request = 0;
-    fm1_cpu1_mb.complete = 0;
-    fm1_cpu1_mb.rejected = 0;
     fm1_cpu1_mb.fn = 0;
-    fm1_cpu1_fault.count = fm1_cpu1_fault.echoes = 0;
+    fm1_cpu1_fault.echoes = 0;
+    fm1_cpu1_bar.starting = FM1_CPU1_STARTING;  /* the start window opens (cpu1_start closes it) */
     FM1_CPU1_SYNC();
     for (i = 0; i < 32u; i++)                   /* its interrupt bank: all off (it runs polled) */
         FM1_C1_ICFG(i) = 0;
@@ -293,6 +313,7 @@ static int fm1_cpu1_start(void)
         if (!FM1_CPU1_FALLBACK)
             fm1_cpu1_failure(FM1_CPU1_SILENT, 0u, 0u);
         fm1_cpu1_gave_up = FM1_CPU1_SILENT;
+        fm1_cpu1_bar.starting = 0;              /* (held, a clean failure: the next boot tries again) */
         return -1;
     }
     fm1_cpu1_on = 1;
@@ -335,9 +356,8 @@ static inline int fm1_cpu1_busy(void)            /* (a misread or a fault: not b
     return fm1_cpu1_on && fm1_cpu1_mb.complete != fm1_cpu1_mb.request && !fm1_cpu1_mb.rejected && !fm1_cpu1_fault.count;
 }
 
-static int fm1_cpu1_wait(uint32_t timeout_ticks)   /* (KNOBI-SIX: the timeout in ticks, the caller's) */
+static int fm1_cpu1_wait(uint32_t t0, uint32_t timeout_ticks)   /* (KNOBI-SIX: until t0 + timeout, the caller's) */
 {
-    uint32_t t0 = fm1_ticks();
     for (;;) {
         FM1_CPU1_SYNC();
         if (!fm1_cpu1_on)
@@ -378,6 +398,8 @@ static uint32_t fm1_cpu1_stack_used(void)
 static int fm1_cpu1_fault_c(const uint32_t *f)
 {
     uint32_t cpu = fm1_cnum(), dbg = FM1_DBG_MSG, was;
+    if (!cpu && fm1_cpu1_live != FM1_CPU1_LIVE)
+        goto own;                               /* (KNOBI-SIX: .bss not set up yet: CPU1 cannot have run) */
     if (!cpu && (dbg & FM1_DBG_C0))
         goto own;
     /* CPU1 took it too and cleared DBG_MSG first. Once per CPU1 fault, so a genuine CPU0 exception with DBG_MSG
@@ -414,41 +436,71 @@ static int fm1_cpu1_fault_c(const uint32_t *f)
     return 1;
 own:
     fm1_cpu1_stop();                            /* KNOBI-SIX: CPU0's crash holds CPU1 (registers only: harmless when off) */
-    if (FM1_CPU1_FALLBACK && fm1_cpu1_on)
-        fm1_cpu1_bar_set();
+    if (FM1_CPU1_FALLBACK && fm1_cpu1_live == FM1_CPU1_LIVE && fm1_cpu1_on)
+        fm1_cpu1_bar_set();                     /* (inside the start window the start mark bars it at the next boot) */
     return 0;
 }
 
 /* ---- KNOBI-SIX's API (docs/API.md "Second core"), over the worker above ----------------------------------------
  *
- *   cpu1_start()           0 = CPU1 runs, answered and passed a ping round trip; < 0 = it does not (barred, it did
- *                          not report in, or the ping came back wrong: retired): one core. At boot only, with
- *                          interrupts off, before the audio and the timers (fm1_cstart)
- *   cpu1_post(job, arg)    0 = CPU1 has job(arg); < 0 = not handed over (off, failed, or a job outstanding): run it
- *                          yourself. The job runs from the flash, so post only where the flash stays on until the
- *                          join (the audio interrupt: every flash entry point runs with interrupts off)
- *   cpu1_join(ticks)       0 = the job is done (or there was none); < 0 = not back within ticks, a misread or a
- *                          fault: CPU1 is retired (held, one core until power-off: the bar) and the job dropped,
- *                          never run twice. Keep ticks below one audio block (HALF_FRAMES: 5.8 ms)
+ *   cpu1_start()           at boot only (fm1_cstart, interrupts off, before the audio and the timers), once: 0 = CPU1
+ *                          runs, answered and passed a ping round trip; < 0 = one core (barred, it did not report in,
+ *                          or the ping came back wrong: retired). Later calls start nothing
+ *   cpu1_boot_done()       fm1_cstart, before interrupts go on: posts are the audio interrupt's from here on
+ *   cpu1_post(job, arg)    0 = CPU1 has job(arg); < 0 = not handed over: run it yourself. Refused (< 0) outside the
+ *                          audio interrupt (cpu1_audio_begin .. _end) and the boot, so every job is joined in the same
+ *                          interrupt, before the main loop (and its flash work) runs again. The job runs from the flash
+ *   cpu1_join(ticks)       0 = nothing is outstanding: the job came back, or none was posted (CPU1 off or retired);
+ *                          < 0 = the job posted is not done and never will be (not back within ticks of the post, a
+ *                          misread, a fault, or held meanwhile): CPU1 is retired (held, one core until power-off) and
+ *                          the job dropped, never run twice: do its share yourself. The deadline counts from the post,
+ *                          so CPU0's own share runs inside it: post, render your share, join(budget) keeps the whole
+ *                          fork/join within budget ticks of the post
  *   cpu1_state()           CPU1_OFF, CPU1_IDLE, CPU1_BUSY or CPU1_FAIL; reads only (any context)
- *   cpu1_hold()            hold CPU1 (registers only) and mark it off: no more jobs until cpu1_start
- *   cpu1_ping(ticks)       a round trip through CPU1 (it writes back the complement of a word CPU0 chose): 0 = it
- *                          came back right; < 0 = retired
+ *   cpu1_hold()            hold CPU1 (registers only) and mark it off, interrupts masked meanwhile; a job it drops
+ *                          makes the next cpu1_join say < 0. For the boot, a fault or a reset path
+ *   cpu1_ping(ticks)       a round trip through CPU1 (it writes back the complement of a word CPU0 chose), in the boot
+ *                          or the audio interrupt: 0 = it came back right; < 0 = not (retired, or not posted)
  *   cpu1_why()             why it failed: FM1_CPU1_MISREAD, _LATE, _BARRED, _FAULT, _SILENT (0: it did not)
- *
- * post and join belong to one context (the audio interrupt, or the boot); state reads from anywhere. */
+ *   fm1_cpu1_flash_quiesce()   (fm1_flash.h's FL_IRQ_SAVE) interrupts off with CPU1 idle in RAM or held: waits up to
+ *                          one block with interrupts on for the audio interrupt's join, then retires CPU1 */
 enum { CPU1_OFF = 0, CPU1_IDLE = 1, CPU1_BUSY = 2, CPU1_FAIL = 3 };
+enum { CPU1_CTX_NONE = 0, CPU1_CTX_BOOT = 1, CPU1_CTX_AUDIO = 2 };
+#define CPU1_BLOCK_TICKS (5805u * FM1_TICKS_PER_US)    /* one audio block: 256 frames at 44.1 kHz */
+static volatile uint8_t cpu1_ctx;              /* where posts may come from now (CPU1_CTX_*) */
+static uint8_t cpu1_outstanding, cpu1_lost;     /* CPU0's: a job posted and not joined; one dropped by a hold */
+static uint8_t cpu1_started;                    /* cpu1_start ran (once per boot) */
+static uint32_t cpu1_post_at;                   /* fm1_ticks() at the post: the join's deadline counts from it */
+static uint32_t cpu1_refused;                   /* posts refused outside the audio interrupt and the boot */
 
 static int cpu1_join(uint32_t timeout_ticks)
 {
-    if (!fm1_cpu1_on)
+    int r;
+    if (cpu1_lost) {                            /* held with the job outstanding (cpu1_hold) */
+        cpu1_lost = 0;
+        cpu1_outstanding = 0;
         return -1;
-    return fm1_cpu1_wait(timeout_ticks);
+    }
+    if (!cpu1_outstanding)
+        return 0;
+    cpu1_outstanding = 0;
+    if (!fm1_cpu1_on)
+        return -1;                              /* retired with it outstanding */
+    r = fm1_cpu1_wait(cpu1_post_at, timeout_ticks);
+    return r;
 }
 
 static int cpu1_post(void (*job)(void *), void *arg)
 {
-    return fm1_cpu1_run(job, (uint32_t)(uintptr_t)arg) ? 0 : -1;
+    if (cpu1_ctx == CPU1_CTX_NONE) {
+        cpu1_refused++;
+        return -1;
+    }
+    if (cpu1_outstanding || !fm1_cpu1_run(job, (uint32_t)(uintptr_t)arg))
+        return -1;
+    cpu1_post_at = fm1_ticks();
+    cpu1_outstanding = 1;
+    return 0;
 }
 
 static int cpu1_state(void)
@@ -464,10 +516,34 @@ static uint32_t cpu1_why(void) { return fm1_cpu1_gave_up; }
 
 static void cpu1_hold(void)
 {
+    uint32_t f = irq_save();                    /* (the audio interrupt cannot run between its post and its join) */
     fm1_cpu1_stop();
+    if (cpu1_outstanding)
+        cpu1_lost = 1;
     fm1_cpu1_on = 0;
-    fm1_cpu1_mb.complete = fm1_cpu1_mb.request;     /* (nothing outstanding: a job held mid-way is dropped) */
     FM1_CPU1_SYNC();
+    irq_restore(f);
+}
+
+/* the audio interrupt (platform.c fm1_alnk0_irq) around the app's render: posts allowed inside; a job still
+ * outstanding at the end is joined there (within one block of its post), never carried into the main loop */
+static inline uint8_t cpu1_audio_begin(void)
+{
+    uint8_t was = cpu1_ctx;
+    cpu1_ctx = CPU1_CTX_AUDIO;
+    return was;
+}
+static inline void cpu1_audio_end(uint8_t was)
+{
+    if (cpu1_outstanding)
+        (void)cpu1_join(CPU1_BLOCK_TICKS);
+    cpu1_ctx = was;
+}
+static inline void cpu1_boot_done(void)
+{
+    if (cpu1_outstanding)
+        (void)cpu1_join(CPU1_BLOCK_TICKS);
+    cpu1_ctx = CPU1_CTX_NONE;
 }
 
 static volatile uint32_t cpu1_ping_in, cpu1_ping_out;
@@ -504,11 +580,48 @@ static void cpu1_job_hang(void *arg)            /* (fm1-emu case hang: a job tha
         FM1_CPU1_SYNC();
 }
 #endif
+#if KNOBI_CPU1_TEST == 5
+uint32_t cpu1_test_reset __attribute__((section(".noinit")));   /* (fm1-emu case reset: once, in the start window) */
+#endif
 
 #define CPU1_PING_TICKS (2000u * FM1_TICKS_PER_US)     /* the boot ping: 2 ms (it takes a few us) */
 static int cpu1_start(void)
 {
+    if (cpu1_started || (fm1_flash_icfg_read() & 0x300u) == 0x300u)
+        return fm1_cpu1_on ? 0 : -1;            /* once per boot, with interrupts off (the boot) */
+    cpu1_started = 1;
+    cpu1_ctx = CPU1_CTX_BOOT;
     if (fm1_cpu1_start() < 0)
         return -1;
-    return cpu1_ping(CPU1_PING_TICKS);
+#if KNOBI_CPU1_TEST == 5
+    if (cpu1_test_reset != 0x52534554u) {       /* "TESR": a warm reset inside the window, the first boot only */
+        cpu1_test_reset = 0x52534554u;
+        fm1_reboot();
+    }
+#endif
+    if (cpu1_ping(CPU1_PING_TICKS) < 0)
+        return -1;                              /* (retired: barred) */
+    fm1_cpu1_bar.starting = 0;                  /* the start window closes: it answered */
+    return 0;
+}
+
+/* KNOBI-SIX: fm1_cstart, first thing and once .bss is set up (the fault path's trust in this file's words) */
+static inline void fm1_cpu1_live_clear(void) { fm1_cpu1_live = 0; }
+static inline void fm1_cpu1_live_set(void) { fm1_cpu1_live = FM1_CPU1_LIVE; }
+
+/* the flash wrappers' irq_save (fm1_flash.h FL_IRQ_SAVE): returns with interrupts off and the gate open */
+static uint32_t fm1_cpu1_flash_quiesce(void)
+{
+    uint32_t t0 = fm1_ticks(), f;
+    for (;;) {
+        f = irq_save();
+        if (fm1_flash_access_ok())
+            return f;
+        /* a job outstanding: only the audio interrupt's, joined before it returns, so let it run */
+        if ((uint32_t)(fm1_ticks() - t0) >= CPU1_BLOCK_TICKS) {
+            fm1_cpu1_retire(FM1_CPU1_LATE);     /* held: the gate opens (one core from here) */
+            return f;
+        }
+        irq_restore(f);
+    }
 }

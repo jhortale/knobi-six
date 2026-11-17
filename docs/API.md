@@ -257,26 +257,34 @@ on its own as well (`FL_GUARD`, hal/fm1_flash_map.h; tests/smk_flash_test.c chec
 
 Off by default: only a build with `KNOBI_CPU1=1 ./build.sh` (package `knobi-six-cpu1.fwsc`, never a release: build.py
 refuses `--release` with it) has the AC791N's second core (CPU1). The HAL is felucca-bsp's (`hal/fm1_cpu1.h`,
-`fm1_cpu1.S`, `fm1_cpu1_stop.h`, `fm1_flash_access.h`; MPL-2.0, see LICENSING.md). Without the flag the calls below
-exist as stubs (`cpu1_post` says no, `cpu1_state` says `CPU1_OFF`), so code can call them either way and runs every
-job on CPU0.
+`fm1_cpu1.S`, `fm1_cpu1_stop.h`, `fm1_cpu1_hold.h`, `fm1_flash_access.h`; MPL-2.0, see LICENSING.md). Without the flag
+the calls below exist as stubs (`cpu1_post` says no, `cpu1_join` says 0, `cpu1_state` says `CPU1_OFF`), so code can
+call them either way and runs every job on CPU0.
 
 | | |
 | --- | --- |
-| `int cpu1_start(void)` | `fm1_cstart` calls it (with the flag), after the RAM is set up and before the audio and the timers, never in the rescue and never on a boot after a failed one. 0 = CPU1 runs and a ping came back; < 0 = one core |
-| `int cpu1_post(void (*job)(void *), void *arg)` | 0 = CPU1 has `job(arg)`; < 0 = not handed over (off, failed, a job outstanding): run it yourself |
-| `int cpu1_join(uint32_t timeout_ticks)` | 0 = done; < 0 = late, a misread or a fault: CPU1 is **retired** (held, one core until power-off) and the job dropped, never run twice: render that part yourself. Keep the timeout under one audio block (5.8 ms = 139,319 ticks at `FM1_TICKS_PER_US` 24) and above the job's worst case |
+| `int cpu1_start(void)` | `fm1_cstart` calls it (with the flag), once, interrupts off, after the RAM is set up and before the audio and the timers, never in the rescue and never on a boot after a failed one. 0 = CPU1 runs and a ping came back; < 0 = one core. Later calls start nothing |
+| `int cpu1_post(void (*job)(void *), void *arg)` | 0 = CPU1 has `job(arg)`; < 0 = not handed over (off, failed, a job outstanding, or **not in the audio interrupt**): run it yourself |
+| `int cpu1_join(uint32_t timeout_ticks)` | 0 = nothing outstanding: the job came back, or none was posted (CPU1 off or retired). < 0 = the posted job is not done and never will be (late, a misread, a fault, held): CPU1 is **retired** (held, one core until power-off) and the job dropped, never run twice: render that share yourself. The deadline counts **from the post**: post, render CPU0's share, then join(budget) keeps the whole fork/join within budget ticks of the post. Budget: under one block (5.8 ms = 139,320 ticks at `FM1_TICKS_PER_US` 24) less the work after the join (the sum, the DC blocker, the limiter, the platform's scaling) and the TIMER5 nesting |
 | `int cpu1_state(void)` | `CPU1_OFF`, `CPU1_IDLE`, `CPU1_BUSY`, `CPU1_FAIL`; reads only, from anywhere |
-| `void cpu1_hold(void)` | hold CPU1 and mark it off |
-| `int cpu1_ping(uint32_t timeout_ticks)` | (with the flag) a round trip through CPU1; < 0 = retired |
+| `void cpu1_hold(void)` | hold CPU1 and mark it off (interrupts masked meanwhile); a job it drops makes the next join < 0. For the boot, a fault or a reset path |
+| `int cpu1_ping(uint32_t timeout_ticks)` | a round trip through CPU1 (the boot or the audio interrupt); < 0 = not (retired, or not posted) |
 
-The rules: post and join from one context (the audio interrupt). A job runs from the flash, so it may only be
-outstanding while the flash is on: every flash erase or write runs with interrupts off and refuses to start unless
-CPU1 is held or idle in its RAM loop (`fm1_flash_access_ok`), and the audio interrupt joins every job before it
-returns. Name a job `cpu1_job_*`: build.py adds its stack to CPU1's (2,560 B for the loop and the deepest job) and
-fails the build above that. CPU1 runs no interrupts. Every reset, the UBOOT entry and the update hold CPU1 first;
-CPU0's crash holds it and bars it until power-off. A failure of CPU1 never restarts the keyboard, so it never counts
-against the boot guard. Results in the emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
+The rules: post only inside the audio interrupt (platform.c brackets `app_audio` with `cpu1_audio_begin` /
+`cpu1_audio_end`, which joins a job still outstanding, so none outlives the interrupt) or the boot. A job runs from the
+flash. Every flash erase, write and read runs with interrupts off and only with CPU1 held or idle in its RAM loop:
+the wrappers (`FL_IRQ_SAVE`, `fm1_cpu1_flash_quiesce`) wait up to one block with interrupts on for the audio
+interrupt's join, then retire CPU1 and go on; the RAM driver refuses otherwise (`fm1_flash_access_ok`). Name a job
+`cpu1_job_*`: build.py adds its stack to CPU1's (2,560 B for the loop and the deepest job), and checks that the idle
+loop (`.c1_text`) calls nothing but the job and holds no flash address. CPU1 runs no interrupts. Every reset, the
+UBOOT entry and the update hold CPU1 first, and the update loader holds it again at its own start (every build);
+CPU0's crash holds it and bars it until power-off.
+
+The boot guard: a failure CPU0 sees (no answer, a late job, a misread, a fault of CPU1's) leaves one core and never
+restarts the keyboard. A crash or reset of CPU0's own inside the start window (from the release to the boot ping's
+answer, a few ms) counts once against the boot guard like any boot crash; the start mark (`.noinit`) then bars CPU1
+until power-off, and a boot after a failed one runs on one core anyway, so it never counts twice. Results in the
+emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
 
 ## Build options
 
