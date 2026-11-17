@@ -35,6 +35,10 @@ IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
 | 0xFB continue | runs on from where it stopped | ignored |
 | 0xFC stop | stopped: no steps (the arpeggiator waits) | ignored |
 
+Under IN and THRU the clock **waits for a start**: ticks alone give the tempo but no steps until a 0xFA (the next 0xF8
+is the downbeat) or a 0xFB arrives, so the arpeggiator stays silent until the sender's transport starts (the screen
+says MIDI CLOCK STOPPED). IN NO S/S has no such wait: it runs from the first tick after a silence.
+
 No 0xF8 for 0.25 s (more than three ticks at 30 BPM, the slowest tempo) and the clock is not running: per the OB-6,
 with the clock set to follow and none present, the arpeggiator does not run. Ticks again: it runs on (unless stopped).
 Steps fall on the ticks received (the audio takes the queue at each 5.8 ms block: within one block). THRU sends every

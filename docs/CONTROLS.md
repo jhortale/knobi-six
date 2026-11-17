@@ -18,7 +18,7 @@ top row of pads is switches, the bottom row is pressure only.
 | OCTAVE- / + | `BTN_OCT_DOWN` / `UP` | the keys' octave, -2..+2 |
 | BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
 | GLOBE held + BT, twice within 2 s | | RESTORE FACTORY: the first press asks (the header shows `SurE`, Program says RESTORE FACTORY? EDITS ARE LOST), the second within 2 s puts the current program's factory version into the edit buffer (header `FAC`; nothing is stored until WRITE). Not confirmed in time: forgotten. Globals, opened by GLOBE's press, closes again. No factory bank in the build: the init program. Not while a WRITE is armed (see [Programs](#programs)) |
-| FX held + any encoder K2..K8 | `BTN_FX` | DISTORTION (0..127, the program's), on every screen: the OB-6's "hold EFFECT and turn MIX" (reference 2.9, 4). The effects (and a MIX knob) are not there yet, so every knob does it while FX is held; the header shows the value. FX alone: nothing yet |
+| FX held + any encoder K2..K8 | `BTN_FX` | DISTORTION (0..127, the program's), on every screen: the OB-6's "hold EFFECT and turn MIX" (reference 2.9, 4). The effects (and a MIX knob) are not there yet, so every knob does it while FX is held; the header shows the value. FX alone: nothing yet. **This narrows when the effects land**: it will be FX held + the MIX knob only, and FX's other uses will belong to the effects |
 | KNOB BANK, FADER BANK, ARP, NOTE REPEAT, SEQ, SEQ PLAY, SEQ REC | | nothing yet (effects, sequencer: phases 2 and 3; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.

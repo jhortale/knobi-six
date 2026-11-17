@@ -1,5 +1,66 @@
 # Measurements
 
+## Phase 2 status (2A second core, 2B clock / arpeggiator / distortion)
+
+Everything below is emulator and host-test evidence: **nothing has run on a keyboard**. The device numbers come from
+the CPU1 probe ([SMOKE_TEST.md](SMOKE_TEST.md) §5), then the effects (2C) are planned against them. Last CI run on
+`phase2` (9384171): 44144831394, `firmware`, `fm1-emu` and `cpu1-emu` all green; its artifacts include
+`knobi-six-pro` (the default package, one core) and `knobi-six-cpu1probe`.
+
+| what | single core | dual core (`KNOBI_CPU1=1`, DUAL CORE on) | source |
+|---|---|---|---|
+| render, 6 voices, % of the 5.805 ms block at 240 MHz (hw cycle model) | init chord 65.4, musical C3..C5 80.4, C5..C7 91.6, extreme C3..C5 123.6 | 42.8, 50.3, 57.7, 75.9 (critical path estimate) | Task 3 tables below |
+| same at 360 MHz | 43.6, 53.6, 61.1, 82.4 | 28.5, 33.5, 38.4, 50.6 | Task 3 |
+| change | | -34.5 to -42.8 % (not -50: CPU0 keeps the tick, bus, DC blocker, limiter) | Task 3 |
+| CPU0 in the emulator's own time (the CPU guard's measure) | 32.7 to 67.0 % | 20.4 to 39.6 %, CPU1 job 12 to 31 % | Task 3 |
+| distortion at 127 vs 0 | +1.3 % of the block (+17,000 to +19,800 hw cycles a block); at 0 the stage is skipped (+0.1 %, bit for bit the old output) | the same, it stays on CPU0 after the join | Task 7 |
+| clock, arpeggiator | host and unit tests; no per-block cost figure was recorded for them | | Tasks 5, 6 |
+
+The default build (one core, DUAL CORE and CPU1 absent) is what a release is. Dual core is a separate
+`KNOBI_CPU1=1` build, never a release; DUAL CORE defaults to OFF even there.
+
+Caveats that apply to every dual-core figure: fm1-emu has **no cache and no bus-contention model**, both cores run at
+full speed in it, and prior art measured -27 to -41 % on devices, so **expect the device to be slower than these
+numbers**. The clock speed itself (240 vs 360 MHz) is not known for this unit; both columns are given. The emulator
+does not hold a core through `C1_CON`, has no PC-limit fault for CPU1's ROM boot and no supply-dependent misreads
+(`--flaky-core1` models them), and does not turn the XIP flash off during an erase.
+
+CI gate, narrowed on João's decision (commit ae72240): the `cpu1-emu` job used to compare the default build against
+the pre-HAL base (e800d7e) byte for byte (`app.bin`, `app.dis`, package). Every later feature changes those, so it now
+checks only that the default build has **CPU1 absent** (`CPU1: absent (KNOBI_CPU1=0, one core)` from build.py) and that
+the update loader `ota.bin` is **byte for byte** the base's. The loader is the one part that cannot be emulated and
+threatens the update path; the app and package are no longer compared.
+
+Pre-existing, not from Phase 2: a small DC offset remains on the output for asymmetric loud material (the report
+attributes it to the existing limiter, not the distortion). Test
+`dist_max_chord` (Task 7) measured, over 10 s on the loud pulses + sync chord, **-64.7 dBFS at distortion 32 and
+-68 dBFS at 0** (with distortion at 127: -105.4 dBFS; init chord -96.6). The same figure at amount 0 and 32 shows the distortion
+is not its source; noted so it is not blamed on 2B.
+
+### What only the device can confirm
+
+None of this is answerable on the computer or in the emulator; the probe package and its procedure
+([SMOKE_TEST.md](SMOKE_TEST.md) §5, [research/second-core.md](research/second-core.md) "What only the hardware can
+answer") exist for the first block. A fail on any of the first four means DUAL CORE stays off on this unit.
+
+1. **CPU1 starts** on this unit at all (`C1 IDLE` vs `C1 FAIL SILENT`).
+2. **Shared-RAM misreads** at the stock supply (`MISREAD`, `BIT 00200000` is the known fault; units differ).
+3. **CPU1's FPU**: the float workload equal on both cores, no trap (`FPU OK`).
+4. **DUAL = SINGLE** checksums equal on the real chip.
+5. **The real speed-up**: `LOAD 1C / 2C` on the probe's test patch (the emulator says -35 to -43 %, the device
+   likely less; cache and flash contention).
+6. **The real clock** (240 vs 360 MHz) and the real single-core CPU % for the NVOICE decision; Phase 1's open item.
+7. **The WRITE gap** with CPU1 on: whether the flash gate holds up under a real erase and write (the emulator cannot
+   turn the XIP flash off).
+8. **MIDI clock jitter on USB**: clock out is sent from the main loop (within a few ms of its time), clock in is
+   queued to the 5.8 ms audio block; whether a DAW or hardware slave accepts that, and a tempo lock, need a real host.
+9. **Distortion taper and level by ear**: the curve and the "a chord stays about as loud" rule are tested by numbers;
+   whether 32 is a pleasant warmth, 127 a usable maximum, and single notes' +8 dB acceptable is João's ear. Imported
+   programs now play their stored distortion value too.
+10. **Per-program ARP HOLD**: it is inferred from the importer's slot for imported programs; confirm against real
+    programs that it means what it does on the OB-6.
+11. Arp and clock feel: tap tempo, swing, ARP BEAT SYNC, the arp under an external clock from a real DAW.
+
 ## Dual core
 
 ### Phase 2 Task 2: the CPU1 HAL in fm1-emu (KNOBI_CPU1=1; no audio jobs yet)
