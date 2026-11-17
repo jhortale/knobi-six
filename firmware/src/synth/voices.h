@@ -59,13 +59,19 @@
 #define SYNTH_LIMIT_KNEE 19661            /* the bus soft limiter's knee: 0.6 x full scale, -4.4 dBFS */
 #define SYNTH_LIMIT_CEIL 31129            /* its ceiling, approached, never reached: 0.95 x full scale, -0.45 dBFS */
 
+/* SYNTH_VOICE_ALIGN: an alignment for voice[] (a dual-core build: each voice on cache lines of its own, engine.c);
+ * empty by default */
+#ifndef SYNTH_VOICE_ALIGN
+#define SYNTH_VOICE_ALIGN
+#endif
+
 enum { SM_CUT, SM_RESO, SM_MODE, SM_BP, SM_SHAPE1, SM_PW1, SM_SHAPE2, SM_PW2, SM_L1, SM_L2, SM_LSUB, SM_LNOISE,
        SM_VOL, SM_SPREAD, SM_COUNT };
 
 typedef struct synth synth_t;
 struct synth {
     program_t prog;                       /* the values in play (prog.v[]), chord memory */
-    voice_t voice[NVOICE];
+    voice_t voice[NVOICE] SYNTH_VOICE_ALIGN;
     voice_ctx_t ctx;
     lfo_t lfo;
     int32_t sm[SM_COUNT], tgt[SM_COUNT];  /* smoothed values and their targets */

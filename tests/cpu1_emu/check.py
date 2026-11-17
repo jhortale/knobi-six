@@ -8,6 +8,7 @@ import re
 import sys
 
 out, ms, rate = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+dms, wms = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (None, None)
 TICKS_PER_US = 24
 BLOCK_US = 256 * 1_000_000 // 44100                       # one audio block (HALF_FRAMES at 44.1 kHz): 5804 us
 STATE = {0: "OFF", 1: "IDLE", 2: "BUSY", 3: "FAIL"}
@@ -15,7 +16,11 @@ WHY = {0: "-", 1: "MISREAD", 2: "LATE", 3: "BARRED", 4: "FAULT", 5: "SILENT"}
 TEST = ["magic", "state", "why", "post", "join", "took", "failed", "pending", "pings", "rejected", "jobs", "barred",
         "at_ms", "flash", "main_post", "refused", "fl_rc", "fl_at", "pings_after", "join_none"]
 MB = ["request", "fn", "arg", "check", "_", "_", "_", "_", "ready", "complete", "rejected", "misread", "jobs"]
-MIN_HALVES = int((ms - 400) / 1000 * 44100 / 256 * 0.95)   # the audio ran from the end of the boot (~0.3 s in the
+def min_halves(ms):
+    return int((ms - 400) / 1000 * 44100 / 256 * 0.95)
+
+
+MIN_HALVES = min_halves(ms)   # the audio ran from the end of the boot (~0.3 s in the
                                                             # emulator, one core or two; nostart waits 20 ms more)
 
 
@@ -116,11 +121,72 @@ case("reset", "a warm reset in the start window: counted once, then one core (ba
      f"1 chip reset; second boot: {STATE.get(t['state'])}, barred {t['barred']}; boot guard failed {t['failed']} "
      f"pending {t['pending']}; {r['halves']} audio halves")
 
-print(f"### Second core in fm1-emu ({ms} ms each)\n")
+# Task 3: dual-core voice rendering (tests/cpu1_emu/dual_hook.c, dual_test)
+DT = ["magic", "done", "blocks"] + [f"sum{p}{i}" for p in (0, 1) for i in range(4)] + \
+     [f"jobs{p}{i}" for p in (0, 1) for i in range(4)] + [f"used{p}{i}" for p in (0, 1) for i in range(4)] + \
+     [f"c1load{i}" for i in range(4)] + ["failed", "state", "why", "rejected", "mbjobs", "dual", "wr_rc", "writes",
+     "write_at", "jobs_before", "jobs_write", "saves", "save_at", "jobs_save", "dual_read", "jobs_after", "at_fail"]
+PATCHES = ["init chord", "musical C3..C5", "musical C5..C7", "extreme C3..C5"]
+BLOCK_TICKS = 256 * 5442 // 10                              # engine.c: the block's budget in TIMER4 ticks
+dual_rows = []
+
+
+def dt(r):
+    w = r["words"]
+    return dict(zip(DT, w + [None] * (len(DT) - len(w))))
+
+
+if dms:
+    for name, hook in (("dual", 6), ("dualfail", 7)):
+        r = load(name)
+        t = dt(r)
+        same = all(t[f"sum0{i}"] is not None and t[f"sum0{i}"] == t[f"sum1{i}"] for i in range(4))
+        ok = {**common(r, halves=min_halves(dms)), "magic": t["magic"] == 0x54554444, "script done": t["done"] == 1,
+              "dual output = one-core output, every patch (checksums)": same,
+              "no CPU1 job with DUAL CORE off": all(t[f"jobs0{i}"] == 0 for i in range(4))}
+        if hook == 6:
+            ok.update({"CPU1 jobs with it on, every patch (> 500 periods)": all((t[f"jobs1{i}"] or 0) > 500 for i in range(4)),
+                       "IDLE, nothing failed or refused": (t["state"], t["why"], t["failed"], t["rejected"]) == (1, 0, 0, 0)})
+        else:
+            ok.update({"FAIL (LATE), eng_c1_failed": (t["state"], t["why"], t["failed"]) == (3, 2, 1),
+                       "jobs until the 1000th, none after": t["jobs10"] + t["jobs11"] == 999 and t["jobs12"] == 0 and t["jobs13"] == 0})
+        seen = "; ".join(f"{PATCHES[i]} {t[f'sum1{i}']:08x}" for i in range(4) if t[f"sum1{i}"] is not None)
+        seen += f"; jobs {[t[f'jobs1{i}'] for i in range(4)]}; {STATE.get(t['state'])} ({WHY.get(t['why'])})"
+        if hook == 7:
+            seen += f" at {t['at_fail']} ms"
+        seen += f"; {r['halves']} audio halves"
+        case(name, "DUAL CORE off vs on, same image and run" if hook == 6 else
+             "the 1000th voice job hangs: set B on CPU0, one core after", ok, seen)
+        if hook == 6 and same:
+            for i in range(4):
+                dual_rows.append((PATCHES[i], 100 * t[f"used0{i}"] / 24 / BLOCK_TICKS, 100 * t[f"used1{i}"] / 24 / BLOCK_TICKS,
+                                  t[f"c1load{i}"], t[f"jobs1{i}"]))
+    r = load("write")
+    t = dt(r)
+    case("write", "DUAL CORE on: WRITE (slot erase + write) and the globals' autosave, a chord before and after",
+         {**common(r, halves=min_halves(wms) - 60), "script done": t["done"] == 1, "DUAL CORE on": t["dual"] == 1,
+          "WRITE stored (rc 1, 1 write)": (t["wr_rc"], t["writes"]) == (1, 1),
+          "autosave: the extended record, read back DUAL CORE 1": (t["saves"] or 0) >= 1 and t["dual_read"] == 1,
+          "jobs before the WRITE, during its fade, after the autosave":
+              0 < (t["jobs_before"] or 0) < (t["jobs_write"] or 0) and (t["jobs_after"] or 0) > (t["jobs_save"] or 0),
+          "CPU1 IDLE throughout (never retired by the flash gate), nothing refused":
+              (t["state"], t["why"], t["failed"], t["rejected"], t["at_fail"]) == (1, 0, 0, 0, 0)},
+         f"WRITE rc {t['wr_rc']} at {t['write_at']} ms; autosave at {t['save_at']} ms ({t['saves']} saves), DUAL CORE read "
+         f"back {t['dual_read']}; jobs {t['jobs_before']} before, {t['jobs_write']} after the WRITE, {t['jobs_save']} at the "
+         f"autosave, {t['jobs_after']} after; {STATE.get(t['state'])}, rejected {t['rejected']}; {r['halves']} audio halves")
+
+print(f"### Second core in fm1-emu ({ms} ms each; dual and dualfail {dms} ms, write {wms} ms)\n")
 print("| case | what | result | seen |")
 print("| --- | --- | --- | --- |")
 for row in rows:
     print("| " + " | ".join(str(x) for x in row) + " |")
+if dual_rows:
+    print("\nCase dual: CPU0's render (synth_render, the joins' waits included: the CPU guard's number) in the emulator's own "
+          "time (no cost model), per block over blocks 8..31 of each segment, and CPU1's job load (eng_c1_load):\n")
+    print("| patch, 6 voices | DUAL CORE off: CPU0 | on: CPU0 | change | on: CPU1 job (C1 ON n%) | CPU1 jobs |")
+    print("| --- | --- | --- | --- | --- | --- |")
+    for p, a, b, c, j in dual_rows:
+        print(f"| {p} | {a:.1f} % | {b:.1f} % | {100 * (b / a - 1):+.1f} % | {c} % | {j} |")
 if bad:
     print("\nFAILED: " + "; ".join(bad))
     sys.exit(1)

@@ -170,6 +170,23 @@ static int32_t scr_cpu_q(void)
     return (int32_t)((ld > 199u ? 199u : ld) | (pk > 199u ? 199u : pk) << 8 | (uint32_t)(eng_vlimit & 15u) << 16 |
                      (sh > 999u ? 999u : sh) << 20);
 }
+#if KNOBI_CPU1
+/* the second core on the diagnostics line (engine.c eng_c1_status), quantised: 0 OFF (DUAL CORE off), 1 FAIL (on, but
+ * CPU1 is not running: retired, or it never started), 2 + its job load in 5 % steps (on: "C1 ON 40%") */
+static int32_t scr_c1_q(void)
+{
+    int st = eng_c1_status();
+    uint32_t ld = (eng_c1_load + 2u) / 5u;
+    return st == 0 ? 0 : st == 2 ? 1 : 2 + (int32_t)(ld > 199u ? 199u : ld);
+}
+static void scr_c1(char *d)
+{
+    int32_t q = scr_c1_q();
+    d = scr_cat(d, "  C1 ");
+    if (q < 2) scr_cat(d, q ? "FAIL" : "OFF");
+    else scr_cat(scr_num(scr_cat(d, "ON "), (q - 2) * 5), "%");
+}
+#endif
 static int32_t scr_val(uint16_t id)
 {
     if (id < P_COUNT_PHASE1) return scr_p->v[id];
@@ -204,6 +221,9 @@ static const char *scr_choice(uint16_t id, int32_t v)   /* a select's choice, el
     if (id == B_GLOBAL(G_POT_MODE)) return SCR_POT[v % 3];
     if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) return SCR_TXRX[v & 1];
     if (id == B_GLOBAL(G_LOCAL)) return SCR_ONOFF[v & 1];
+#if KNOBI_CPU1
+    if (id == B_GLOBAL(G_DUAL)) return SCR_ONOFF[v & 1];
+#endif
     if (id == B_GLOBAL(G_STEREO)) return SCR_STEREO[v & 1];
     if (id == B_GLOBAL(G_SUSTAIN)) return SCR_SUS[v & 1];
     return 0;
@@ -282,7 +302,11 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
+#if KNOBI_CPU1
+        return (int32_t)(h * 2654435761u + scr_cpu_q() + (uint32_t)scr_c1_q() * 40503u);
+#else
         return (int32_t)(h * 2654435761u + scr_cpu_q());   /* (the load in 5 % steps: not a repaint a pass) */
+#endif
     }
     return 0;
 }
@@ -299,6 +323,9 @@ static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's disp
         if (v) scr_num(d, v); else scr_cat(d, "ALL");
     } else if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) scr_cat(d, v ? "CC" : "OFF");
     else if (id == B_GLOBAL(G_LOCAL)) scr_cat(d, v ? "On" : "OFF");
+#if KNOBI_CPU1
+    else if (id == B_GLOBAL(G_DUAL)) scr_cat(d, v ? "On" : "OFF");
+#endif
     else if (id == B_GLOBAL(G_TRANSPOSE) || id == B_GLOBAL(G_TUNE) || id == B_GLOBAL(G_VEL_CURVE) ||
              id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
@@ -491,7 +518,11 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_text_c(cx, w->y + 1, &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
         p = scr_cat(t, "WHEELS ");
         p = scr_num(p, fm1_in.wheel[0]);
+#if KNOBI_CPU1
+        scr_c1(scr_num(scr_cat(p, " "), fm1_in.wheel[1]));   /* + "C1 ON 40%" / "C1 OFF" / "C1 FAIL" */
+#else
         scr_num(scr_cat(p, " "), fm1_in.wheel[1]);
+#endif
         pg_text_c(cx, w->y + 11, &FONT_XS, t, PC_DIM);
         p = scr_cat(t, "FADERS");
         for (i = 0; i < 4; i++) p = scr_num(scr_cat(p, " "), fm1_in.fader[i]);

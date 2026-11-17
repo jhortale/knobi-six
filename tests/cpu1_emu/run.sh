@@ -17,6 +17,14 @@
 #   reset    test hook 5: a warm reset inside the start window (after CPU1 answered, before the boot ping): the
 #            second boot counts one failed boot (as any boot crash), CPU1 stays off (barred by the start mark, and
 #            bootguard.failed), the audio runs; one chip reset only
+#   dual     test hook 6 (Task 3, tests/cpu1_emu/dual_hook.c): four patches played by the audio interrupt from a fixed
+#            script, DUAL CORE off then on, in one image and one run: every output checksum the same, CPU1 jobs only
+#            with it on, CPU0's render time (the joins' waits included) and CPU1's job load per patch
+#   dualfail test hook 7: as dual, CPU1's 1000th voice job never returns: the join fails, CPU0 renders set B in that
+#            period, CPU1 retired (LATE), one core from there; every checksum still the same
+#   write    test hook 8: DUAL CORE on, a chord held, WRITE + ENTER (the program slot's erases and writes), then the
+#            globals' autosave (the extended record, read back), a chord again: CPU1 stays IDLE (the flash gate never
+#            had to retire it), the jobs go on, no fault, the audio runs
 #   bash tests/cpu1_emu/run.sh FM1_EMU OUTDIR     (as ./build.sh: JIELI_TOOLCHAIN, AC79_SDK, Pillow; Docker off Linux)
 # It leaves build/ holding the last CPU1 image: run ./build.sh again for the default one.
 set -euo pipefail
@@ -25,6 +33,8 @@ EMU=$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1"); OUT=$2; mkdir -p "$OUT/w
 OUT=$(cd "$OUT" && pwd -P)
 MS=${CPU1_EMU_MS:-1500}
 RATE=${CPU1_EMU_FLAKY:-1e-7}
+DMS=${CPU1_EMU_DUAL_MS:-2400}                    # dual, dualfail: the boot + 8 segments of 40 blocks (1.86 s)
+WMS=${CPU1_EMU_WRITE_MS:-6500}                   # write: up to the autosave (~5 s) and a chord after it
 
 build() {   # name, test hook (empty: none)
     rm -f build/knobi-six*-cpu1*.fwsc
@@ -38,7 +48,7 @@ build() {   # name, test hook (empty: none)
 sym() { grep -E " $2\$" "$OUT/$1.map" | cut -c1-8; }
 emu() {     # case, image, dump symbol, words, extra emu options...
     local c=$1 img=$2 s=$3 n=$4; shift 4
-    (cd "$OUT" && "$EMU" --fwsc "$img.fwsc" --ms "$MS" --dump "$(sym "$img" "$s")" "$n" "$@") > "$OUT/$c.log" 2>&1 || true
+    (cd "$OUT" && "$EMU" --fwsc "$img.fwsc" --ms "${RUN_MS:-$MS}" --dump "$(sym "$img" "$s")" "$n" "$@") > "$OUT/$c.log" 2>&1 || true
     echo "$c done"
 }
 
@@ -47,10 +57,17 @@ build test3 3
 build nostart 1
 build hang 2
 build reset 5
+build dual 6
+build dualfail 7
+build write 8
 emu plain plain fm1_cpu1_mb 13
 emu start test3 cpu1_test 20
 emu nostart nostart cpu1_test 20
 emu hang hang cpu1_test 20
 emu flaky test3 cpu1_test 20 --flaky-core1 "$RATE" --seed 7 --cpu1-survives
 emu reset reset cpu1_test 20
-python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" | tee "$OUT/summary.md"
+RUN_MS=$DMS emu dual dual dual_test 48 --keys 800:GLOBE --snap 2000 &
+RUN_MS=$DMS emu dualfail dualfail dual_test 48 &
+RUN_MS=$WMS emu write write dual_test 48 &
+wait
+python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" | tee "$OUT/summary.md"

@@ -15,6 +15,11 @@
 #define N B_NONE
 #define A(x) B_ACT(ACT_##x)
 #define G(x) B_GLOBAL(G_##x)
+#if KNOBI_CPU1
+#define CTL_PAD_DUAL G(DUAL)                    /* a KNOBI_CPU1 build: Globals pad 7 = DUAL CORE (engine.c) */
+#else
+#define CTL_PAD_DUAL N
+#endif
 const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
     [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
@@ -38,7 +43,7 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_PROGRAM] = {{B_PROG(PRG_BANK), B_PROG(PRG_TENS), B_PROG(PRG_ONES), N, N, N, N}, {N, N, N, N},
                      {A(PREV), A(NEXT), A(WRITE), A(ENTER), A(MANUAL), N, N, N}},
     [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), G(TRANSPOSE), G(TUNE), G(VEL_CURVE)}, {N, N, N, N},
-                     {A(PREV), A(NEXT), G(LOCAL), G(STEREO), G(SUSTAIN), G(AT_CURVE), N, N}},
+                     {A(PREV), A(NEXT), G(LOCAL), G(STEREO), G(SUSTAIN), G(AT_CURVE), CTL_PAD_DUAL, N}},
 };
 const binding_t BINDINGS_ROW2[SCR_COUNT] = {
     [SCR_ENV] = {{P_LENV_A, P_LENV_D, P_LENV_S, P_LENV_R, P_LENV_AMT, N, N},           /* row 2: LOUDNESS */

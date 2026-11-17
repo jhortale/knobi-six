@@ -339,6 +339,62 @@ static void response_curves(void)
     CHECK(bad == 0 && lin && differ > 0);
 }
 
+#if KNOBI_CPU1
+/* Phase 2 Task 3 (test_store_cpu1.c: this file with KNOBI_CPU1): the DUAL CORE global. Off: the version-1 record,
+ * byte for byte what a default build saves (both read it); on: the version-1 record + DUAL CORE + a second CRC16
+ * (GLOBALS_BYTES_X), which a default build cannot read (its length: the defaults there); a version-1 record read by a
+ * KNOBI_CPU1 build: DUAL CORE off; a bad second CRC or DUAL CORE out of range: not a good record */
+static void globals_dual_record(void)
+{
+    globals_t g, h, d;
+    uint8_t v1[GLOBALS_BYTES], x[GLOBALS_BYTES_X];
+    int off_len, off_same, on_len, on_read, v1_read, default_reads, bad_crc, bad_range;
+    globals_default(&d);
+    CHECK(d.v[G_DUAL] == 0);                     /* off by default */
+    memset(f_blob, 0xFF, sizeof f_blob);
+    globals_load(&g);                            /* (nothing saved: the first save goes to blob 0) */
+    g.v[G_MIDI_CH] = 5, g.v[G_DUAL] = 0;
+    globals_save(&g);
+    globals_pack(&g, v1);
+    off_len = (int)f_get32(f_blob[0] + 4), off_same = !memcmp(f_blob[0] + 12, v1, GLOBALS_BYTES);
+    g.v[G_DUAL] = 1;
+    globals_save(&g);                            /* (blob 1) */
+    on_len = (int)f_get32(f_blob[1] + 4);
+    default_reads = blob_load(1, v1, GLOBALS_BYTES) == 0;   /* a default build asks for GLOBALS_BYTES: refused */
+    globals_load(&h);
+    on_read = h.v[G_DUAL] == 1 && h.v[G_MIDI_CH] == 5 && h.seq == g.seq;
+    memset(f_blob, 0xFF, sizeof f_blob);         /* a default build's record (version 1) */
+    g.v[G_DUAL] = 0, g.v[G_MIDI_CH] = 9, g.seq = 40;
+    globals_pack(&g, v1);
+    blob_save(0, v1, GLOBALS_BYTES);
+    g.v[G_DUAL] = 1;                             /* (what the load must not keep) */
+    globals_load(&h);
+    v1_read = h.v[G_DUAL] == 0 && h.v[G_MIDI_CH] == 9 && h.seq == 40;
+    g.v[G_DUAL] = 1, g.seq = 41;                 /* an extended record, its second CRC broken */
+    memset(f_blob, 0xFF, sizeof f_blob);
+    globals_pack(&g, x);
+    x[GLOBALS_BYTES] = 1;
+    x[GLOBALS_BYTES + 1] = 0, x[GLOBALS_BYTES + 2] = 0;
+    blob_save(0, x, GLOBALS_BYTES_X);
+    globals_load(&h);
+    bad_crc = !memcmp(h.v, d.v, sizeof h.v);
+    {                                            /* DUAL CORE 2, the CRC right: out of range */
+        uint16_t c;
+        x[GLOBALS_BYTES] = 2;
+        c = program_crc16(x, GLOBALS_BYTES + 1u);
+        x[GLOBALS_BYTES + 1] = (uint8_t)(c & 0xFFu), x[GLOBALS_BYTES + 2] = (uint8_t)(c >> 8);
+        blob_save(0, x, GLOBALS_BYTES_X);
+        globals_load(&h);
+        bad_range = !memcmp(h.v, d.v, sizeof h.v);
+    }
+    printf("globals_dual_record: off -> %d B (= the version-1 record %d), on -> %d B, read back on %d, a default build "
+           "reads it %d; version 1 read: off %d; bad 2nd CRC -> defaults %d, DUAL 2 -> defaults %d\n", off_len, off_same,
+           on_len, on_read, default_reads, v1_read, bad_crc, bad_range);
+    CHECK(off_len == GLOBALS_BYTES && off_same && on_len == GLOBALS_BYTES_X && on_read && !default_reads && v1_read &&
+          bad_crc && bad_range);
+}
+#endif
+
 int main(void)
 {
     uint8_t tag[16];
@@ -351,6 +407,9 @@ int main(void)
     globals_roundtrip();
     globals_cut_save();
     globals_bad_crc_defaults();
+#if KNOBI_CPU1
+    globals_dual_record();
+#endif
     response_curves();
     if (fails) printf("test_store: %d FAILED\n", fails);
     else printf("test_store: all passed\n");

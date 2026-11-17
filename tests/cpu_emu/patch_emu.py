@@ -7,21 +7,25 @@ records, per pc, instructions and cycle costs under two models when FM1_SPIKE_CO
   alt8:  the 2026-11-15 FM-1 probe (jvitkauskas/pi32v2-isa hw/fm1-2026-11-15-excprobe group 7,
          C0_TL_CKCNTL): ALU 1 (no dual issue), 6-byte constant 1.46, load 2, store 2, mul 2,
          div 10, FPU add/mul 2, div 4, taken branch/goto 7.5, untaken 1, call/goto/rts 7.5 each,
-         pair load 4."""
+         pair load 4.
+Dual core (Phase 2 Task 3, tests/cpu_emu DUAL=1): core 1 gets the same models; its pcs are recorded with bit 31 set
+(pc | cnum << 31: every code address is below 0x80000000), and only core 0's costs advance the clock (the emulator
+steps the cores an instruction each; core 1 charging the shared clock too would count time twice). Single-core runs
+are unchanged: no row has bit 31."""
 import sys
 root = sys.argv[1]
 lib = f'{root}/crates/fm1-core/src/lib.rs'
 s = open(lib).read()
 a = """        bus.add_ticks(c.saturating_sub(1) as u64);
         Ok(())"""
-b = """        bus.add_ticks(c.saturating_sub(1) as u64);
+b = """        if self.core_id == 0 { bus.add_ticks(c.saturating_sub(1) as u64); }
         let alt = match (fast, named) {
             (Some(f), _) => spike_alt_cost8(&f, len, taken, self.pc < pc),
             (None, Some((name, raw))) => if taken { 60 } else { named_cost8(name, raw, false).max(8) },
             (None, None) => if taken { 60 } else { 8 },
         };
         if let Some(m) = SPIKE_COST.lock().unwrap().as_mut() {
-            let e = m.entry(pc).or_insert((0, 0, 0));
+            let e = m.entry(pc | (self.core_id << 31)).or_insert((0, 0, 0));
             e.0 += 1; e.1 += c as u64; e.2 += alt as u64;
         }
         Ok(())"""
@@ -97,6 +101,13 @@ b = """    if let Some(path) = std::env::var_os("FM1_SPIKE_COST") {
     }
 """ + a
 assert s.count(a) == 1, 'main end'
+s = s.replace(a, b)
+a = "            c1.core_id = 1;\n"
+b = a + """            if std::env::var_os("FM1_SPIKE_COST").is_some() {
+                c1.cost_model = true;
+            }
+"""
+assert s.count(a) == 1, 'main cpu1'
 s = s.replace(a, b)
 open(main, 'w').write(s)
 print('patched')

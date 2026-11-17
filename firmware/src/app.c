@@ -46,6 +46,12 @@ static void app_idle(void);
 #include "synth/env.c"
 #include "synth/mod.c"
 #include "synth/voice.c"
+#if KNOBI_CPU1                                  /* the second core (engine.c eng_split; DUAL CORE global, default off) */
+struct synth;
+static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
+#define SYNTH_SPLIT(s, bus, n) eng_split((s), (bus), (n))
+#define SYNTH_VOICE_ALIGN __attribute__((aligned(32)))   /* each voice on cache lines of its own (engine.c) */
+#endif
 #include "synth/voices.c"
 #include "engine.c"
 #include "ui/controls.c"                        /* the panel: screens' bindings, pot modes, pads (after engine.c) */
@@ -54,9 +60,16 @@ static void app_idle(void);
 #include "ui/screens.c"                         /* the screens (after controls.c: they show its bindings) */
 
 static volatile uint8_t app_mono;               /* the STEREO global = MONO: both sides the sum (main loop sets it) */
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+static void dual_test_audio(int32_t *out, uint32_t n);   /* (fm1-emu cases, tests/cpu1_emu/dual_hook.c) */
+#endif
 static void app_audio(int32_t *out, uint32_t n)
 {
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+    dual_test_audio(out, n);
+#else
     eng_render(out, n);                         /* the queued events, then n frames added into out (WRITE's fade) */
+#endif
     if (app_mono)
         for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
 }
@@ -119,6 +132,10 @@ static void app_idle(void)
     if (idle_ok) midi_in();
 }
 
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+#include "../../tests/cpu1_emu/dual_hook.c"     /* (fm1-emu cases 6..8; never in a real build) */
+#endif
+
 /* ---- the main loop */
 #define KEY0 53u                                /* the note of F3, key 5 of the keybed, at octave 0 */
 static void app_main(void)
@@ -142,6 +159,9 @@ static void app_main(void)
         uint32_t keys, down, up, b, base = (uint32_t)((int32_t)KEY0 + 12 * set.oct), ch, vc = (uint32_t)ctl_glob[G_VEL_CURVE];
         int32_t e;
         platform_poll();
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+        dual_test_main(&screen);
+#endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
         ch = controls_tx_ch();
 
@@ -179,6 +199,9 @@ static void app_main(void)
         if (b & (1u << BTN_OCT_DOWN) && set.oct > -2) set.oct--;
         if (b & (1u << BTN_OCT_UP) && set.oct < 2) set.oct++;
         app_mono = (uint8_t)(ctl_glob[G_STEREO] != 0);
+#if KNOBI_CPU1
+        eng_dual = (uint8_t)(ctl_glob[G_DUAL] != 0);
+#endif
 #ifdef DINGHY_HOST
         if ((e = fm1_enc_take(0)) != 0) enc_pos[0] += e;   /* (K1: no MASTER on the host) */
 #endif

@@ -70,7 +70,8 @@ jobs:
 
   # The CPU gate (Task 11, docs/MEASUREMENTS.md): cycles per 256-frame block of the synth, built with the JieLi clang
   # at the app's flags, run in joakimeriksson/fm1-emu (MIT, pinned) patched to count per-pc costs in two cycle models
-  # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale). Builds and emulates only.
+  # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale), and the dual-core split
+  # per core (harness DUAL=1, Phase 2 Task 3). Builds and emulates only.
   fm1-emu:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -107,7 +108,8 @@ jobs:
 
   # The second core (Phase 2 Task 2, docs/MEASUREMENTS.md "Dual core"): the default build has no CPU1 code (build.py
   # says so); the KNOBI_CPU1=1 build (hal/fm1_cpu1.h, from felucca-bsp) and its test hooks booted in fm1-emu (MIT,
-  # pinned, dual core): start + ping, nostart, hang, flaky core 1 (tests/cpu1_emu/). Builds and emulates only.
+  # pinned, dual core): start + ping, nostart, hang, flaky core 1; Task 3: the voices on two cores bit-exact with one,
+  # a hung voice job, WRITE + autosave with DUAL CORE on (tests/cpu1_emu/). Builds and emulates only.
   cpu1-emu:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -160,7 +162,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset)
+      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, write)
         run: |
           bash tests/cpu1_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/cpu1emu
           { cat build/cpu1emu/summary.md; echo; echo '```'; cat build/cpu1emu/plain.checks; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -15,15 +15,30 @@
  *   LOCAL       0 OFF (the keybed and pads go to MIDI only), 1 ON
  *   STEREO      0 STEREO, 1 MONO (both outputs the sum)
  *   SUSTAIN     0 N.O., 1 N.C. (the polarity of the sustain message, MIDI CC 64: N.C. reads it upside down)
- *   AT CURVE    0..3 (0 linear, 1 soft, 2 softer, 3 hard) the bottom pads' pressure */
+ *   AT CURVE    0..3 (0 linear, 1 soft, 2 softer, 3 hard) the bottom pads' pressure
+ *   DUAL CORE   0 OFF, 1 ON: half the voices render on the second core (engine.c). Only in a KNOBI_CPU1 build
+ *               (docs/API.md "Second core"); OFF by default
+ * The record (version 1) holds the first G_COUNT_V1. A KNOBI_CPU1 build with DUAL CORE on saves the version-1 record
+ * followed by DUAL CORE and a second CRC16 over all of it (GLOBALS_BYTES_X): a default build cannot read that one
+ * (its length differs: the defaults then), and with DUAL CORE off the record stays the version-1 one, which both read
+ * (a KNOBI_CPU1 build reading a version-1 record: DUAL CORE off). */
 enum { G_MIDI_CH, G_POT_MODE, G_PARAM_TX, G_PARAM_RX, G_TRANSPOSE, G_TUNE, G_VEL_CURVE, G_LOCAL, G_STEREO, G_SUSTAIN,
-       G_AT_CURVE, G_COUNT };
+       G_AT_CURVE, G_COUNT_V1,
+#if KNOBI_CPU1
+       G_DUAL = G_COUNT_V1, G_COUNT
+#else
+       G_COUNT = G_COUNT_V1
+#endif
+};
 enum { POT_RELATIVE, POT_PASSTHRU, POT_JUMP };
 extern const int8_t GLOB_MIN[G_COUNT], GLOB_MAX[G_COUNT], GLOB_DEF[G_COUNT];
 
 #define GLOBALS_VERSION 1
-#define GLOBALS_BYTES (1 + G_COUNT + 1 + 2 + 4 + 2)   /* version, the values, octave, last program (LE), seq (LE),
-                                                       * CRC16 (LE) */
+#define GLOBALS_BYTES (1 + G_COUNT_V1 + 1 + 2 + 4 + 2)   /* version, the values, octave, last program (LE), seq (LE),
+                                                          * CRC16 (LE) */
+#if KNOBI_CPU1
+#define GLOBALS_BYTES_X (GLOBALS_BYTES + 1 + 2)        /* + DUAL CORE, a CRC16 (LE) over all before it */
+#endif
 #define GLOBALS_BLOB 0u                               /* blobs GLOBALS_BLOB and GLOBALS_BLOB + 1 */
 typedef struct {
     int8_t v[G_COUNT];

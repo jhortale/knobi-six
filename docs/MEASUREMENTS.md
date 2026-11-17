@@ -36,7 +36,80 @@ What the emulator does not show (only a device can): it does not hold a core thr
 retirement its cpu1 goes on spinning; the firmware's side, single core, is what is checked), has no PC-limit fault
 for cpu1's ROM boot, no cache or bus contention, and no supply-dependent misreads (`--flaky-core1` is a model of
 them). Whether CPU1 starts on the SMK-37 at all, misreads at its stock rails, and how the flash gate behaves under a
-real save with CPU1 on (Task 3: `write_dual`) stay for the device and the probe build (Task 4).
+real save with CPU1 on stay for the device and the probe build (Task 4; the emulator's side: Task 3's `write` case below).
+
+### Phase 2 Task 3: the voices on two cores (KNOBI_CPU1=1 + DUAL CORE on; emulator only)
+
+What runs (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a KNOBI_CPU1 build; [API.md](API.md) "Second core"):
+each 16-frame control period of the audio interrupt, CPU0 runs the tick, splits the busy voices (`synth_balance`:
+CPU0 the first n / 2 by index, CPU1 the rest), posts set B (`cpu1_job_voices`, CPU1's own bus), renders set A, joins
+(1.5 ms from the post), adds CPU1's bus, then the DC blocker and the limiter. Under two voices busy, DUAL CORE off
+(the default) or CPU1 off: one core. Cache lines: 32 B (the AC79 SDK's `asm/cache.h` `CACHE_LINE_COUNT`, Melodee's and
+felucca-bsp's mailbox lines): `voice_t` is 320 B = 10 lines and `synth_t.voice[]` starts on a line in a CPU1 build
+(`SYNTH_VOICE_ALIGN`, static asserts), CPU1's bus and its time counter sit on lines of their own.
+
+**fm1-emu has no cache and no bus-contention model**: both cores fetch and load at full speed in it. On the chip they
+share one I-cache and the XIP flash, and the voice code (`voice_render` alone is 17.8 KB) runs from the flash on both.
+Prior art measured −27…−41 % on devices ([research/second-core.md](research/second-core.md) §1, §4), not the ideal
+~−50 %; **expect the device to be slower than the numbers below**.
+
+**Cycles per core** (`tests/cpu_emu/`, harness `DUAL=1`: the same synth and split, the emulator's second core started
+bare-metal through a minimal two-line mailbox; `patch_emu.py` records core 1's pcs with bit 31 set and charges only
+core 0's costs to the clock; local run = CI's `fm1-emu` job). 6 voices, cycles per 256-frame block, emu / hw model.
+CPU0's work leaves out its wait (the emulator steps the cores an instruction each, so the wait's length is in
+instructions, not in either cycle model); CPU1's job leaves out its idle poll. The block's critical path is estimated
+as CPU0's serial work + max(set A, set B) (the same side the larger in every period, as with 3 + 3 voices):
+
+| patch | one core | CPU0 (A + serial) | CPU0 set A | CPU1 job (set B) | critical path (est.) | change |
+|---|---|---|---|---|---|---|
+| init chord | 644,307 / 911,408 | 410,906 / 580,095 | 232,846 / 331,599 | 244,191 / 347,508 | 422,251 / 596,004 | −34.5 / −34.6 % |
+| musical C3..C5 | 779,194 / 1,120,333 | 471,291 / 675,151 | 299,936 / 435,572 | 318,694 / 461,377 | 490,048 / 700,956 | −37.1 / −37.4 % |
+| musical C5..C7 | 895,157 / 1,276,663 | 511,666 / 729,465 | 340,181 / 489,647 | 394,281 / 563,393 | 565,767 / 803,211 | −36.8 / −37.1 % |
+| extreme C3..C5 | 1,210,238 / 1,721,818 | 654,247 / 932,772 | 474,950 / 679,926 | 566,782 / 805,241 | 746,078 / 1,058,087 | −38.4 / −38.5 % |
+| extreme 120..127 | 1,382,949 / 1,957,717 | 781,958 / 1,106,545 | 602,402 / 853,744 | 611,782 / 867,367 | 791,337 / 1,120,169 | −42.8 / −42.8 % |
+
+% of the block (5.805 ms), emu / hw model:
+
+| patch | one core, 240 MHz | two cores, 240 MHz | one core, 360 MHz | two cores, 360 MHz |
+|---|---|---|---|---|
+| init chord | 46.2 / 65.4 | 30.3 / 42.8 | 30.8 / 43.6 | 20.2 / 28.5 |
+| musical C3..C5 | 55.9 / 80.4 | 35.2 / 50.3 | 37.3 / 53.6 | 23.4 / 33.5 |
+| musical C5..C7 | 64.3 / 91.6 | 40.6 / 57.7 | 42.8 / 61.1 | 27.1 / 38.4 |
+| extreme C3..C5 | 86.9 / 123.6 | 53.6 / 75.9 | 57.9 / 82.4 | 35.7 / 50.6 |
+| extreme 120..127 | 99.3 / 140.5 | 56.8 / 80.4 | 66.2 / 93.7 | 37.9 / 53.6 |
+
+The split is ~−35…−43 %, not −50 %: CPU0 keeps the tick (the smoothers, the LFO, every voice's control and envelopes),
+the bus, the DC blocker and the limiter (~170–180 k emu cycles a block), and set B (the higher notes, by index) costs
+more than set A. Every dual run's checksum equals its one-core run's.
+
+**The whole image** (`tests/cpu1_emu/`, the KNOBI_CPU1=1 package booted in fm1-emu `60645a5`, cases with
+`tests/cpu1_emu/dual_hook.c`; CI job `cpu1-emu`, all 9 cases ok locally):
+
+| case | what | seen |
+|---|---|---|
+| dual | the audio interrupt plays a fixed script, block by block: the init chord, the musical patch on C3..C5 and C5..C7, the extreme patch on C3..C5, each from `synth_init`, 32 blocks held + 8 released; DUAL CORE off, then on, same image, same run | every checksum the same (24ff6590, 2c757139, debaa049, edcde981); 580 CPU1 jobs per patch with it on, none off; IDLE, nothing refused; the Globals line shows `C1 ON 20%` |
+| dualfail | as dual, CPU1's 1000th voice job never returns (in the second patch with DUAL CORE on) | the join fails after 1.5 ms, CPU0 renders set B in that period: every checksum still the same; FAIL (LATE) at 1,669 ms, jobs 580, 419, 0, 0 (one core after); no halt, 358 audio halves |
+| write | DUAL CORE on at 400 ms, the chord held, WRITE + ENTER at 0.9 / 1.0 s, notes off at 1.8 s, the globals' autosave, a chord again | WRITE stored (rc 1) at 1,060 ms; autosave at 5,721 ms, DUAL CORE read back 1 (the extended record); jobs 1,104 before the WRITE, 1,536 after it, 7,498 at the end; CPU1 IDLE throughout (the flash gate never had to retire it: every erase and write found it idle in its RAM loop), rejected 0; no fault, 1,065 audio halves in 6.5 s |
+
+CPU0's render in the emulator's own time (no cost model; what the CPU guard measures, the joins' waits included),
+per block, % of the block, DUAL CORE off / on; and CPU1's job load (`C1 ON n%`):
+
+| patch, 6 voices | off: CPU0 | on: CPU0 | change | on: CPU1 job |
+|---|---|---|---|---|
+| init chord | 32.7 % | 20.4 % | −37.7 % | 12 % |
+| musical C3..C5 | 45.1 % | 26.7 % | −40.8 % | 19 % |
+| musical C5..C7 | 49.9 % | 29.7 % | −40.6 % | 22 % |
+| extreme C3..C5 | 67.0 % | 39.6 % | −40.8 % | 31 % |
+
+A mutation check: dropping one sample of CPU1's bus from the sum makes every dual checksum differ (7eb24497, …):
+the case fails as it should.
+
+Default build: `app.bin` (sha1 `44541dc3…`), `app.dis`, the loader and the package byte for byte as before this task
+(everything new is under `KNOBI_CPU1`: the global, the split, the alignment, the Globals line); the CI job still
+compares them with e800d7e's default build. The CPU1 build: image 222,756 B (+864 B), RAM 27,876 B (+256 B: CPU1's
+bus and counter on their lines); CPU1's stack: the deepest job `cpu1_job_voices` 612 B of 2,560 B. The globals:
+DUAL CORE off saves the version-1 record (21 B, what a default build saves and reads); on, 24 B (+ DUAL CORE + a CRC),
+which a default build reads as nothing (its defaults) (`test_store_cpu1`).
 
 ## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
 

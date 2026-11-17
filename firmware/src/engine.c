@@ -272,6 +272,94 @@ static uint32_t eng_ticks(void) { return eng_fake_ticks; }
 static uint32_t eng_ticks(void) { return fm1_ticks(); }
 #endif
 
+#if KNOBI_CPU1
+/* ---- the second core (a KNOBI_CPU1 build with the DUAL CORE global on; docs/API.md "Second core"): voices.c's
+ * SYNTH_SPLIT is eng_split (app.c defines it before voices.c). Each control period, inside the audio interrupt: the
+ * busy voices split (synth_balance: CPU0 the smaller half), set B posted to CPU1 (cpu1_job_voices into its own bus),
+ * set A rendered here, the join, CPU1's bus added (int32 sums: bit-exact with one core in any split). Fewer than two
+ * voices busy, DUAL CORE off, or CPU1 off: every voice here, as the default build. A join that fails (the job late or
+ * lost: the HAL has retired CPU1, held until power-off) renders set B here in the same period, so the block is whole
+ * (a late job may have run part of it: one block can glitch), and from then on one core (eng_c1_failed; Globals shows
+ * "C1 FAIL"). The job runs from the flash: every job is joined before the interrupt returns, so a flash erase or
+ * write (the main loop's, interrupts off) always finds CPU1 idle in its RAM loop (hal/fm1_flash_access.h).
+ * Cache lines: 32 bytes on the AC791N (the SDK's include_lib/driver/cpu/wl82/asm/cache.h CACHE_LINE_COUNT, Melodee's
+ * and felucca-bsp's mailbox lines). voice_t is a whole number of lines and synth_t.voice[] starts on one
+ * (SYNTH_VOICE_ALIGN), so a voice of set A and one of set B never share a line; CPU1's bus and its time counter are
+ * on lines of their own, away from CPU0's words. (The cores share the caches, and internal SRAM needs no cache
+ * maintenance, only the HAL's csync for the order: the alignment keeps them off each other's lines all the same.)
+ * The CPU guard (synth_guard) keeps timing CPU0's whole render, the joins' waits included: the time the block takes.
+ * CPU1's own job time (TIMER4 on CPU1) is eng_c1_load, % of the block, for the Globals line ("C1 ON 40%"). */
+#define ENG_C1_LINE 32u                   /* bytes: the AC791N's cache line */
+#define ENG_C1_JOIN_TICKS (1500u * FM1_TICKS_PER_US)   /* a period's join, from its post: a 16-frame period is 363 us of
+                                           * audio; set B's share of a heavy period takes ~100..200 us in the emulator */
+_Static_assert(sizeof(voice_t) % ENG_C1_LINE == 0u, "voice_t: a whole number of cache lines (SYNTH_VOICE_ALIGN)");
+_Static_assert(__builtin_offsetof(synth_t, voice) % ENG_C1_LINE == 0u, "synth_t.voice on a cache line");
+static struct eng_c1 {
+    synth_t *s;                           /* CPU0's, written before each post */
+    uint32_t mask, n;
+    int32_t bus[2u * VOICE_CTL] __attribute__((aligned(32)));   /* CPU1's: set B's period */
+    uint32_t ticks __attribute__((aligned(32)));                /* CPU1's: its jobs' time, summed (TIMER4 ticks) */
+} eng_c1 __attribute__((aligned(32)));
+static volatile uint8_t eng_dual;         /* producer (main loop): the DUAL CORE global */
+static volatile uint8_t eng_c1_failed;    /* consumer: a join failed: one core until power-off */
+static volatile uint32_t eng_c1_jobs;     /* consumer: periods set B rendered on CPU1 */
+static volatile uint16_t eng_c1_load;     /* consumer: CPU1's job time, % of the block, smoothed as eng_load */
+static uint32_t eng_c1_load_q3, eng_c1_seen;
+#if KNOBI_CPU1_TEST == 7
+#define ENG_C1_HANG_AT 1000u              /* (fm1-emu case dualfail: the 1000th voice job never returns) */
+static uint32_t eng_c1_test_jobs;
+static volatile uint32_t eng_c1_test_spin;
+#endif
+
+static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of this period into its own bus */
+{
+    struct eng_c1 *j = arg;
+    uint32_t t0 = eng_ticks(), n = j->n;
+#if KNOBI_CPU1_TEST == 7
+    if (++eng_c1_test_jobs == ENG_C1_HANG_AT)
+        for (;;) eng_c1_test_spin++;      /* (before it touches a voice: the fallback's output stays exact) */
+#endif
+    for (uint32_t i = 0; i < 2u * n; i++) j->bus[i] = 0;
+    synth_render_set(j->s, j->mask, j->bus, n);
+    j->ticks += eng_ticks() - t0;
+}
+static void eng_split(synth_t *s, int32_t *bus, uint32_t n)
+{
+    uint32_t a, b;
+    if (eng_dual && !eng_c1_failed && synth_balance(s, &a, &b) >= 2u) {
+        eng_c1.s = s, eng_c1.mask = b, eng_c1.n = n;
+        if (cpu1_post(cpu1_job_voices, &eng_c1) == 0) {
+            synth_render_set(s, a, bus, n);
+            if (cpu1_join(ENG_C1_JOIN_TICKS) < 0) {   /* late or lost: set B here, one core from now on */
+                eng_c1_failed = 1;
+                synth_render_set(s, b, bus, n);
+                return;
+            }
+            for (uint32_t i = 0; i < 2u * n; i++) bus[i] += eng_c1.bus[i];
+            eng_c1_jobs = eng_c1_jobs + 1u;
+            return;
+        }
+    }
+    synth_render_set(s, SYNTH_ALL_VOICES, bus, n);
+}
+static void eng_c1_cpu(uint32_t budget)   /* (consumer, after the block's joins: CPU1 is idle) */
+{
+    uint32_t t = eng_c1.ticks, d = t - eng_c1_seen, pct;
+    eng_c1_seen = t;
+    pct = d >= budget * 10u ? ENG_LOAD_MAX : d * 100u / budget;
+    if (pct > ENG_LOAD_MAX) pct = ENG_LOAD_MAX;
+    eng_c1_load_q3 += pct - (eng_c1_load_q3 >> 3);
+    eng_c1_load = (uint16_t)(eng_c1_load_q3 >> 3);
+}
+/* main loop: 0 off (DUAL CORE off), 1 on (CPU1 renders), 2 FAIL (on, but CPU1 retired or never started) */
+static int eng_c1_status(void)
+{
+    int st = cpu1_state();
+    if (!eng_dual) return 0;
+    return eng_c1_failed || st == CPU1_FAIL || st == CPU1_OFF ? 2 : 1;
+}
+#endif
+
 /* The load, for the Globals screen's diagnostics line (consumer writes, main loop reads; each a single aligned word or
  * byte): eng_load the block's load in % of its time (used x 100 / budget, up to 999), smoothed (a one-pole of 8
  * blocks, ~46 ms); eng_peak the highest block's, decaying toward the load with a time constant of 128 blocks
@@ -307,6 +395,9 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     uint32_t used = eng_ticks() - t0, budget = frames * ENG_TICKS_PER_FRAME_X10 / 10u;
     synth_guard(&eng_synth, used, budget);
     eng_cpu(used, budget);
+#if KNOBI_CPU1
+    eng_c1_cpu(budget);
+#endif
     eng_voices = (uint8_t)synth_active(&eng_synth);
     tgt = eng_fade_out ? 0 : ENG_FADE_ONE;
     if (g == ENG_FADE_ONE && tgt == ENG_FADE_ONE) return;   /* (the usual case: nothing to do) */
