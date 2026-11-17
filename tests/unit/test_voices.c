@@ -281,6 +281,42 @@ static void porta_reset_and_unison(void)
     CHECK(g_panic == 0 && g_prog == 0 && same && grown && none);
 }
 
+/* after a program load, a note landing on a voice still in release (stale pitch) does not glide; the other release
+ * tails go on untouched */
+static void porta_program_on_releasing(void)
+{
+    program_t p;
+    /* poly: 6 voices all releasing (long release), so the new note must take a releasing voice */
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_RATE, 64), set(P_LENV_R, 127);
+    for (int k = 0; k < 6; k++) synth_note(&S, 40 + k, 100);
+    run(1024);
+    p = S.prog;
+    synth_program(&S, &p);   /* releases all six */
+    run(256);
+    int busy = synth_active(&S);
+    synth_note(&S, 60, 100);
+    voice_t *v = &S.voice[voice_of(60)];
+    int poly_ok = v->glide == 0 && v->pitch == 60 * 65536, tails = 1;
+    for (int k = 0; k < NVOICE; k++)
+        if (&S.voice[k] != v && (!S.voice[k].busy || S.voice[k].lenv.stage != ADSR_RELEASE)) tails = 0;
+    /* unison 6: every slot releasing with the old program's pitch */
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_RATE, 64), set(P_LENV_R, 127), set(P_UNISON_ON, 1), set(P_UNISON_VOICES, 5);
+    synth_note(&S, 40, 100);
+    run(1024);
+    p = S.prog;
+    synth_program(&S, &p);
+    run(256);
+    int ubusy = synth_active(&S);
+    synth_note(&S, 60, 100);
+    int uni_ok = 1;
+    for (int k = 0; k < 6; k++) if (S.voice[k].glide || S.voice[k].pitch != 60 * 65536) uni_ok = 0;
+    printf("porta_program_on_releasing: poly: %d releasing voices, new note no glide %d, other tails releasing %d; "
+           "unison 6: %d releasing, all slots start at the note %d\n", busy, poly_ok, tails, ubusy, uni_ok);
+    CHECK(busy == 6 && poly_ok && tails && ubusy == 6 && uni_ok);
+}
+
 static void bend_range_program(void)
 {
     program_t p;
@@ -588,6 +624,7 @@ int main(void)
     porta_modes();
     porta_poly();
     porta_reset_and_unison();
+    porta_program_on_releasing();
     bend_range_program();
     pan_spread_alternates();
     hold_latches_and_releases();

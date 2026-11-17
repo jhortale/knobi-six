@@ -222,7 +222,7 @@ static void synth_poly_on(synth_t *s, int note, int vel, int legato)
     }
     /* L / R alternating, the offset growing by pair: (i / 2 + 1) / (NVOICE / 2), rounded up for an odd count */
     v->pan = ((i & 1) ? 1 : -1) * (i / 2 + 1) * 32768 / ((NVOICE + 1) / 2);
-    if (s->last_pitch != VOICE_NO_PITCH) v->pitch = s->last_pitch;   /* glide from the latest note */
+    v->pitch = s->last_pitch;   /* glide from the latest note; none (NO_PITCH) after init / program / panic */
     synth_voice_on(s, v, note, vel, legato, 1);
     s->last_pitch = note * 65536;
 }
@@ -273,8 +273,9 @@ static void synth_mono_go(synth_t *s, int key, int vel, int trigger, int legato)
         v->dr1 = v->dr2 = n > 1 ? sign * m * 32768 / mm : 0;
         int note = synth_clampi(key + (nchord ? chord[k] - ref : 0), 0, 127);
         /* a slot not already in the sounding stack starts from the latest note, as every other slot did */
-        if (!(v->busy && v->key) && s->last_pitch != VOICE_NO_PITCH)
-            v->pitch = s->last_pitch + (nchord ? (chord[k] - ref) * 65536 : 0);
+        if (!(v->busy && v->key))   /* none (NO_PITCH) after init / program / panic, even on a releasing voice */
+            v->pitch = s->last_pitch == VOICE_NO_PITCH ? VOICE_NO_PITCH
+                                                       : s->last_pitch + (nchord ? (chord[k] - ref) * 65536 : 0);
         synth_voice_on(s, v, note, vel, legato, trigger);
     }
     s->mono = (int16_t)key;
