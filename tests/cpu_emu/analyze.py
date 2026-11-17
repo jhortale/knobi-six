@@ -8,7 +8,8 @@ import glob, os, re, sys
 out = sys.argv[1]
 K = 32
 BLOCK_S = 256 / 44100
-NAMES = {0: 'init chord', 1: 'worst, C3..C5', 2: 'worst, high chord 120..127'}
+NAMES = {0: 'init chord', 1: 'extreme, C3..C5', 2: 'extreme, high chord 120..127', 3: 'musical stress, C3..C5',
+         4: 'musical stress, C5..C7'}
 
 
 def load(path):
@@ -37,7 +38,7 @@ def check(log):
 
 
 runs = sorted({os.path.basename(p)[:-len('-40.cost')] for p in glob.glob(f'{out}/*-40.cost')},
-              key=lambda n: (-int(n.split('-v')[1]), int(n[1])))
+              key=lambda n: (-int(n.split('-v')[1]), [0, 3, 4, 1, 2].index(int(n[1]))))
 print('| run | patch | voices | insns/block | cycles/block, emu | cycles/block, hw | % of block at 240 MHz (emu / hw) '
       '| % at 360 MHz (emu / hw) | < 50 % at 240 MHz | voices sounding, sizeof synth_t, checksum |')
 print('|---|---|---|---|---|---|---|---|---|---|')

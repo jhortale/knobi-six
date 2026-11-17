@@ -41,11 +41,12 @@ jobs:
         continue-on-error: true
         run: |
           sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null || true
-          for s in chord worst; do
+          for s in chord musical worst; do
             DINGHY_PERF=1 sh tests/run_host.sh tests/scripts/$s.txt | grep '^perf' || echo "$s: no hardware counter here"
           done
           sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq valgrind >/dev/null
           sh tests/cpu_host.sh tests/scripts/chord.txt 200 5000
+          sh tests/cpu_host.sh tests/scripts/musical.txt 200 5000
           sh tests/cpu_host.sh tests/scripts/worst.txt 200 6000
 
       - uses: actions/upload-artifact@v4
@@ -78,7 +79,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/tests/cpu_emu/patch_emu.py" ~/fm1-emu
           CARGO_PROFILE_RELEASE_LTO=false cargo build --release -p fm1-emu 2>&1 | tail -3
 
-      - name: Cycles per block (init chord, worst case; 6 and 4 voices)
+      - name: Cycles per block (init chord, musical stress, extreme; 6 and 4 voices)
         run: |
           bash tests/cpu_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/emu
           { echo '### CPU gate (fm1-emu)'; cat build/emu/summary.md; } >> "$GITHUB_STEP_SUMMARY"

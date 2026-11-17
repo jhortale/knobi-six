@@ -1,0 +1,40 @@
+# KNOBI-SIX: the musical stress patch an octave pair up (tests/cpu_emu/harness.c PATCH 4), C5 G5 C6 E6 G6 C7:
+# the mixer at ~75 % (95), VCO 1 pulse (PW 90) + VCO 2 pulse (PW 160), sync on, FILTER FREQ 90, RESONANCE 201
+# (~100/127 of its 0..255), FENV AMOUNT 76 (~60 %) with FENV SUSTAIN 40, X-Mod VCO 2 at 64 (~50 %) into VCO 1 pitch
+# and the filter frequency, the LFO at ~20 Hz (FREQUENCY 173) amount 128 into VCO 1 pitch and the filter, aftertouch
+# (channel pressure 100) at 64 into the filter; C5 G5 C6 E6 G6 C7 at velocity 100, held 4.8 s.
+#   DINGHY_PERF=1 tests/run_host.sh tests/scripts/musical.txt   (Linux) -> instructions per sample
+100 expect 0 set 10 95   # MIX_VCO1
+100 expect 0 set 11 95   # MIX_VCO2
+100 expect 0 set 12 95   # MIX_SUB
+100 expect 0 set 13 95   # MIX_NOISE
+100 expect 0 set 1 255   # VCO1_SHAPE
+100 expect 0 set 2 90   # VCO1_PW
+100 expect 0 set 6 254   # VCO2_SHAPE
+100 expect 0 set 7 160   # VCO2_PW
+100 expect 0 set 3 1   # VCO1_SYNC
+100 expect 0 set 14 90   # FLT_FREQ
+100 expect 0 set 15 201   # FLT_RESO
+100 expect 0 set 19 76   # FLT_ENV_AMT
+100 expect 0 set 23 40   # FENV_S
+100 expect 0 set 60 100   # PRG_VOL
+100 expect 0 set 42 64   # XM_VCO2
+100 expect 0 set 43 1   # XM_D_VCO1
+100 expect 0 set 46 1   # XM_D_FFREQ
+100 expect 0 set 31 173   # LFO_FREQ
+100 expect 0 set 34 128   # LFO_AMT
+100 expect 0 set 35 1   # LFO_D_VCO1
+100 expect 0 set 39 1   # LFO_D_FFREQ
+100 expect 0 set 49 64   # AT_AMT
+100 expect 0 set 54 1   # AT_D_FFREQ
+150 midi 0xD0 100 0
+200 midi 0x90 72 100
+200 midi 0x90 79 100
+200 midi 0x90 84 100
+200 midi 0x90 88 100
+200 midi 0x90 91 100
+200 midi 0x90 96 100
+400 expect 6 voices
+400 expect 201 param 15
+5000 expect 6 voices
+5100 end

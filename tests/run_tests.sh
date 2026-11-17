@@ -27,6 +27,8 @@ run "MIDI in on USB, any channel; a key out on channel 1" sh tests/run_host.sh t
 run "a key held: its note sounds until the key is let go; a bottom pad plays no note (expect)" sh tests/run_host.sh tests/scripts/notes.txt
 run "the init program: a six-note chord, the wheels, the release (expect)" sh tests/run_host.sh tests/scripts/chord.txt
 run "the worst-case patch, six voices, set through the event queue (expect)" sh tests/run_host.sh tests/scripts/worst.txt
+run "the musical stress patch (the CPU gate), C3..C5 (expect)" sh tests/run_host.sh tests/scripts/musical.txt
+run "the musical stress patch, C5..C7 (expect)" sh tests/run_host.sh tests/scripts/musical_high.txt
 run "Review Focus 4: bottom-pad pressure while a top pad toggles: once; aftertouch only from the bottom row (expect)" sh tests/run_host.sh tests/scripts/pads_split.txt
 run "faders through the pot mode: passthru, jump, relative (expect)" sh tests/run_host.sh tests/scripts/faders_potmode.txt
 run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change + CC 32 bank (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
