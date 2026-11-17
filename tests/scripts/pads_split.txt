@@ -1,0 +1,61 @@
+# Review Focus 4: bottom-pad pressure while a top pad is toggled. The top row (pads 0..7) is switches: a press toggles
+# its switch exactly once, however long or hard it is held; the bottom row (pads 8..15) is pressure only: the highest
+# held is the aftertouch ("at"), pressing one never switches anything. "T pad P V" hits pad P at V (and holds it at
+# pressure V), "T press P V" changes a held pad's pressure. MIDI channel pressure is the other aftertouch source: the
+# synth gets the higher of the two ("pressure"). Screens: 1 Play .. 5 LFO + X-MOD (ui/controls.h); param 35 = LFO>VCO1,
+# 36 = LFO>VCO2, 37..40 the other LFO destinations (params.h).
+100 btn 12
+110 expect 1 screen
+200 btn 3
+220 btn 3
+240 btn 3
+260 btn 3
+300 expect 5 screen
+300 expect 0 row
+# bottom pad 10 held at 100: the aftertouch, no switch
+400 pad 10 100
+450 expect 100 at
+450 expect 100 pressure
+450 expect 0 param 35
+450 expect 0 param 36
+# top pad 2 tapped while pad 10 is held: LFO>VCO1 on, once; the aftertouch stays the bottom pad's
+500 pad 2 90
+550 expect 1 param 35
+550 expect 100 at
+600 pad 2 0
+650 expect 1 param 35
+650 expect 100 at
+# top pad 3 held hard, its pressure rising: LFO>VCO2 toggles once, its pressure never reaches the aftertouch
+700 pad 3 120
+750 press 3 127
+800 expect 100 at
+800 expect 1 param 36
+850 press 3 30
+900 pad 3 0
+950 expect 1 param 36
+950 expect 100 at
+# the bottom pad's pressure moves; the highest bottom pad wins
+1000 press 10 60
+1050 expect 60 at
+1100 pad 14 90
+1150 expect 90 at
+1150 expect 90 pressure
+1200 pad 14 0
+1200 pad 10 0
+1250 expect 0 at
+1250 expect 0 pressure
+1250 expect 0 param 37
+1250 expect 0 param 40
+# top pad 2 again: off
+1300 pad 2 80
+1310 pad 2 0
+1350 expect 0 param 35
+# MIDI channel pressure: the higher of the two sources
+1400 midi 0xD0 50 0
+1450 expect 50 pressure
+1450 expect 0 at
+1500 pad 9 80
+1550 expect 80 pressure
+1600 pad 9 0
+1650 expect 50 pressure
+1700 end

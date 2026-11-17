@@ -1,4 +1,4 @@
-# a key held: F3 (53) sounds until the key is let go (the pad on the same note is not the app's yet: Task 8)
+# a key held: F3 (53) sounds until the key is let go (pad 8, bottom row, is pressure only: no note)
 100 vel 100
 110 keys 0x1
 150 pad 8 100

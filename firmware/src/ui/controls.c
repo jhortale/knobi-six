@@ -1,0 +1,360 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* KNOBI-SIX panel mapping (controls.h; the map in words: docs/CONTROLS.md). Included by app.c after engine.c (unity
+ * build); tests/unit/test_controls.c includes it with CONTROLS_PURE (the tables and the pure functions only).
+ *
+ * Encoders K2..K8 (hardware 1..7; K1 stays the master volume) are the screen's knobs in reading order: a detent steps a
+ * knob by (range + 127) / 128 (1 for ranges up to 128 values, 2 up to 256), four times that when the same encoder
+ * turned less than CTL_FAST_MS ago (acceleration); a switch goes on with a clockwise detent and off with an
+ * anticlockwise one; a select steps one choice a detent. Nothing wraps. Faders are absolute: their move goes through
+ * the global pot mode (ctl_fader_move). Top pads (0..7) act once per press (a switch toggles, a select cycles, an
+ * action runs; a release, a held pad's pressure, do nothing); bottom pads (8..15) never switch: their highest pressure
+ * is the aftertouch (with MIDI channel pressure: the higher of the two). */
+#include "controls.h"
+
+#define N B_NONE
+#define A(x) B_ACT(ACT_##x)
+#define G(x) B_GLOBAL(G_##x)
+const binding_t BINDINGS[SCR_COUNT] = {
+    [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
+    [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
+                  {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
+                  {N, P_UNISON_ON, A(ARP), A(HOLD), N, N, N, N}},          /* pad 0 X-MOD: no such switch in the schema */
+    [SCR_VCO] = {{P_VCO1_FREQ, P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_FREQ, P_VCO2_FINE, P_VCO2_SHAPE, P_VCO2_PW},
+                 {P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_SHAPE, P_VCO2_PW},
+                 {A(PREV), A(NEXT), P_VCO1_SYNC, P_VCO2_LOWFREQ, P_VCO2_KEYBOARD, N, N, N}},
+    [SCR_MIX_FILTER] = {{P_MIX_VCO1, P_MIX_VCO2, P_MIX_SUB, P_MIX_NOISE, P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE},
+                        {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
+                        {A(PREV), A(NEXT), P_FLT_BP, P_FLT_TRACK, N, N, N, N}},
+    [SCR_ENV] = {{P_FENV_A, P_FENV_D, P_FENV_S, P_FENV_R, P_FLT_ENV_AMT, N, N},        /* row 1: FILTER */
+                 {P_FENV_A, P_FENV_D, P_FENV_S, P_FENV_R},
+                 {A(PREV), A(NEXT), P_FLT_VEL, P_LENV_VEL, A(ROW), N, N, N}},
+    [SCR_LFO_XMOD] = {{P_LFO_FREQ, P_LFO_SYNC, P_LFO_SHAPE, P_LFO_AMT, P_XM_FENV, P_XM_VCO2, N},   /* row 1: LFO pads */
+                      {P_LFO_FREQ, P_LFO_AMT, P_XM_FENV, P_XM_VCO2},
+                      {A(PREV), A(NEXT), P_LFO_D_VCO1, P_LFO_D_VCO2, P_LFO_D_PW, P_LFO_D_AMP, P_LFO_D_FFREQ, P_LFO_D_FMODE}},
+    [SCR_AT_MISC] = {{P_AT_AMT, P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_RATE},  /* row 1: AT pads */
+                     {P_AT_AMT, P_DETUNE, P_PORTA_RATE, P_PRG_VOL},
+                     {A(PREV), A(NEXT), P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE}},
+    [SCR_PROGRAM] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {A(PREV), A(NEXT), N, N, N, N, N, N}},   /* Task 10 fills it */
+    [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), N, N, N}, {N, N, N, N},
+                     {A(PREV), A(NEXT), N, N, N, N, N, N}},
+};
+const binding_t BINDINGS_ROW2[SCR_COUNT] = {
+    [SCR_ENV] = {{P_LENV_A, P_LENV_D, P_LENV_S, P_LENV_R, P_LENV_AMT, N, N},           /* row 2: LOUDNESS */
+                 {P_LENV_A, P_LENV_D, P_LENV_S, P_LENV_R},
+                 {A(PREV), A(NEXT), P_FLT_VEL, P_LENV_VEL, A(ROW), N, N, N}},
+    [SCR_LFO_XMOD] = {{P_LFO_FREQ, P_LFO_SYNC, P_LFO_SHAPE, P_LFO_AMT, P_XM_FENV, P_XM_VCO2, N},   /* row 2: X-MOD pads */
+                      {P_LFO_FREQ, P_LFO_AMT, P_XM_FENV, P_XM_VCO2},
+                      {A(PREV), A(NEXT), P_XM_D_VCO1, P_XM_D_SHAPE1, P_XM_D_PW1, P_XM_D_FFREQ, P_XM_D_FMODE, P_XM_D_BP}},
+    [SCR_AT_MISC] = {{P_AT_AMT, P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_RATE},  /* row 2: MISC pads */
+                     {P_AT_AMT, P_DETUNE, P_PORTA_RATE, P_PRG_VOL},
+                     {A(PREV), A(NEXT), P_UNISON_ON, P_UNISON_VOICES, P_PORTA_ON, P_PORTA_MODE, N, N}},
+};
+#undef N
+#undef A
+#undef G
+const uint8_t SCR_ROWS[SCR_COUNT] = {[SCR_BOOT] = 1, [SCR_PLAY] = 1, [SCR_VCO] = 1, [SCR_MIX_FILTER] = 1, [SCR_ENV] = 2,
+                                     [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_PROGRAM] = 1, [SCR_GLOBALS] = 1};
+const char *const SCR_NAME[SCR_COUNT] = {"KNOBI-SIX", "PLAY", "VCO 1 + 2", "MIX + FILTER", "ENVELOPES", "LFO + X-MOD",
+                                         "AT + MISC", "PROGRAM", "GLOBALS"};
+static const char *const CTL_ROW_NAME[3][2] = {{"FILTER ENV", "LOUDNESS ENV"}, {"LFO", "X-MOD"}, {"AFTERTOUCH", "MISC"}};
+static const uint8_t CTL_GLOBAL_MAX[G_COUNT] = {16, 2, 1, 1};
+
+const binding_t *ctl_binding(int screen, int row)
+{
+    if (screen < 0 || screen >= SCR_COUNT) screen = SCR_BOOT;
+    return row && SCR_ROWS[screen] > 1 ? &BINDINGS_ROW2[screen] : &BINDINGS[screen];
+}
+const char *ctl_row_name(int screen, int row)
+{
+    if (screen < 0 || screen >= SCR_COUNT) return "";
+    if (SCR_ROWS[screen] < 2) return SCR_NAME[screen];
+    return CTL_ROW_NAME[screen == SCR_ENV ? 0 : screen == SCR_LFO_XMOD ? 1 : 2][row != 0];
+}
+
+/* ---- the pure parts */
+int32_t ctl_from7(uint16_t id, uint32_t x)
+{
+    const param_t *p = &PARAMS[id];
+    if (x > 127u) x = 127u;
+    if (p->bipolar) {                                  /* 0 -> min, 64 -> 0, 127 -> max, rounded */
+        if (x >= 64u) return (int32_t)(((x - 64u) * (uint32_t)p->max + 31u) / 63u);
+        return -(int32_t)(((64u - x) * (uint32_t)(-p->min) + 32u) / 64u);
+    }
+    return p->min + (int32_t)((x * (uint32_t)(p->max - p->min) + 63u) / 127u);
+}
+uint32_t ctl_to7(uint16_t id, int32_t v)
+{
+    const param_t *p = &PARAMS[id];
+    uint32_t r;
+    if (v < p->min) v = p->min;
+    if (v > p->max) v = p->max;
+    if (p->bipolar) {
+        if (v >= 0) return 64u + ((uint32_t)v * 63u + (uint32_t)p->max / 2u) / (uint32_t)p->max;
+        return 64u - ((uint32_t)(-v) * 64u + (uint32_t)(-p->min) / 2u) / (uint32_t)(-p->min);
+    }
+    r = (uint32_t)(p->max - p->min);
+    return r ? ((uint32_t)(v - p->min) * 127u + r / 2u) / r : 0u;
+}
+
+#define CTL_FAST_MS 40u                                /* encoder acceleration: detents closer than this x4 */
+int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast)
+{
+    int32_t lo = 0, hi, v;
+    if (B_IS_GLOBAL(id)) {
+        if ((id & 0xFFu) >= G_COUNT) return cur;
+        hi = CTL_GLOBAL_MAX[id & 0xFFu];
+        v = cur + det;
+    } else {
+        const param_t *p;
+        if (id >= P_COUNT_PHASE1) return cur;
+        p = &PARAMS[id];
+        lo = p->min, hi = p->max;
+        if (p->kind == PK_SWITCH) v = det > 0 ? 1 : det < 0 ? 0 : cur;
+        else if (p->kind == PK_SELECT) v = cur + det;
+        else v = cur + det * ((hi - lo + 127) / 128) * (fast ? 4 : 1);
+    }
+    return v < lo ? lo : v > hi ? hi : v;
+}
+int32_t ctl_pad_value(uint16_t id, int32_t cur)
+{
+    const param_t *p;
+    if (id >= P_COUNT_PHASE1) return cur;
+    p = &PARAMS[id];
+    if (p->kind == PK_SWITCH) return cur ? 0 : 1;
+    if (p->kind == PK_SELECT) return cur >= p->max ? p->min : cur + 1;
+    return cur;
+}
+int ctl_pad_at(const uint8_t *press)
+{
+    int m = 0;
+    for (unsigned i = 8; i < 16u; i++)
+        if (press[i] > m) m = press[i];
+    return m > 127 ? 127 : m;
+}
+
+/* a fader moved from..to (0..127) over param id whose value is cur. The state re-anchors (anchor = where the fader
+ * was, the value it had; not caught) when the fader's param or the pot mode changed, or the value changed elsewhere
+ * (an encoder, MIDI, a program) since this fader last set it.
+ *   JUMP: the fader's value.  PASSTHRU: nothing until a move crosses (or lands on) the value, then the fader's value.
+ *   RELATIVE: up from the anchor scales toward the range's top (the fader's top = max), down toward its bottom
+ *   (the fader's bottom = min); computed from the anchor each time, so no small move is lost to rounding. */
+void ctl_fader_reset(ctl_fader_t *f) { f->id = B_NONE; f->caught = 0; }
+int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint32_t from, uint32_t to)
+{
+    int32_t v, lo, hi;
+    if (id >= P_COUNT_PHASE1) return cur;
+    if (from > 127u) from = 127u;
+    if (to > 127u) to = 127u;
+    if (f->id != id || f->mode != (uint8_t)mode || f->last_v != cur) {
+        f->id = id, f->mode = (uint8_t)mode, f->anchor_p = (uint8_t)from, f->anchor_v = (int16_t)cur, f->caught = 0;
+    }
+    if (mode == POT_JUMP) v = ctl_from7(id, to);
+    else if (mode == POT_PASSTHRU) {
+        if (!f->caught) {
+            lo = ctl_from7(id, from), hi = ctl_from7(id, to);
+            if (lo > hi) v = lo, lo = hi, hi = v;
+            if (cur >= lo && cur <= hi) f->caught = 1;
+        }
+        v = f->caught ? ctl_from7(id, to) : cur;
+    } else {
+        int32_t p0 = f->anchor_p, v0 = f->anchor_v, p = (int32_t)to;
+        if (p > p0) v = v0 + (PARAMS[id].max - v0) * (p - p0) / (127 - p0);
+        else if (p < p0) v = v0 - (v0 - PARAMS[id].min) * (p0 - p) / p0;
+        else v = v0;
+    }
+    v = param_clamp(id, v);
+    f->last_v = (int16_t)v;
+    return v;
+}
+
+#ifndef CONTROLS_PURE
+/* ---- the main loop's: state */
+#define CTL_BOOT_MS 1000u                              /* the boot screen, then Play (or at the first button) */
+static uint8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1};
+static uint8_t ctl_row[SCR_COUNT];
+static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY;
+static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel;
+static int32_t ctl_midi_bend;                          /* MIDI pitch bend - 8192 (added to the wheel's) */
+static uint32_t ctl_pressed, ctl_released;             /* this pass's button edges (the app reads them after) */
+static int32_t ctl_enc_pos[8];                         /* detents turned, per encoder (screen, probes) */
+static uint32_t ctl_enc_ms[8];
+static uint8_t ctl_fpos[4];
+static ctl_fader_t ctl_fad[4];
+static uint8_t ctl_chord_on, ctl_chord_n, ctl_chord_cap[6];
+static int32_t ctl_prg_bank = -1, ctl_prg_req = -1, ctl_bank_sel;   /* program change: the Task 10 stub */
+static uint16_t ctl_last_id = B_NONE;                  /* the last edit (screen) */
+static int32_t ctl_last_v;
+static uint32_t ctl_edits, ctl_scr_n;                  /* counters: an edit, a screen / row change */
+static uint32_t ctl_led[16];
+static void midi_cc_send(uint16_t id, int32_t v);     /* midi_map.c */
+static void midi_map_reset(void);
+
+static void ctl_set(program_t *edit, uint16_t id, int32_t v, int panel)   /* panel: sent as CC when PARAM TX is on */
+{
+    int16_t c;
+    if (B_IS_GLOBAL(id)) {
+        uint32_t g = id & 0xFFu;
+        if (g >= G_COUNT) return;
+        v = v < 0 ? 0 : v > CTL_GLOBAL_MAX[g] ? CTL_GLOBAL_MAX[g] : v;
+        if (ctl_glob[g] == v) return;
+        ctl_glob[g] = (uint8_t)v;
+    } else {
+        if (id >= P_COUNT_PHASE1) return;
+        c = param_clamp(id, v);
+        if (c == edit->v[id] && c == eng_edit.v[id]) return;
+        eng_param(id, c);                              /* the queue (kept and retried if it is full) */
+        edit->v[id] = c;
+        v = c;
+        if (panel && ctl_glob[G_PARAM_TX]) midi_cc_send(id, c);
+    }
+    ctl_last_id = id, ctl_last_v = v;
+    ctl_edits++;
+}
+
+static void ctl_goto(int *screen, int s)
+{
+    if (s < SCR_PLAY) s = SCR_PLAY;
+    if (s > SCR_GLOBALS) s = SCR_GLOBALS;
+    if (s == *screen) return;
+    if (s >= SCR_VCO && s <= SCR_AT_MISC) ctl_last_edit = s;
+    if (s == SCR_GLOBALS) ctl_before_glob = *screen;
+    *screen = s;
+    for (unsigned k = 0; k < 4u; k++) ctl_fader_reset(&ctl_fad[k]);   /* the faders pick up afresh */
+    ctl_scr_n++;
+}
+static void ctl_other_row(int screen)
+{
+    if (SCR_ROWS[screen] < 2) return;
+    ctl_row[screen] ^= 1u;
+    for (unsigned k = 0; k < 4u; k++) ctl_fader_reset(&ctl_fad[k]);
+    ctl_scr_n++;
+}
+
+static void ctl_action(int *screen, uint32_t a)
+{
+    if (a == ACT_PREV) ctl_goto(screen, *screen - 1);
+    else if (a == ACT_NEXT) ctl_goto(screen, *screen + 1);
+    else if (a == ACT_ROW) ctl_other_row(*screen);
+    else if (a == ACT_HOLD) { ctl_hold ^= 1u; ctl_last_id = B_ACT(ACT_HOLD), ctl_last_v = ctl_hold; ctl_edits++; }
+    /* ACT_ARP: the arpeggiator is phase 2 */
+}
+
+/* chord memory: hold CHORD (BTN_ENV) and play up to 6 notes; on release they are the program's chord (absolute MIDI
+ * notes, ascending order not needed, 0 = empty) and UNISON goes on with UNISON VOICES = CHD. CHORD tapped with no
+ * note leaves the chord as it was. */
+void controls_key(int note)
+{
+    unsigned i;
+    if (!ctl_chord_on || note <= 0 || note > 127) return;
+    for (i = 0; i < ctl_chord_n; i++)
+        if (ctl_chord_cap[i] == note) return;
+    if (ctl_chord_n < 6u) ctl_chord_cap[ctl_chord_n++] = (uint8_t)note;
+}
+static void ctl_chord_commit(program_t *edit)
+{
+    uint8_t c[6] = {0};
+    unsigned i;
+    ctl_chord_on = 0;
+    if (!ctl_chord_n) return;
+    for (i = 0; i < ctl_chord_n; i++) c[i] = ctl_chord_cap[i];
+    eng_chord(c);                                      /* (queued by eng_flush) */
+    for (i = 0; i < 6u; i++) edit->chord[i] = c[i];
+    ctl_set(edit, P_UNISON_VOICES, 6, 1);
+    ctl_set(edit, P_UNISON_ON, 1, 1);
+}
+
+int controls_aftertouch(void) { return ctl_pad_at(fm1_in.pad_press); }
+
+void controls_init(void)
+{
+    smk_pad_events = 1;                                /* the pads are ours: events, no notes */
+    midi_map_reset();
+    for (unsigned k = 0; k < 4u; k++) { ctl_fpos[k] = fm1_in.fader[k]; ctl_fader_reset(&ctl_fad[k]); }
+    for (unsigned k = 0; k < 16u; k++) ctl_led[k] = ~0u;
+}
+
+static void ctl_leds(int screen, const program_t *edit)   /* top pads lit when on, bottom pads glow with pressure */
+{
+    const binding_t *b = ctl_binding(screen, ctl_row[screen]);
+    uint32_t i, col, changed = 0;
+    for (i = 0; i < 16u; i++) {
+        if (i < 8u) {
+            uint16_t x = b->pad_top[i];
+            if (x < P_COUNT_PHASE1) col = edit->v[x] != PARAMS[x].min ? 0xFF0000u : 0x180000u;   /* red / dim red */
+            else if (x == B_ACT(ACT_HOLD)) col = ctl_hold ? 0xFF0000u : 0x180000u;
+            else if (B_IS_ACT(x)) col = 0x282828u;                                            /* dim white */
+            else col = 0;
+        } else {
+            col = (uint32_t)fm1_in.pad_press[i] * 2u << 16;                                   /* red, 0..254 */
+        }
+        if (col != ctl_led[i]) {
+            ctl_led[i] = col;
+            padled_set(i, (uint8_t)(col >> 16), (uint8_t)(col >> 8), (uint8_t)col);
+            changed = 1;
+        }
+    }
+    if (changed) padled_flush();
+}
+
+/* s is not used: the synth belongs to the audio interrupt, every change goes through the queue (eng_*); edit is the
+ * program as edited (app.c passes &eng_edit) */
+void controls_poll(synth_t *s, program_t *edit, int *screen)
+{
+    const binding_t *b;
+    uint32_t rel, k;
+    int32_t e;
+    (void)s;
+    eng_flush();                                       /* what the queue could not take last time, first */
+
+    ctl_pressed = fm1_input_edges(&rel);
+    ctl_released = rel;
+    if (*screen == SCR_BOOT && (ctl_pressed || fm1_ms >= CTL_BOOT_MS)) { *screen = SCR_PLAY; ctl_scr_n++; }
+    if (*screen != SCR_BOOT) {
+        uint32_t p = ctl_pressed;
+        if (p >> BTN_LEFT & 1u) ctl_goto(screen, *screen - 1);
+        if (p >> BTN_RIGHT & 1u) ctl_goto(screen, *screen + 1);
+        if (p >> BTN_HOME & 1u) ctl_goto(screen, SCR_PLAY);
+        if (p >> BTN_EDIT & 1u) ctl_goto(screen, ctl_last_edit);
+        if (p >> BTN_GLO & 1u) ctl_goto(screen, *screen == SCR_GLOBALS ? ctl_before_glob : SCR_GLOBALS);
+        if (p >> BTN_SEL & 1u) ctl_other_row(*screen);
+    }
+    if (ctl_pressed >> BTN_ENV & 1u) { ctl_chord_on = 1; ctl_chord_n = 0; }
+    if (ctl_released >> BTN_ENV & 1u && ctl_chord_on) ctl_chord_commit(edit);
+
+    b = ctl_binding(*screen, ctl_row[*screen]);
+    for (k = 1; k < 8u; k++)                           /* K2..K8 */
+        if ((e = fm1_enc_take(k)) != 0) {
+            uint16_t id = b->enc[k - 1u];
+            int fast = fm1_ms - ctl_enc_ms[k] < CTL_FAST_MS;
+            ctl_enc_pos[k] += e;
+            ctl_enc_ms[k] = fm1_ms;
+            if (id < P_COUNT_PHASE1) ctl_set(edit, id, ctl_enc_value(id, edit->v[id], e, fast), 1);
+            else if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) ctl_set(edit, id, ctl_enc_value(id, ctl_glob[id & 0xFFu], e, 0), 1);
+        }
+    for (k = 0; k < 4u; k++) {
+        uint32_t pos = fm1_in.fader[k];
+        if (pos != ctl_fpos[k]) {
+            uint16_t id = b->fader[k];
+            if (id < P_COUNT_PHASE1)
+                ctl_set(edit, id, ctl_fader_move(&ctl_fad[k], ctl_glob[G_POT_MODE], id, edit->v[id], ctl_fpos[k], pos), 1);
+            ctl_fpos[k] = (uint8_t)pos;
+        }
+    }
+    while ((e = smk_pad_take()) >= 0) {                /* top pads: one action per press; bottom pads: nothing */
+        uint32_t pad = (uint32_t)e >> 8 & 15u, vel = (uint32_t)e & 0x7Fu;
+        uint16_t x;
+        if (pad >= 8u || !vel) continue;
+        b = ctl_binding(*screen, ctl_row[*screen]);    /* (a pad may have changed the screen) */
+        x = b->pad_top[pad];
+        if (x < P_COUNT_PHASE1) ctl_set(edit, x, ctl_pad_value(x, edit->v[x]), 1);
+        else if (B_IS_ACT(x)) ctl_action(screen, x & 0xFFu);
+    }
+
+    {
+        int at = controls_aftertouch();
+        eng_pressure(at > ctl_midi_at ? at : ctl_midi_at);
+    }
+    eng_hold(ctl_hold || ctl_sustain);
+    ctl_leds(*screen, edit);
+}
+#endif

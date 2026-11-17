@@ -1,0 +1,31 @@
+# Chord memory capture: hold CHORD (button 9), play up to six notes, let CHORD go: they are the program's chord
+# (absolute MIDI notes, "chord I" = slot I, 0 = empty), UNISON goes on (param 64) with UNISON VOICES = CHD (param 65 =
+# 6). A key then plays the chord from it (the chord's lowest note on the key: F3 A3 C4 from D4 = D4 F#4 A4). CHORD
+# tapped alone keeps the chord.
+100 btn 12
+200 btndown 9
+250 vel 100
+300 keys 0x1
+350 keys 0
+400 keys 0x10
+450 keys 0
+500 keys 0x80
+550 keys 0
+600 btnup 9
+650 expect 53 chord 0
+650 expect 57 chord 1
+650 expect 60 chord 2
+650 expect 0 chord 3
+650 expect 1 param 64
+650 expect 6 param 65
+700 keys 0x200
+750 expect 3 voices
+750 expect 1 sounding 62
+750 expect 1 sounding 66
+750 expect 1 sounding 69
+800 keys 0
+900 btn 9
+950 expect 53 chord 0
+950 expect 60 chord 2
+950 expect 0 pending
+1000 end
