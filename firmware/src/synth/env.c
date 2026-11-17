@@ -16,6 +16,9 @@
 #include "env.h"
 
 #define ADSR_Q24 INT32_C(16777216)
+/* ADSR_INLINE: the per-sample function, inlined into voice_render (unity build; the CPU gate, docs/MEASUREMENTS.md);
+ * the external name is a wrapper for the rest (tests, control rate) */
+#define ADSR_INLINE static inline __attribute__((always_inline))
 #define ADSR_A_TGT INT32_C(1431655765)    /* 4/3 in Q30: the attack charges towards it and stops at ADSR_ONE */
 #define ADSR_TAIL (INT32_C(1) << 20)      /* the release falls towards -1/1024 and stops at 0 */
 /* x = -ln c per sample at knob 0, Q32: ln(4) / (1 ms * fs) for the attack (from 0 to 1 of a charge towards 4/3 is
@@ -53,7 +56,7 @@ static uint32_t adsr_exp2(int32_t x, unsigned fraction)
     return (uint32_t)p << -shift;
 }
 
-static int adsr_clamp(int v, int lo, int hi)
+static inline __attribute__((always_inline)) int adsr_clamp(int v, int lo, int hi)
 {
     return v < lo ? lo : v > hi ? hi : v;
 }
@@ -90,7 +93,7 @@ static inline __attribute__((always_inline)) int32_t adsr_mulh(int32_t a, int32_
 /* One sample: level += mulh(target - level, m), the exact RC step target + (level - target) c (to the floor of the
  * high multiply, which rounds towards the falling targets, so decay lands exactly on SUSTAIN and release always
  * crosses zero). Attack: the target is 4/3, the difference >= 1/3 so the step never stalls. */
-int32_t adsr_tick(adsr_t *e, const adsr_rates_t *r)
+ADSR_INLINE int32_t adsr_tick_hot(adsr_t *e, const adsr_rates_t *r)
 {
     int32_t l = e->level;
     switch (e->stage) {
@@ -112,6 +115,7 @@ int32_t adsr_tick(adsr_t *e, const adsr_rates_t *r)
     e->level = l;
     return l;
 }
+int32_t adsr_tick(adsr_t *e, const adsr_rates_t *r) { return adsr_tick_hot(e, r); }
 
 /* amount (0..127 or its magnitude) x velocity (127 when the switch is off): 0..16129 */
 static inline __attribute__((always_inline)) uint32_t adsr_amount(int amt, int vel_on, int vel)
@@ -124,7 +128,7 @@ static inline __attribute__((always_inline)) uint32_t adsr_level(int32_t env_q30
     return env_q30 <= 0 ? 0u : env_q30 >= ADSR_ONE ? (uint32_t)ADSR_ONE : (uint32_t)env_q30;
 }
 
-int32_t vca_control(int32_t env_q30, int lenv_amt, int vel_on, int vel, int32_t lfo_q15, int32_t at_q15)
+ADSR_INLINE int32_t vca_control_hot(int32_t env_q30, int lenv_amt, int vel_on, int vel, int32_t lfo_q15, int32_t at_q15)
 {
     /* env Q15 (0..32768) x amount (0..16129) < 2^29.1, x VCA_K >> 32 rounded: 0..32768 */
     uint32_t p = (adsr_level(env_q30) >> 15) * adsr_amount(adsr_clamp(lenv_amt, 0, 127), vel_on, vel);
@@ -132,6 +136,10 @@ int32_t vca_control(int32_t env_q30, int lenv_amt, int vel_on, int vel, int32_t 
     /* the sum, each term clamped first so the addition cannot overflow */
     int32_t sum = env + adsr_clamp(lfo_q15, -2 * VCA_CEIL, 2 * VCA_CEIL) + adsr_clamp(at_q15, -2 * VCA_CEIL, 2 * VCA_CEIL);
     return adsr_clamp(sum, 0, VCA_CEIL);
+}
+int32_t vca_control(int32_t env_q30, int lenv_amt, int vel_on, int vel, int32_t lfo_q15, int32_t at_q15)
+{
+    return vca_control_hot(env_q30, lenv_amt, vel_on, vel, lfo_q15, at_q15);
 }
 
 int32_t fenv_mod(int32_t env_q30, int fenv_amt, int vel_on, int vel)
@@ -143,7 +151,8 @@ int32_t fenv_mod(int32_t env_q30, int fenv_amt, int vel_on, int vel)
     return a < 0 ? -off : off;
 }
 
-int32_t vca_apply(int32_t in, int32_t ctl_q15)
+ADSR_INLINE int32_t vca_apply_hot(int32_t in, int32_t ctl_q15)
 {
     return (int32_t)(((int64_t)in * ctl_q15) >> 15);
 }
+int32_t vca_apply(int32_t in, int32_t ctl_q15) { return vca_apply_hot(in, ctl_q15); }

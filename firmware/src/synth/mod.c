@@ -34,9 +34,6 @@
 /* the oscillator's note range (osc.c OSC_NOTE_LO / HI) */
 #define MODS_NOTE_LO (-60 * 65536)
 #define MODS_NOTE_HI (135 * 65536)
-/* -MODS_NOTE_LO as a variable the compiler cannot fold (0xFFC40000 is in the chip's ROM window: osc.c
- * osc_note_lo_neg). Never written. */
-int32_t mods_note_lo_neg = -MODS_NOTE_LO;
 #if OSC_RATE != 44100
 #error "LFO_L0 and LFO_INC_TOP are computed for 44100 Hz"
 #endif
@@ -249,15 +246,22 @@ static inline __attribute__((always_inline)) uint32_t mods_exp2f(int32_t f24)
     return (uint32_t)LFO_Q30 + (uint32_t)mods_mul30(p, f);
 }
 
-void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t semis_q16)
+/* per sample: inlined into voice_render (the CPU gate); mods_fm1 is the external wrapper */
+static inline __attribute__((always_inline)) void mods_fm1_hot(osc_t *o, uint32_t inc1, uint32_t inv1,
+                                                               int32_t note1_q16, int32_t semis_q16)
 {
-    /* clamp the modulated note to the oscillator's range (as osc_set_pitch would), in 64 bits: note + semis may
-     * overflow for absurd inputs */
-    int64_t t = (int64_t)note1_q16 + semis_q16;
-    if (t < -mods_note_lo_neg) t = -mods_note_lo_neg;
-    if (t > MODS_NOTE_HI) t = MODS_NOTE_HI;
-    int32_t s = (int32_t)(t - note1_q16);                      /* |s| <= 195 semitones, Q16 */
-    if (note1_q16 < -mods_note_lo_neg || note1_q16 > MODS_NOTE_HI) s = 0;   /* base outside the range: leave it */
+    /* clamp the modulated note to the oscillator's range (as osc_set_pitch would). In 32 bits, on the notes above
+     * the floor (b = note - MODS_NOTE_LO, a + 0x3C0000: MODS_NOTE_LO, 0xFFC40000, is in the chip's ROM window, see
+     * osc.c osc_log2_inc), and with semis first limited to the range's width (195 semitones), which changes no result
+     * and keeps b + semis from overflowing for absurd inputs */
+    const int32_t span = MODS_NOTE_HI - MODS_NOTE_LO;
+    int32_t b = note1_q16 + 60 * 65536, s = 0;
+    if (b >= 0 && b <= span) {                                  /* base outside the range: leave it (s = 0) */
+        int32_t m = semis_q16 < -span ? -span : semis_q16 > span ? span : semis_q16;
+        int32_t t = b + m;
+        t = t < 0 ? 0 : t > span ? span : t;
+        s = t - b;                                              /* |s| <= 195 semitones, Q16 */
+    }
     int32_t x = s * 64 / 3;                                     /* octaves, Q24 (|x| < 2^30); a 32-bit SDIV */
     int n = x >> 24;                                            /* floor */
     int32_t f = x & (LFO_Q24 - 1);
@@ -269,4 +273,8 @@ void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t
     uint32_t rv = (uint32_t)(((uint64_t)inv1 * mods_exp2f(LFO_Q24 - f)) >> 31);
     o->inc1 = n >= 0 ? ri << n : ri >> -n;
     o->inv1 = n >= 0 ? rv >> n : rv << -n;
+}
+void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t semis_q16)
+{
+    mods_fm1_hot(o, inc1, inv1, note1_q16, semis_q16);
 }

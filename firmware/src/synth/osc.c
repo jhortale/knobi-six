@@ -15,6 +15,9 @@
 
 #define OSC_HOT static inline __attribute__((always_inline))
 #define OSC_COLD static __attribute__((noinline, cold))
+/* OSC_INLINE: the per-sample function, inlined into voice_render (unity build; the CPU gate, docs/MEASUREMENTS.md);
+ * the external name is a wrapper for the rest (tests, control rate) */
+#define OSC_INLINE static inline __attribute__((always_inline))
 #define OSC_Q24 INT32_C(16777216)
 #define OSC_Q30 INT32_C(1073741824)
 #define OSC_NOTE_LO (-60 * 65536)          /* 0.255 Hz */
@@ -44,17 +47,15 @@ static __attribute__((noinline)) uint32_t osc_exp2(int32_t x, unsigned fraction)
     return (uint32_t)p << -shift;
 }
 
-/* -OSC_NOTE_LO as a variable the compiler cannot fold: -60 x 65536 = 0xFFC40000 lies in the chip's ROM window, and
- * tools/build.py fails a build whose code carries such a constant (it cannot tell a pitch from a ROM address). Kept
- * positive (the data word too stays out of the window) and never written. */
-int32_t osc_note_lo_neg = -OSC_NOTE_LO;
-
-/* log2 of the increment for a Q16 note, Q24 (clamped to OSC_NOTE_LO..HI) */
+/* log2 of the increment for a Q16 note, Q24 (clamped to OSC_NOTE_LO..HI). The clamp works on the note above the
+ * floor, n = note - OSC_NOTE_LO (a + 0x3C0000): OSC_NOTE_LO itself, -60 x 65536 = 0xFFC40000, lies in the chip's ROM
+ * window, and tools/build.py fails a build whose code carries such a constant (it cannot tell a pitch from a ROM
+ * address); n - 129 x 65536 = note - 69 x 65536 exactly. */
 static int32_t osc_log2_inc(int32_t note_q16)
 {
-    if (note_q16 < -osc_note_lo_neg) note_q16 = -osc_note_lo_neg;
-    if (note_q16 > OSC_NOTE_HI) note_q16 = OSC_NOTE_HI;
-    return (note_q16 - 69 * 65536) * 64 / 3 + OSC_LOG2_C;   /* semitones Q16 -> octaves Q24: x 256 / 12 */
+    int32_t n = OSC_NOTE_HI + 60 * 65536;                        /* above the top (also: no overflow below) */
+    if (note_q16 <= OSC_NOTE_HI) n = note_q16 + 60 * 65536, n = n < 0 ? 0 : n;
+    return (n - 129 * 65536) * 64 / 3 + OSC_LOG2_C;   /* semitones Q16 -> octaves Q24: x 256 / 12 */
 }
 
 int32_t note_to_inc(int32_t note_q16)
@@ -79,22 +80,27 @@ void osc_set_pitch(osc_t *o, int32_t note1_q16, int32_t note2_q16)
     o->inv2 = osc_inv(l2);
 }
 
-static int osc_clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+OSC_HOT int osc_clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* VCO1 SHAPE 0..255: pulse amount 0..1 (saw at 0, pulse at 255, blends between: saw - a saw(t - w)).
  * VCO2 SHAPE 0..254: 0..127 crossfades triangle -> saw (b), 127..254 adds the pulse amount (a); 127 = saw.
  * PW 0..255: the pulse's width 5.35 %..95 %, 127 = square; 127 - d and 127 + d are mirror images (w, 1 - w):
  * the same spectrum, thinner toward both ends. Multiplies only, so X-Mod can call this at audio rate. */
-void osc_set_shape(osc_t *o, int shape1, int pw1, int shape2, int pw2)
+OSC_INLINE void osc_set_shape1_hot(osc_t *o, int shape1, int pw1)   /* VCO 1 only: X-Mod's per-sample call */
 {
     shape1 = osc_clamp(shape1, 0, 255), pw1 = osc_clamp(pw1, 0, 255);
-    shape2 = osc_clamp(shape2, 0, 254), pw2 = osc_clamp(pw2, 0, 255);
-    o->shape1 = (int16_t)shape1, o->pw1 = (int16_t)pw1, o->shape2 = (int16_t)shape2, o->pw2 = (int16_t)pw2;
+    o->shape1 = (int16_t)shape1, o->pw1 = (int16_t)pw1;
     /* Q15 amounts, rounded so the ends are exact (526344 = 2^27 / 255, 1056833 = 2^27 / 127), then << 15 */
     o->a1 = ((shape1 * 526344 + 2048) >> 12) << 15;
+    o->w1 = 0x80000000u + (uint32_t)(pw1 - 127) * OSC_PW_STEP;
+}
+void osc_set_shape(osc_t *o, int shape1, int pw1, int shape2, int pw2)
+{
+    osc_set_shape1_hot(o, shape1, pw1);
+    shape2 = osc_clamp(shape2, 0, 254), pw2 = osc_clamp(pw2, 0, 255);
+    o->shape2 = (int16_t)shape2, o->pw2 = (int16_t)pw2;
     o->b2 = shape2 >= 127 ? OSC_Q30 : ((shape2 * 1056833 + 2048) >> 12) << 15;
     o->a2 = shape2 <= 127 ? 0 : (((shape2 - 127) * 1056833 + 2048) >> 12) << 15;
-    o->w1 = 0x80000000u + (uint32_t)(pw1 - 127) * OSC_PW_STEP;
     o->w2 = 0x80000000u + (uint32_t)(pw2 - 127) * OSC_PW_STEP;
 }
 
@@ -130,7 +136,7 @@ OSC_HOT uint32_t osc_dist(uint32_t d, uint32_t inv)
  * u < 1: 1 - 4u/3 + 2u^3/3 - u^4/4;  1 <= u < 2: (2 - u)^4 / 12. side(u) = 2 * (integral of the cubic B-spline
  * from u to 2). Evaluated in Q16 with plain 32-bit multiplies (every operand < 2^16, every product < 2^32; the
  * constants are 2^16 / 3, 2^17 / 3, 2^16 / 12), returned as Q24: a few Q16 steps of error, ~1e-4 of the step. */
-static int32_t osc_side(uint32_t u)
+OSC_HOT int32_t osc_side(uint32_t u)
 {
     if (u >= 2u * OSC_Q24) return 0;
     uint32_t v = u >> 8;   /* Q16 */
@@ -236,7 +242,7 @@ static int32_t osc_w1(uint32_t t, uint32_t w, int32_t a)
 }
 
 /* h x the residual of a unit upward step at x = now - step (Q24 samples): after it -side(x)/2, before side(-x)/2 */
-static int64_t osc_step(int32_t h, int32_t x)   /* Q48 x 2; one signed 32 x 32 product */
+OSC_HOT int64_t osc_step(int32_t h, int32_t x)   /* Q48 x 2; one signed 32 x 32 product */
 {
     int32_t r = x >= 0 ? -osc_side((uint32_t)x) : osc_side(0u - (uint32_t)x);
     return (int64_t)h * r;
@@ -254,7 +260,7 @@ struct osc_ev {
     int32_t tx[6];        /* the sub's flips, x = now - flip (Q24 samples) */
     int n;
 };
-static void osc_ev(struct osc_ev *e, int32_t h, int32_t x, int flip)
+OSC_HOT void osc_ev(struct osc_ev *e, int32_t h, int32_t x, int flip)
 {
     e->acc += osc_step(h, x);
     if (flip && e->n < 6) e->tx[e->n++] = x;
@@ -330,7 +336,7 @@ OSC_COLD uint32_t osc_restart(osc_t *o, uint32_t t1, uint32_t n2)
     return nt;
 }
 
-void osc_tick(osc_t *o, int32_t out[4])
+OSC_INLINE void osc_tick_hot(osc_t *o, int32_t out[4])
 {
     const uint32_t t1 = o->ph1, t2 = o->ph2, d1 = o->inc1, d2 = o->inc2, i1 = o->inv1, i2 = o->inv2;
     const uint32_t l1 = 2 * d1, l2 = 2 * d2;
@@ -376,3 +382,4 @@ void osc_tick(osc_t *o, int32_t out[4])
     o->ph2 = n2;
     o->sub = (uint8_t)sub;
 }
+void osc_tick(osc_t *o, int32_t out[4]) { osc_tick_hot(o, out); }

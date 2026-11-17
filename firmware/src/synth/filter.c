@@ -16,6 +16,9 @@
 
 #define SVF_HOT static inline __attribute__((always_inline))
 #define SVF_COLD static __attribute__((noinline, cold))
+/* SVF_INLINE: the per-sample function, inlined into voice_render (unity build; the CPU gate, docs/MEASUREMENTS.md);
+ * the external name is a wrapper for the rest (tests, control rate) */
+#define SVF_INLINE static inline __attribute__((always_inline))
 #define SVF_KNEE INT32_C(268435456)        /* 2^28: Q28 nominal full scale, the soft-clip knee */
 #define SVF_Q24 INT32_C(16777216)
 #define SVF_Q30 INT32_C(1073741824)
@@ -146,9 +149,10 @@ SVF_HOT int32_t svf_out(int32_t y)
 struct svf_res {
     int32_t y, s1, s2;
 };
-SVF_COLD struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_coef_t *c)
+/* x: the driven input (svf_drive of the Q15 input: svf_tick_hot has it already; the overdriven, resonant worst case
+ * takes this path on most samples, docs/MEASUREMENTS.md) */
+SVF_COLD struct svf_res svf_slow_x(int32_t s1, int32_t s2, int32_t x, const svf_coef_t *c)
 {
-    int32_t x = svf_drive(in);
     /* |a1 s1| < 2^61, |a2 x|, |a2 s2| < 2^60 (a2 = g / (1 + g (g + k)) <= 1/2): the sum fits, and >> 31 fits int32 */
     int32_t v1 = 2 * svf_soft(svf_sat32(((int64_t)c->a1 * s1 + (int64_t)c->a2 * x - (int64_t)c->a2 * s2 +
                                                      SVF_HALF31) >> 31));
@@ -157,6 +161,10 @@ SVF_COLD struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_c
     int64_t y = ((int64_t)v2 * c->lp + (int64_t)hp * c->hp + (int64_t)v1 * c->bp) >> 15;
     struct svf_res o = {svf_out(svf_soft(svf_sat32(y))), svf_sat32(2 * (int64_t)v1 - s1), svf_sat32(2 * (int64_t)v2 - s2)};
     return o;
+}
+static inline struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_coef_t *c)
+{
+    return svf_slow_x(s1, s2, svf_drive(in), c);
 }
 
 /* The same sample in 32-bit arithmetic. Inside the gate |s1|, |s2| < 2^29, and |x| <= 1.899 x 2^28 < 2^29 - 65536 after
@@ -175,11 +183,10 @@ SVF_COLD struct svf_res svf_slow(int32_t s1, int32_t s2, int32_t in, const svf_c
  * 0 and the floor's cap) and nothing of g, so the 1.44 Hz bottom of the table is safe (ANALOG's comment asked for
  * >= 20 Hz; the bounds above do not shrink with g). test_filter's fast_equals_slow checks it on random states,
  * coefficients and inputs. */
-int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c)
+SVF_INLINE int32_t svf_tick_hot(svf_t *f, int32_t in_q15, const svf_coef_t *c)
 {
-    int32_t s1 = f->s1, s2 = f->s2;
+    int32_t s1 = f->s1, s2 = f->s2, x = svf_drive(in_q15);
     if (__builtin_expect((((uint32_t)s1 + (1u << 29)) | ((uint32_t)s2 + (1u << 29))) < 1u << 30, 1)) {
-        int32_t x = svf_drive(in_q15);
         int32_t v1 = 2 * svf_soft((int32_t)(((int64_t)c->a1 * s1 + (int64_t)c->a2 * (x - s2) + SVF_HALF31) >> 31));
         int32_t gv = (int32_t)(((int64_t)c->g * v1) >> 28), v2 = s2 + gv;
         int32_t hp = (int32_t)((uint32_t)x - (uint32_t)(int32_t)(((int64_t)c->k * v1) >> 28) - (uint32_t)v2);
@@ -190,11 +197,12 @@ int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c)
             return svf_out(svf_soft((int32_t)y));
         }
     }
-    struct svf_res o = svf_slow(s1, s2, in_q15, c);
+    struct svf_res o = svf_slow_x(s1, s2, x, c);
     f->s1 = o.s1;
     f->s2 = o.s2;
     return o.y;
 }
+int32_t svf_tick(svf_t *f, int32_t in_q15, const svf_coef_t *c) { return svf_tick_hot(f, in_q15, c); }
 
 /* 2^54 / d: Q30 reciprocal of a Q24 value d in [1, 128). A 32-bit divide gives a 16-bit seed x (within 2^-14 of the
  * answer, so x < 2^31 and |e| < 2^40), one Newton step brings it to ~30 bits; every product is 32 x 32. */
@@ -207,10 +215,10 @@ static uint32_t svf_recip_q30(uint32_t d)
     return (uint32_t)((int64_t)x + (((int64_t)(int32_t)x * (int32_t)(e >> 24)) >> 30));
 }
 
-static int32_t svf_clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
+SVF_HOT int32_t svf_clamp(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* g at a Q16 FILTER FREQ position (clamped), interpolated linearly between the table's steps */
-static int32_t svf_g(int32_t cut)
+SVF_HOT int32_t svf_g(int32_t cut)
 {
     unsigned i = (unsigned)cut >> 16;
     int32_t g = svf_gtab[i];
@@ -299,7 +307,7 @@ SVF_HOT uint32_t svf_recip_fast(uint32_t d)
     return (uint32_t)x >> e;
 }
 
-void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix)
+SVF_INLINE void svf_coef_fast_hot(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix)
 {
     int32_t cut = svf_clamp(cutoff_q16, 0, SVF_CUT_MAX);
     int32_t g = svf_g(cut), k = kres;
@@ -321,6 +329,10 @@ void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, in
     c->lp = (lp * (32768 - b)) >> 15;
     c->hp = (hp * (32768 - b)) >> 15;
     c->bp = (int32_t)(((int64_t)b * (k > SVF_KNEE ? k : SVF_KNEE)) >> 28);
+}
+void svf_coef_fast(svf_coef_t *c, int32_t cutoff_q16, int32_t kres, int mode, int32_t bp_mix)
+{
+    svf_coef_fast_hot(c, cutoff_q16, kres, mode, bp_mix);
 }
 
 #ifdef DINGHY_HOST

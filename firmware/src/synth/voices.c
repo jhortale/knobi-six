@@ -174,6 +174,8 @@ static void synth_voice_on(synth_t *s, voice_t *v, int note, int vel, int legato
         synth_gate(v, 1);
     }
     voice_control(v, &s->ctx, s->prog.v);   /* the right pitch and filter from the first sample */
+    v->g0[0] = v->coef.lp, v->g0[1] = v->coef.hp, v->g0[2] = v->coef.bp;   /* its filter gains too: no ramp from the
+                                                                              voice's previous note */
 }
 
 static void synth_voice_off(synth_t *s, voice_t *v)

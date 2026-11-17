@@ -120,15 +120,15 @@ void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t
     }
     for (int i = 0; i < n; i++) {
         int32_t o[4];
-        osc_tick(&v->osc, o);
+        osc_tick_hot(&v->osc, o);
         if (xm_pitch | xm_shape | xm_flt) {
             int32_t x = o[OSC_VCO2];
-            if (xm_pitch) mods_fm1(&v->osc, v->inc1, v->inv1, v->note1, mods_xm_term(x, c->xm.pitch));
+            if (xm_pitch) mods_fm1_hot(&v->osc, v->inc1, v->inv1, v->note1, mods_xm_term(x, c->xm.pitch));
             if (xm_shape)
-                osc_set_shape(&v->osc, voice_r16(v->shape1 + mods_xm_term(x, c->xm.shape)),
-                              voice_r16(v->pw1 + mods_xm_term(x, c->xm.pw)), v->osc.shape2, v->osc.pw2);
+                osc_set_shape1_hot(&v->osc, voice_r16(v->shape1 + mods_xm_term(x, c->xm.shape)),
+                                   voice_r16(v->pw1 + mods_xm_term(x, c->xm.pw)));
             if (xm_flt)
-                svf_coef_fast(&v->coef, v->cut + mods_xm_term(x, c->xm.freq), c->kres,
+                svf_coef_fast_hot(&v->coef, v->cut + mods_xm_term(x, c->xm.freq), c->kres,
                               voice_r16(v->mode + mods_xm_term(x, c->xm.mode)), v->bp + mods_xm_term(x, c->xm.bp));
         }
         if (rl) {
@@ -140,9 +140,9 @@ void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t
             cf.lp = ga[0] >> 4, cf.hp = ga[1] >> 4, cf.bp = ga[2] >> 4;
         }
         int32_t mix = (o[OSC_VCO1] * l0 + o[OSC_VCO2] * l1 + o[OSC_SUB] * l2 + o[OSC_NOISE] * l3) >> 14;
-        adsr_tick(&v->fenv, &c->fr);
-        int32_t le = adsr_tick(&v->lenv, &c->lr);
-        int32_t y = vca_apply(svf_tick(&v->svf, mix, cp), vca_control(le, lamt, lvel, vel, amp, 0));
+        adsr_tick_hot(&v->fenv, &c->fr);
+        int32_t le = adsr_tick_hot(&v->lenv, &c->lr);
+        int32_t y = vca_apply_hot(svf_tick_hot(&v->svf, mix, cp), vca_control_hot(le, lamt, lvel, vel, amp, 0));
         bus[2 * i] += (y * gl) >> 15;
         bus[2 * i + 1] += (y * gr) >> 15;
     }
