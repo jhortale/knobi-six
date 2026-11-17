@@ -3,8 +3,9 @@
  * below does the rest: updates, the USB rescue, MIDI, USB audio, the keys, pads, knobs, faders, wheels, LEDs, the
  * screen, flash).
  *
- *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global; the notes go out
- *              over USB-MIDI (MIDI CH); LOCAL OFF: MIDI only
+ *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global (ARP ON: the
+ *              arpeggiator, synth/arp.h); the notes go out over USB-MIDI (MIDI CH; ARP ON with PARAM TX: the arp's
+ *              notes instead, ui/midi_map.c); LOCAL OFF: MIDI only
  *   OCTAVE-/+  the octave, -2..+2 (kept in flash with the globals)
  *   K1         the volume (platform.c)
  *   K2..K8, faders, pads, the other buttons: ui/controls.c (the map: docs/CONTROLS.md): the screen's knobs, the
@@ -172,6 +173,7 @@ static void clock_out(void)
 static void app_main(void)
 {
     uint8_t key_note[FM1_NKEY] = {0};           /* the note each key started (0: none) */
+    uint8_t key_out[FM1_NKEY] = {0};            /* its note-on went out as MIDI (the arp's notes may go instead) */
     uint32_t prev = 0, k, t_change = 0, dirty = 0, t_saved = 0;
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
@@ -207,9 +209,13 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + k);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);    /* (chord memory capture while CHORD is held) */
-                midi_send(0x90u | ch, key_note[key], vel);
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel);
             }
-            if (up >> k & 1u && key_note[key]) { stop(key_note[key]); midi_send(0x80u | ch, key_note[key], 0); key_note[key] = 0; }
+            if (up >> k & 1u && key_note[key]) {
+                stop(key_note[key]);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0);
+                key_note[key] = 0, key_out[key] = 0;
+            }
         }
         while ((e = smk_extkey_take()) >= 0) {  /* the keys left and right of those 27: key << 8 | velocity (0 = up) */
             uint32_t key = (uint32_t)e >> 8, vel = (uint32_t)glob_vel_curve((int)vc, (int)((uint32_t)e & 0x7Fu));
@@ -218,8 +224,12 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + key - SMK_KEY_F3);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);
-                midi_send(0x90u | ch, key_note[key], vel);
-            } else if (key_note[key]) { stop(key_note[key]); midi_send(0x80u | ch, key_note[key], 0); key_note[key] = 0; }
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel);
+            } else if (key_note[key]) {
+                stop(key_note[key]);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0);
+                key_note[key] = 0, key_out[key] = 0;
+            }
         }
         {                                       /* the wheels: queued only when the value changes */
             int32_t bd = smk_pw_bend(&wheel, fm1_in.wheel[0], fm1_ms), mw = mod_wheel(fm1_in.wheel[1]);   /* 1/4096 semitone, +-2 at the ends */
@@ -240,6 +250,7 @@ static void app_main(void)
 
         midi_in();
         clock_out();
+        ctl_arp_out();                          /* the arp's notes out (PARAM TX on) */
 
         for (k = 0; k < 18u; k++)               /* a button lit while it is held */
             fm1_led_key(k, fm1_in.buttons >> k & 1u);
@@ -302,6 +313,17 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "clkfa")) *got = (int)clk_out_fa;           /* MIDI clock out: 0xFA sent so far */
     else if (!strcmp(name, "clkf8")) *got = (int)clk_out_f8;           /* 0xF8 sent so far */
     else if (!strcmp(name, "clkfc")) *got = (int)clk_out_fc;           /* 0xFC sent so far */
+    else if (!strcmp(name, "arpnote")) *got = eng_arp.note;            /* the arp's note sounding (its gate), -1 none */
+    else if (!strcmp(name, "arpn")) *got = eng_arp.n;                  /* keys in the arp's pattern (held, latched) */
+    else if (!strcmp(name, "arpkey")) *got = a0 < eng_arp.n ? eng_arp.key[a0] : -1;   /* arpkey I: its key I (played
+                                                                          order) */
+    else if (!strcmp(name, "arpsteps")) *got = (int)eng_arp.steps;     /* arp notes played so far */
+    else if (!strcmp(name, "arpout")) *got = (int)ctl_arp_outs;        /* arp notes sent as MIDI so far */
+    else if (!strcmp(name, "keyed")) {                                 /* voices with a key down or latched */
+        uint32_t v;
+        *got = 0;
+        for (v = 0; v < NVOICE; v++) *got += eng_synth.voice[v].busy && (eng_synth.voice[v].key || eng_synth.voice[v].latched);
+    }
     else if (!strcmp(name, "bend")) *got = eng_last_bend;              /* the bend sent, 0..16383 */
     else if (!strcmp(name, "wheel")) *got = eng_last_wheel;            /* the mod wheel sent, 0..127 */
     else if (!strcmp(name, "screen")) *got = screen;                   /* the screen, enum screen_id (ui/controls.h) */

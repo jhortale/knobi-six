@@ -2,13 +2,13 @@
 
 USB MIDI. The code: `firmware/src/ui/midi_map.c`. Globals (GLOBE screen, see [CONTROLS.md](CONTROLS.md)):
 **MIDI CH** ALL (default) or 1..16, **PARAM TX** OFF / CC (default CC), **PARAM RX** OFF / CC (default CC); **MIDI
-CLOCK** (Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN and SysEx come later.
+CLOCK** (Arp + Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN and SysEx come later.
 
 ## Received (on MIDI CH; ALL = every channel)
 
 | Message | Does |
 | --- | --- |
-| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured |
+| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed |
 | channel pressure | aftertouch; the synth gets the higher of it and the bottom pads' pressure |
 | pitch bend | added to the pitch wheel's bend (±BEND RANGE at the ends) |
 | CC 1 | mod wheel (the higher of it and the panel's wheel); only adds LFO depth |
@@ -25,7 +25,7 @@ CLOCK** (Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN and Sys
 
 ### MIDI clock in (any channel setting; the global MIDI CLOCK)
 
-The global **MIDI CLOCK** (Clock screen, pad 3; [CONTROLS.md](CONTROLS.md)) decides. OFF and OUT ignore incoming clock.
+The global **MIDI CLOCK** (Arp + Clock screen, pad 3; [CONTROLS.md](CONTROLS.md)) decides. OFF and OUT ignore incoming clock.
 IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
 
 | Byte | IN / THRU | IN NO S/S |
@@ -49,7 +49,10 @@ save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhi
 
 ## Sent
 
-Keys: note on / off on MIDI CH (ALL = channel 1). With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
+Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with ARP ON and PARAM TX = CC, the notes the arp plays
+go out instead (note on with the key's velocity, note off at the end of its gate), and the keys' own notes do not (a
+receiver would play the chord under the arp); every arp note-on sent gets its note-off, even if PARAM TX is turned
+off meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
 goes out as its CC on the same channel, only when the 7-bit value changes (a 0..255 parameter moving one step may stay
 on the same CC value). Edits received over MIDI are not echoed.
 

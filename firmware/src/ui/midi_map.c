@@ -14,7 +14,12 @@
  * PARAM RX = CC the map's CCs (0..127 over the param's range, bipolar 64 = 0). A CC received is not sent back.
  * Out (midi_cc_send): a panel edit, with PARAM TX = CC, as the map's CC on the MIDI channel (ALL = 1), only when its
  * 7-bit value differs from the last one either side had (a 0..255 param moving one step may stay on the same CC
- * value). Switches and selects have no CC (NRPN later). */
+ * value). Switches and selects have no CC (NRPN later).
+ * Arp notes out (ctl_arp_out, main loop; synth/arp.h's ring): with ARP ON and PARAM TX = CC, the notes the arpeggiator
+ * plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on), and the
+ * keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
+ * note-off goes out only if its note-on did). A note-off
+ * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver). */
 #include "controls.h"
 
 #define MIDI_CC_NONE 0xFFu
@@ -73,6 +78,24 @@ static void ctl_program_change(int32_t bank, int32_t prog)
     if (ctl_manual || ctl_wr != 0 || bank >= (int32_t)PROG_BANKS || prog < 0 || prog > 99) return;
     ctl_prog_select(bank * 100 + prog);
 }
+
+static uint32_t ctl_arp_r;                 /* the arp ring's read index (main loop) */
+static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bit a note) */
+static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
+static void ctl_arp_out(void)
+{
+    uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
+    __asm__ volatile("" ::: "memory");     /* (the entries before the index: arp.c writes them first) */
+    if (w - ctl_arp_r > ARP_OUT_N) ctl_arp_r = w - ARP_OUT_N;   /* (a long stall: the oldest are gone) */
+    for (; ctl_arp_r != w; ctl_arp_r++) {
+        uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
+        uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
+        if (vel && ctl_glob[G_PARAM_TX]) { midi_send(0x90u | ch, note, vel); *m |= bit; ctl_arp_outs++; }
+        else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; }
+    }
+}
+/* the keys' own note-ons go out unless the arp's do (ARP ON with PARAM TX on) */
+static int ctl_keys_out(void) { return !(eng_edit.v[P_ARP_ON] && ctl_glob[G_PARAM_TX]); }
 
 /* MIDI clock in (0xF8 clock, FA start, FB continue, FC stop; any channel setting): to the clock when the global MIDI
  * CLOCK follows one (IN, SLAVE THRU, IN-no-start-stop), echoed out under SLAVE THRU; ignored under OFF and OUT */

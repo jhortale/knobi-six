@@ -603,6 +603,7 @@ static void clock_in_engine(void)
 
 int main(void)
 {
+    (void)eng_arp_sync;                         /* (the arpeggiator's engine paths: tests/unit/test_arp.c) */
     voice_worst_case_bounded();
     params_smoothed_no_step();
     silence_costs_nothing();

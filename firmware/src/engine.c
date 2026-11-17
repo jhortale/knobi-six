@@ -16,7 +16,12 @@
  * drain in order (P_BPM / P_CLK_DIV edits and program loads set its tempo and division, EV_RT a MIDI clock byte at the
  * block's start, EV_CLKMODE the mode); then eng_render ticks it once per block, before the synth renders, and gives the
  * synth its tempo for LFO SYNC (synth_clock). The block's step events stay in eng_clk (eng_clk.n, .at[], .step[]) for
- * the arpeggiator (Task 6), which runs there too. The main loop reads what it publishes, one aligned word each:
+ * the arpeggiator, which runs there too (synth/arp.h; eng_arp, CPU0, never CPU1): with ARP ON a key event goes to
+ * arp_key, not to the synth; eng_render splits the block at each step's frame (arp_step: the note starts on that sample)
+ * and at the arp note's gate end (arp_run); a pattern start with ARP BEAT SYNC off (EV_ARPSYNC, the global) restarts the
+ * clock; the clock not running (an external clock absent or stopped) silences it; HOLD, ALL NOTES OFF, PANIC and program
+ * loads reach it too. Its MIDI out ring (eng_arp.out[], out_w) is read by the main loop (ui/midi_map.c).
+ * The main loop reads what the clock publishes, one aligned word each:
  * eng_clk_ticks (ticks entered, 24 a quarter, never going back), eng_clk_starts / eng_clk_start_ticks (restarts to
  * step 0, the tick count before the latest) and eng_clk_mode (the mode applied): MIDI clock out (clock.h
  * clock_out_poll; written ticks, start_ticks, then starts, so a reader that sees starts unchanged around its reads has a
@@ -60,16 +65,18 @@
 #define KNOBI_ENGINE_C
 #include <stdint.h>
 #include "synth/clock.c"                  /* (the clock: a pure module, the engine's) */
+#include "synth/arp.c"                    /* (the arpeggiator: the engine's, after voices.c) */
 
 #define ENG_QLEN 256u                     /* events; a power of two */
 #define ENG_RESERVE 64u                   /* the last slots: note-offs, HOLD and PANIC only */
 #define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
 enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME,
-       EV_TUNE, EV_RT, EV_CLKMODE };
+       EV_TUNE, EV_RT, EV_CLKMODE, EV_ARPSYNC };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383;
                                                               CHORD a slot 0..5 b note (0 = empty); RT a status
-                                                              (0xF8..0xFC); CLKMODE b the MIDI CLOCK global */
+                                                              (0xF8..0xFC); CLKMODE b the MIDI CLOCK global;
+                                                              ARPSYNC b the ARP BEAT SYNC global */
 _Static_assert(P_COUNT_RESERVED <= 256, "a live id fits eng_ev_t.a");
 
 static synth_t eng_synth;                 /* the consumer's (and eng_init's, before eng_ready) */
@@ -80,6 +87,9 @@ static volatile uint32_t eng_pw, eng_pr;
 static volatile uint8_t eng_ready, eng_voices;
 static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127, eng_last_tune;
 static int32_t eng_last_clkmode;          /* the MIDI CLOCK mode sent (producer) */
+static int32_t eng_last_arpsync;          /* the ARP BEAT SYNC global sent (producer) */
+static arp_t eng_arp;                     /* the arpeggiator (consumer; eng_init before eng_ready) */
+static uint8_t eng_arp_sync_on;           /* ARP BEAT SYNC as applied (consumer) */
 static clk_t eng_clk;                     /* the clock (consumer; eng_init before eng_ready) */
 static volatile uint32_t eng_clk_ticks, eng_clk_beats, eng_clk_starts, eng_clk_start_ticks;   /* published by the
                                                                                           consumer (see above) */
@@ -130,7 +140,9 @@ static void eng_init(void)                /* the init program; call before audio
     eng_panic_pend = eng_alloff_pend = eng_chord_pend = 0;
     eng_voices = 0;
     eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127, eng_last_tune = 0;
-    eng_last_clkmode = CLK_MIDI_OFF;
+    eng_last_clkmode = CLK_MIDI_OFF, eng_last_arpsync = 0, eng_arp_sync_on = 0;
+    arp_init(&eng_arp, 0x41525036u);
+    arp_program(&eng_arp, &eng_synth, eng_edit.v);
     clock_init(&eng_clk);
     clock_set_bpm(&eng_clk, eng_edit.v[P_BPM]);
     clock_set_div(&eng_clk, eng_edit.v[P_CLK_DIV]);
@@ -192,6 +204,7 @@ static int eng_pressure(int32_t v) { return eng_level(EV_PRESSURE, &eng_last_pre
 static int eng_volume(int32_t v) { return eng_level(EV_VOLUME, &eng_last_vol, v < 0 ? 0 : v > 127 ? 127 : v, ENG_RESERVE); }
 static int eng_hold(int on) { return eng_level(EV_HOLD, &eng_last_hold, on != 0, 0); }
 static int eng_tune(int32_t cents) { return eng_level(EV_TUNE, &eng_last_tune, cents < -1250 ? -1250 : cents > 1250 ? 1250 : cents, ENG_RESERVE); }
+static int eng_arp_sync(int on) { return eng_level(EV_ARPSYNC, &eng_last_arpsync, on != 0, 0); }   /* ARP BEAT SYNC */
 static int eng_clock_mode(int32_t mode) { return eng_level(EV_CLKMODE, &eng_last_clkmode, mode < 0 ? 0 : mode >= CLK_MIDI_COUNT ? CLK_MIDI_COUNT - 1 : mode, 0); }
 /* a MIDI clock byte in (0xF8 clock, FA start, FB continue, FC stop): -1 refused (the queue full). A clock tick keeps the
  * reserve free (one lost is one tick late); start / stop / continue may use it */
@@ -267,6 +280,10 @@ static int eng_program(const program_t *p)   /* -1: a load is still pending (or 
 static int eng_active(void) { return eng_voices; }   /* voices sounding after the last block */
 
 /* ---- consumer (audio interrupt) */
+/* an arp pattern starts (a key into an empty one, a relatch, ARP ON with keys held): ARP BEAT SYNC off, the clock
+ * restarts (step 0 at this block's frame 0: the events drain before clock_tick; an external clock: ignored, the next
+ * step); on, the next step of the division */
+static void eng_arp_start(void) { if (!eng_arp_sync_on) clock_restart(&eng_clk); }
 static void eng_drain(void)
 {
     uint32_t r = eng_qr, w = eng_qw;
@@ -274,25 +291,36 @@ static void eng_drain(void)
     for (; r != w; r++) {
         const eng_ev_t *e = &eng_q[r & (ENG_QLEN - 1u)];
         switch (e->type) {
-        case EV_NOTE: synth_note(&eng_synth, e->a, e->b); break;
+        case EV_NOTE:                     /* (ARP ON: the arp's, never the synth's directly) */
+            if (!eng_arp.on) synth_note(&eng_synth, e->a, e->b);
+            else if (arp_key(&eng_arp, e->a, e->b)) eng_arp_start();
+            break;
         case EV_PARAM:
-            if (e->a == P_BPM) clock_set_bpm(&eng_clk, e->b), eng_synth.prog.v[P_BPM] = e->b;
+            if (e->a >= P_ARP_ON && e->a <= P_ARP_HOLD) {
+                eng_synth.prog.v[e->a] = e->b;
+                if (arp_set(&eng_arp, &eng_synth, e->a, e->b)) eng_arp_start();
+            } else if (e->a == P_BPM) clock_set_bpm(&eng_clk, e->b), eng_synth.prog.v[P_BPM] = e->b;
             else if (e->a == P_CLK_DIV) clock_set_div(&eng_clk, e->b), eng_synth.prog.v[P_CLK_DIV] = e->b;
             else synth_param(&eng_synth, e->a, e->b);
             break;
         case EV_RT: clock_midi(&eng_clk, e->a, eng_clk.now); break;   /* (at this block's start) */
         case EV_CLKMODE: clock_set_mode(&eng_clk, e->b); break;
+        case EV_ARPSYNC: eng_arp_sync_on = (uint8_t)(e->b != 0); break;
         case EV_BEND: synth_bend(&eng_synth, e->b); break;
         case EV_WHEEL: synth_wheel(&eng_synth, e->b); break;
         case EV_PRESSURE: synth_pressure(&eng_synth, e->b); break;
-        case EV_HOLD: synth_hold(&eng_synth, e->b); break;
-        case EV_PANIC: synth_panic(&eng_synth); break;
-        case EV_ALLOFF: synth_all_notes_off(&eng_synth); break;
+        case EV_HOLD:                     /* (ARP ON: the arp latches; the synth's HOLD stays off) */
+            arp_hold(&eng_arp, e->b);
+            if (!eng_arp.on) synth_hold(&eng_synth, e->b);
+            break;
+        case EV_PANIC: arp_clear(&eng_arp, &eng_synth); synth_panic(&eng_synth); arp_hold(&eng_arp, 0); break;
+        case EV_ALLOFF: arp_clear(&eng_arp, &eng_synth); synth_all_notes_off(&eng_synth); break;
         case EV_VOLUME: synth_volume(&eng_synth, e->b); break;
         case EV_TUNE: synth_tune(&eng_synth, e->b); break;
         case EV_CHORD: if (e->a < 6u) eng_synth.prog.chord[e->a] = (uint8_t)e->b; break;
         case EV_PROGRAM:
             synth_program(&eng_synth, &eng_pbuf);
+            arp_program(&eng_arp, &eng_synth, eng_pbuf.v);   /* (its keys forgotten, as the synth's) */
             clock_set_bpm(&eng_clk, eng_pbuf.v[P_BPM]);   /* (the program's tempo and division: the position kept) */
             clock_set_div(&eng_clk, eng_pbuf.v[P_CLK_DIV]);
             ENG_BARRIER();
@@ -445,14 +473,39 @@ static void eng_cpu(uint32_t used, uint32_t budget)
     eng_sheds = eng_synth.sheds;
 }
 
-/* eng_render's 'used' is wall-clock ticks around synth_render: it includes the time of any interrupt that preempted
- * it (USB, the key scan), which is time the block did not have either, so the guard counts it too. */
+/* the block's render with the arpeggiator: split at each clock step's frame (arp_step there: its note starts on that
+ * sample) and at the end of the arp note's gate (arp_run: its note-off on that sample). synth_render takes any frame
+ * count and keeps its control period across the calls. With the arp off and no note of its own: one render, as before */
+static void eng_render_arp(int32_t *lr, uint32_t frames)
+{
+    uint32_t pos = 0, k = 0, n = eng_clk.n;
+    if (!eng_arp.on && eng_arp.note < 0) { synth_render(&eng_synth, lr, frames); return; }
+    for (;;) {
+        uint32_t end = frames, g;
+        while (k < n && eng_clk.at[k] <= pos) {   /* a step here: the step's length for the gate (50 %) */
+            uint32_t ticks = CLOCK_DIV_TICKS[eng_clk.div][eng_clk.step[k] & 1u], rate = eng_clk.rate;
+            eng_arp.step_len = rate ? ticks * CLOCK_U / rate : 0u;   /* (48 x CLOCK_U < 2^29) */
+            arp_step(&eng_arp, &eng_synth);
+            k++;
+        }
+        if (pos >= frames) break;
+        if (k < n && eng_clk.at[k] < end) end = eng_clk.at[k];
+        g = arp_until(&eng_arp);
+        if (g < end - pos) end = pos + g;
+        synth_render(&eng_synth, lr + 2u * pos, end - pos);
+        arp_run(&eng_arp, &eng_synth, end - pos);
+        pos = end;
+    }
+}
+
+/* eng_render's 'used' is wall-clock ticks around the render (eng_render_arp): it includes the time of any interrupt
+ * that preempted it (USB, the key scan), which is time the block did not have either, so the guard counts it too. */
 static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
 {
     int32_t g = eng_fade_g, tgt;
     if (!eng_ready) return;
     eng_drain();
-    clock_tick(&eng_clk, frames);              /* this block's steps (eng_clk.n, .at[]: the arpeggiator's, Task 6) */
+    clock_tick(&eng_clk, frames);              /* this block's steps (eng_clk.n, .at[]: the arpeggiator's) */
     eng_clk_ticks = eng_clk.ticks, eng_clk_start_ticks = eng_clk.start_ticks, eng_clk_beats = eng_clk.beats;
     eng_clk_mode = eng_clk.mode;
     ENG_BARRIER();
@@ -460,8 +513,9 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     eng_clk_run = (uint8_t)clock_running(&eng_clk), eng_clk_alive = eng_clk.alive;
     eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
     synth_clock(&eng_synth, clock_quarter_inc(&eng_clk));   /* LFO SYNC's tempo (a compare when unchanged) */
+    if (!eng_clk_run) arp_silence(&eng_arp, &eng_synth);   /* (reference 5: no clock, no arp; no note left held) */
     uint32_t t0 = eng_ticks();
-    synth_render(&eng_synth, lr, frames);
+    eng_render_arp(lr, frames);
 #ifdef DINGHY_HOST
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);
 #endif

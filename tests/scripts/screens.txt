@@ -105,7 +105,7 @@
 6360 pad 5 100
 6370 pad 5 0
 6400 shot
-# Clock (Task 5): K2 BPM +10 (130), K3 DIVISION +2 (8TH D), TAP once, the MIDI CLOCK pad to OUT and on round to OFF
+# Arp + Clock (Task 5, 6): K2 BPM +10 (130), K3 DIVISION +2 (8TH D), TAP once, the MIDI CLOCK pad to OUT and on round to OFF
 7000 btn 3
 7010 expect 7 screen
 7100 enc 1 10
@@ -117,6 +117,15 @@
 7160 expect 130 clkbpm
 7160 expect 3 clkdiv
 7160 expect 1 glob 11
+# (Task 6) the ARPEGGIATOR part of the same screen (params 82 ARP ON, 83 MODE, 84 OCTAVES, 85 HOLD): K4 MODE +2
+# (UP+DN), K5 OCTAVES +1 (2), pad 5 ARP ON; ARP off again after the shot
+7165 enc 3 2
+7170 enc 4 1
+7175 pad 5 100
+7180 pad 5 0
+7190 expect 2 param 83
+7190 expect 1 param 84
+7190 expect 1 param 82
 7200 shot
 7300 pad 3 100
 7310 pad 3 0
@@ -127,6 +136,9 @@
 7360 pad 3 100
 7370 pad 3 0
 7400 expect 0 glob 11
+7410 pad 5 100
+7420 pad 5 0
+7430 expect 0 param 82
 # Program, Globals
 7500 btn 3
 7510 expect 8 screen

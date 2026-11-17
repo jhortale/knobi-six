@@ -59,9 +59,12 @@ static void bindings_valid(void)
     /* Task 5: the Clock screen: K2 BPM, K3 CLOCK DIV, TAP a top pad */
     const binding_t *ck = ctl_binding(SCR_CLOCK, 0);
     int clock_scr = ck->enc[0] == P_BPM && ck->enc[1] == P_CLK_DIV && tap == 1;
+    /* Task 6: the arpeggiator on the same screen (K4 MODE, K5 OCTAVES, pads 5 ARP ON, 6 ARP HOLD), Play's ARP pad */
+    int arp_scr = ck->enc[2] == P_ARP_MODE && ck->enc[3] == P_ARP_RANGE && ck->pad_top[5] == P_ARP_ON &&
+                  ck->pad_top[6] == P_ARP_HOLD && pl->pad_top[2] == P_ARP_ON;
     printf("bindings_valid: %d bad bindings, %d params / globals unreachable, LFO pad 2 = LFO>VCO1 %d, Play faders %d, "
-           "Clock screen %d\n", bad, missing, lfo_pad2, play_faders, clock_scr);
-    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders && clock_scr);
+           "Clock screen %d, arp %d\n", bad, missing, lfo_pad2, play_faders, clock_scr, arp_scr);
+    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders && clock_scr && arp_scr);
 }
 
 /* encoders: a knob steps (range + 127) / 128 a detent, x4 when turned fast; switches go on (+) / off (-); selects step

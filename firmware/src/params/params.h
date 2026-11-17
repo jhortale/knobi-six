@@ -9,7 +9,7 @@
 enum param_kind { PK_KNOB, PK_SWITCH, PK_SELECT };
 
 enum param_section {
-    PS_VCO1, PS_VCO2, PS_MIXER, PS_FILTER, PS_FENV, PS_LENV, PS_LFO, PS_XMOD, PS_AFTERTOUCH, PS_MISC, PS_CLOCK, PS_COUNT
+    PS_VCO1, PS_VCO2, PS_MIXER, PS_FILTER, PS_FENV, PS_LENV, PS_LFO, PS_XMOD, PS_AFTERTOUCH, PS_MISC, PS_CLOCK, PS_ARP, PS_COUNT
 };
 
 typedef struct {
@@ -30,7 +30,8 @@ enum param_id {
     P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_ON, P_PORTA_MODE, P_PORTA_RATE, P_UNISON_ON, P_UNISON_VOICES,
     P_COUNT_PHASE1,
     /* Phase 2/3 values, reserved: a program stores and carries them (record version 2); nothing reads them (no
-     * PARAMS entry, no screen, no sound) until a task makes one live (P_IS_LIVE below: P_BPM and P_CLK_DIV, Task 5). Units are the OB-6's own (docs/FACTORY_BANK.md, tools/ob6_import.py):
+     * PARAMS entry, no screen, no sound) until a task makes one live (P_IS_LIVE below: P_BPM and P_CLK_DIV, Task 5;
+     * P_ARP_*, Task 6). Units are the OB-6's own (docs/FACTORY_BANK.md, tools/ob6_import.py):
      * FX types as the OB-6 lists them (A 0..9: off bbd ddl cho FL1 FL2 PH1 PH2 PH3 rin; B 0..13: those, then HAL rOO
      * PLA SPr), P1 0..255, P2 / mix 0..127, the delay sync division 0..10 (1 2d 2 4d 4 4t 8d 8 8t 16d 16), the clock
      * division 0..9 (half qtr 8th 8thD 8thS 8thT 16th 16thS 16thT 32nd), arp mode 0..4 (up down up+down random
@@ -50,10 +51,13 @@ extern const param_t PARAMS[P_COUNT_PHASE1];
 /* The live ids: what the synth, the clock and the panel use. Phase 1's (PARAMS) and the reserved ids a later task made
  * live, each with an entry of its own (PARAMS_LIVE2; its range and default the same as PARAMS_RESERVED's, so a record
  * of version 2 carries them already, no new record version): P_BPM 30..250 (default 120), P_CLK_DIV the 10 divisions
- * (default QTR): the clock (Task 5, synth/clock.h). Everything that takes "a param" (the queue, the panel, the screens)
- * takes a live id; the other reserved ids are only stored. */
-#define P_IS_LIVE(id) ((id) < P_COUNT_PHASE1 || (id) == P_BPM || (id) == P_CLK_DIV)
-#define P_LIVE2_N 2
+ * (default QTR): the clock (Task 5, synth/clock.h); P_ARP_ON (switch, default off), P_ARP_MODE (UP DOWN UP+DN RANDOM
+ * ASSIGN, default UP), P_ARP_RANGE (1..3 octaves, default 1), P_ARP_HOLD (switch, default off): the arpeggiator (Task 6,
+ * synth/arp.h; a version-1 record loads them at their defaults: the arp off). Everything that takes "a param" (the
+ * queue, the panel, the screens) takes a live id; the other reserved ids are only stored. The live reserved ids are one
+ * run, P_BPM .. P_ARP_HOLD. */
+#define P_IS_LIVE(id) ((id) < P_COUNT_PHASE1 || ((id) >= P_BPM && (id) <= P_ARP_HOLD))
+#define P_LIVE2_N (P_ARP_HOLD - P_BPM + 1)
 extern const param_t PARAMS_LIVE2[P_LIVE2_N];
 const param_t *param_get(uint16_t id);                     /* a live id's entry, else 0 */
 

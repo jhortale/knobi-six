@@ -24,7 +24,7 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
     [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
                   {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
-                  {P_VCO1_SYNC, P_UNISON_ON, A(ARP), A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
+                  {P_VCO1_SYNC, P_UNISON_ON, P_ARP_ON, A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
     [SCR_VCO] = {{P_VCO1_FREQ, P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_FREQ, P_VCO2_FINE, P_VCO2_SHAPE, P_VCO2_PW},
                  {P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_SHAPE, P_VCO2_PW},
                  {A(PREV), A(NEXT), P_VCO1_SYNC, P_VCO2_LOWFREQ, P_VCO2_KEYBOARD, N, N, N}},
@@ -40,8 +40,8 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_AT_MISC] = {{P_AT_AMT, P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_RATE},  /* row 1: AT pads */
                      {P_AT_AMT, P_DETUNE, P_PORTA_RATE, P_PRG_VOL},
                      {A(PREV), A(NEXT), P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE}},
-    [SCR_CLOCK] = {{P_BPM, P_CLK_DIV, N, N, N, N, N}, {N, N, N, N},       /* (the arpeggiator joins it: Task 6) */
-                   {A(PREV), A(NEXT), A(TAP), G(MIDI_CLOCK), G(ARP_SYNC), N, N, N}},
+    [SCR_CLOCK] = {{P_BPM, P_CLK_DIV, P_ARP_MODE, P_ARP_RANGE, N, N, N}, {N, N, N, N},   /* ARP + CLOCK */
+                   {A(PREV), A(NEXT), A(TAP), G(MIDI_CLOCK), G(ARP_SYNC), P_ARP_ON, P_ARP_HOLD, N}},
     [SCR_PROGRAM] = {{B_PROG(PRG_BANK), B_PROG(PRG_TENS), B_PROG(PRG_ONES), N, N, N, N}, {N, N, N, N},
                      {A(PREV), A(NEXT), A(WRITE), A(ENTER), A(MANUAL), N, N, N}},
     [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), G(TRANSPOSE), G(TUNE), G(VEL_CURVE)}, {N, N, N, N},
@@ -65,7 +65,7 @@ const uint8_t SCR_ROWS[SCR_COUNT] = {[SCR_BOOT] = 1, [SCR_PLAY] = 1, [SCR_VCO] =
                                      [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_CLOCK] = 1, [SCR_PROGRAM] = 1,
                                      [SCR_GLOBALS] = 1};
 const char *const SCR_NAME[SCR_COUNT] = {"KNOBI-SIX", "PLAY", "VCO 1 + 2", "MIX + FILTER", "ENVELOPES", "LFO + X-MOD",
-                                         "AT + MISC", "CLOCK", "PROGRAM", "GLOBALS"};
+                                         "AT + MISC", "ARP + CLOCK", "PROGRAM", "GLOBALS"};
 static const char *const CTL_ROW_NAME[3][2] = {{"FILTER ENV", "LOUDNESS ENV"}, {"LFO", "X-MOD"}, {"AFTERTOUCH", "MISC"}};
 
 const binding_t *ctl_binding(int screen, int row)
@@ -375,7 +375,8 @@ static void ctl_action(int *screen, uint32_t a)
         if (bpm) ctl_set(&eng_edit, P_BPM, bpm, 1);
         else ctl_last_id = B_ACT(ACT_TAP), ctl_last_v = ctl_tapclk.tap_n, ctl_edits++;   /* (the taps so far) */
     }
-    /* ACT_ARP: the arpeggiator is phase 2 */
+    else if (a == ACT_ARP) ctl_set(&eng_edit, P_ARP_ON, !eng_edit.v[P_ARP_ON], 1);   /* (no pad has it: ARP ON is a
+                                                                                       * param pad, Play and Arp) */
 }
 static void ctl_write_press(int *screen)               /* WRITE (the pad, BT): arm (Program screen, the destination the
                                                         * current program) or cancel */
@@ -537,6 +538,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     eng_hold(ctl_hold || ctl_sustain);
     eng_volume(ctl_midi_vol);                          /* MIDI CC 7 (sent every pass: a refused one is retried) */
     eng_clock_mode(ctl_glob[G_MIDI_CLOCK]);            /* the clock's mode (sent when it changes) */
+    eng_arp_sync(ctl_glob[G_ARP_SYNC]);                /* ARP BEAT SYNC (sent when it changes) */
     ctl_leds(*screen, edit);
 }
 #endif

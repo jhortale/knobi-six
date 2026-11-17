@@ -9,7 +9,7 @@ top row of pads is switches, the bottom row is pressure only.
 
 | Button (printed) | id | Does |
 | --- | --- | --- |
-| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Clock, Program, Globals (stops at the ends) |
+| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Arp + Clock, Program, Globals (stops at the ends) |
 | PATCH | `BTN_HOME` | Play |
 | PARA | `BTN_EDIT` | the last edit section visited (VCO 1 + 2 at first) |
 | GLOBE | `BTN_GLO` | Globals; again: back to where you were |
@@ -18,7 +18,7 @@ top row of pads is switches, the bottom row is pressure only.
 | OCTAVE- / + | `BTN_OCT_DOWN` / `UP` | the keys' octave, -2..+2 |
 | BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
 | GLOBE held + BT, twice within 2 s | | RESTORE FACTORY: the first press asks (the header shows `SurE`, Program says RESTORE FACTORY? EDITS ARE LOST), the second within 2 s puts the current program's factory version into the edit buffer (header `FAC`; nothing is stored until WRITE). Not confirmed in time: forgotten. Globals, opened by GLOBE's press, closes again. No factory bank in the build: the init program. Not while a WRITE is armed (see [Programs](#programs)) |
-| KNOB BANK, FADER BANK, ARP, NOTE REPEAT, FX, SEQ, SEQ PLAY, SEQ REC | | nothing yet (arp, effects, sequencer: phases 2 and 3) |
+| KNOB BANK, FADER BANK, ARP, NOTE REPEAT, FX, SEQ, SEQ PLAY, SEQ REC | | nothing yet (effects, sequencer: phases 2 and 3; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
 
@@ -57,7 +57,7 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 
 | Screen | K2..K8 | Faders 1..4 | Top pads 0..7 |
 | --- | --- | --- | --- |
-| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT | FREQ, RESO, MODE, ENV AMOUNT | SYNC (VCO1 sync), UNISON, ARP (phase 2), HOLD |
+| Play | FILTER FREQ, RESONANCE, MODE, ENV AMOUNT | FREQ, RESO, MODE, ENV AMOUNT | SYNC (VCO1 sync), UNISON, ARP (ARP ON), HOLD |
 | VCO 1 + 2 | VCO1 FREQ, SHAPE, PW, VCO2 FREQ, FINE, SHAPE, PW | VCO1 SHAPE, VCO1 PW, VCO2 SHAPE, VCO2 PW | ◀, ▶, SYNC, LOW FREQ, KEYBOARD |
 | Mixer + Filter | VCO1, VCO2, SUB OCT, NOISE, FREQ, RESO, MODE | FREQ, RESO, MODE, ENV AMOUNT | ◀, ▶, BP, KEY TRACK (off / half / full) |
 | Envelopes, FILTER row | ATTACK, DECAY, SUSTAIN, RELEASE, AMOUNT | A, D, S, R | ◀, ▶, VELOCITY > FILTER, VELOCITY > AMP, ROW |
@@ -66,17 +66,19 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 | LFO + X-Mod, X-MOD row | the same | the same | ◀, ▶, X-MOD > VCO1, SHAPE1, PW1, F FREQ, F MODE, NORM-BP |
 | Aftertouch + Misc, AFTERTOUCH row | AT AMOUNT, DETUNE, PAN SPREAD, BEND RANGE, KEY MODE, PROGRAM VOLUME, PORTA RATE | AT AMOUNT, DETUNE, PORTA RATE, PRG VOLUME | ◀, ▶, AT > VCO1, VCO2, LFO AMT, LOUDNESS, F FREQ, F MODE |
 | Aftertouch + Misc, MISC row | the same | the same | ◀, ▶, UNISON, UNISON VOICES (1..6, CHD), PORTAMENTO, PORTA MODE |
-| Clock | BPM (30..250, a BPM a detent), DIVISION (HALF, QTR, 8TH, 8TH D, 8TH S, 8TH T, 16TH, 16TH S, 16TH T, 32ND) | — | ◀, ▶, TAP, MIDI CLOCK (global: OFF / OUT / IN / THRU / IN NO S/S), ARP BEAT SYNC (global) |
+| Arp + Clock | BPM (30..250, a BPM a detent), DIVISION (HALF, QTR, 8TH, 8TH D, 8TH S, 8TH T, 16TH, 16TH S, 16TH T, 32ND), ARP MODE (UP, DOWN, UP+DN, RANDOM, ASSIGN), ARP OCTAVES (1..3) | — | ◀, ▶, TAP, MIDI CLOCK (global: OFF / OUT / IN / THRU / IN NO S/S), ARP BEAT SYNC (global), ARP (ARP ON), HOLD (ARP HOLD) |
 | Program | BANK (0..4), TENS (0..9), ONES (0..9) | — | ◀, ▶, WRITE, ENTER, MANUAL |
 | Globals | MIDI CH (ALL, 1..16), POT MODE, PARAM TX (OFF / CC), PARAM RX (OFF / CC), TRANSPOSE (-12..+12), TUNE (-50..+50 cents), VEL CURVE (0..7) | — | ◀, ▶, LOCAL (ON / OFF), STEREO / MONO, SUSTAIN (N.O. / N.C.), AT CURVE (0..3) |
 
-Every phase-1 parameter, BPM and DIVISION, and every global is on some screen (unit test `bindings_valid`). The globals
+Every phase-1 parameter, BPM and DIVISION, the four arpeggiator values, and every global is on some screen (unit test `bindings_valid`). The globals
 are kept in flash (below).
 
-### Clock
+### Arp + Clock
 
-The **Clock** screen (Phase 2; `firmware/src/synth/clock.h`) sets the tempo the arpeggiator (Task 6) and LFO SYNC
-follow. **BPM** (K2) and **DIVISION** (K3) are the program's (stored with it: a program from before keeps 120 and QTR).
+The **Arp + Clock** screen (Phase 2; screen id 7) is the mockup's "Arp + Clock + Program" page without Program (that
+has a screen of its own): CLOCK above, ARPEGGIATOR below.
+
+The clock (`firmware/src/synth/clock.h`) sets the tempo the arpeggiator and LFO SYNC follow. **BPM** (K2) and **DIVISION** (K3) are the program's (stored with it: a program from before keeps 120 and QTR).
 The divisions are the OB-6's ten: HALF, QTR, 8TH, 8TH D (a dotted 8th then a 16th, two steps a beat as the OB-6 lists
 it), 8TH S and 16TH S (swing: long-short in 2 : 1, a triplet shuffle), 8TH T, 16TH, 16TH T, 32ND. **TAP** (pad 2): tap
 at least 4 times; from the 4th tap BPM is the average of the last intervals (up to 4), 30..250; a pause over 2 s starts
@@ -86,6 +88,25 @@ MIDI clock, the display shows the tempo received (`---` until there is one) and 
 the pads says FOLLOWING MIDI CLOCK, MIDI CLOCK STOPPED (in red: ticks arrive but a 0xFC stopped it, or no 0xFA yet
 under IN) or NO MIDI CLOCK: THE ARP WAITS (in red: none arriving); the line under it reminds that BPM and TAP set the
 program's own tempo, not the one followed.
+
+The **arpeggiator** (`firmware/src/synth/arp.h`; OB-6 reference 2.12 and 5): **ARP** (pad 5, also Play's pad 2) turns
+it on, **MODE** (K4) is UP, DOWN, UP+DN, RANDOM or ASSIGN (the order played), **OCT** (K5) 1..3 octaves (the notes,
+then the same an octave up, two octaves up), **HOLD** (pad 6) the program's ARP HOLD. All four are the program's
+(stored; a program from before Phase 2 loads with the arp off). With the arp on, the keys (and MIDI notes in) go to the
+arpeggiator, never straight to the voices; on each step of the clock (BPM and DIVISION) it plays the next note of its
+pattern, for half the step, at the velocity its key was played with. UP+DN turns at the ends without playing them
+twice (C E G: C E G E C E G E ...); RANDOM picks a note of UP's pattern each step. The arp's notes play the voices like
+keys: UNISON stacks each one, portamento glides between them, chord memory plays its chord on each.
+- **HOLD** (Play's HOLD pad, the sustain pedal, or the program's ARP HOLD): the keys let go stay in the pattern; a key
+  pressed when none is held starts a new pattern (**relatch**: the new chord replaces the old); a key pressed while one
+  is still held is **added** to it. HOLD off: the keys not held leave it.
+- **Start**: the first key of a new pattern (or a relatch) starts it from its first note: ARP BEAT SYNC OFF, at once
+  (the clock restarts: under MIDI CLOCK OUT, receivers get a new 0xFA); ON, on the clock's next step.
+- **No clock, no arp**: following a MIDI clock that is absent or stopped, the arp is silent and its note released; it
+  plays on when the clock runs again.
+- ARP off: the arp's note stops and the keys still held sound as played. ALL NOTES OFF (CC 123), a program change
+  and PANIC (CC 120) stop it and forget its keys.
+- MIDI out: with PARAM TX = CC the arp's notes go out (and the keys' own notes do not).
 
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to
@@ -112,7 +133,7 @@ shows the wheels' and faders' raw readings (for checking a unit's travel). The h
 set by the flash: the base's 8 slots of 16 KB hold 74 records each at 221 B a record (the largest a program may become
 in later phases), 592 in all, so 5 whole banks of 100 (`firmware/src/params/store_prog.h`). A program is its 66 values,
 its 20-character name and its chord memory, with a CRC (since record version 2 also 20 reserved phase-2/3 values:
-distortion, effects, clock, arpeggiator; stored, not used yet). One that was never stored loads as its **factory
+distortion, effects, clock, arpeggiator; the clock's and the arpeggiator's are in use, the rest stored for later). One that was never stored loads as its **factory
 program** when the build has a factory bank, else as the init program. One whose stored record is broken (or of a
 version this firmware does not know) loads as the init program and says so: `Err` in the header, STORED PROGRAM
 BROKEN: INIT LOADED on Program.
@@ -162,8 +183,8 @@ every 30 s (flash wear). What each does:
 | STEREO | STEREO / MONO (STEREO) | MONO: both outputs carry the sum |
 | SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
 | AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
-| MIDI CLOCK | OFF / OUT / IN / THRU / IN NO S/S (OFF) | Clock pad 3. OFF: the internal clock (BPM); OUT: the same, sent as MIDI clock (0xFA with the downbeat's 0xF8 when chosen and on every restart, then 24 0xF8 a beat, 0xFC when left); IN: follows a MIDI clock (start / continue / stop obeyed; none arriving, or stopped: the clock and the arpeggiator wait); THRU: IN, and what arrives is sent on; IN NO S/S: follows the clock bytes alone (start / stop ignored). USB only (the SMK-37 has no MIDI jack: no CLOCK PORT). [MIDI.md](MIDI.md) |
-| ARP BEAT SYNC | OFF / ON (OFF) | Clock pad 4: the arpeggiator starts on the clock's next step (ON) or at once (OFF; Task 6) |
+| MIDI CLOCK | OFF / OUT / IN / THRU / IN NO S/S (OFF) | Arp + Clock pad 3. OFF: the internal clock (BPM); OUT: the same, sent as MIDI clock (0xFA with the downbeat's 0xF8 when chosen and on every restart, then 24 0xF8 a beat, 0xFC when left); IN: follows a MIDI clock (start / continue / stop obeyed; none arriving, or stopped: the clock and the arpeggiator wait); THRU: IN, and what arrives is sent on; IN NO S/S: follows the clock bytes alone (start / stop ignored). USB only (the SMK-37 has no MIDI jack: no CLOCK PORT). [MIDI.md](MIDI.md) |
+| ARP BEAT SYNC | OFF / ON (OFF) | Arp + Clock pad 4: a new arp pattern starts on the clock's next step (ON) or at once, restarting the clock (OFF) |
 | DUAL CORE | OFF / ON (OFF) | only in a `KNOBI_CPU1=1` build (never a release; [API.md](API.md) "Second core"): Globals pad 7; ON renders half the voices on the second core (the same sound, bit for bit). Saved in a blob of its own (a default build keeps the other globals as they are) |
 
 Under the pads, the Globals screen's **diagnostics**: `CPU 65% PEAK 80%  VOX 6/6  SHED 0` (the audio block's load,
@@ -178,6 +199,6 @@ and `PROBE 8%  C1 IDLE  DUAL OFF` (the probe's own time, the second core's state
 line), and drops the version line: [SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe".
 
 The OB-6 globals not here: the clock port (USB only), the sequencer jack, alternative tunings, the SysEx and MIDI-out
-ports and program dumps (later, with SysEx). MIDI CLOCK and ARP BEAT SYNC are on the Clock screen (pads 3 and 4); they
+ports and program dumps (later, with SysEx). MIDI CLOCK and ARP BEAT SYNC are on the Arp + Clock screen (pads 3 and 4); they
 are globals all the same. The record grew with them (version 2): a version-1 record (Phase 1's) still loads, the two at
 OFF; a firmware from before them reads the new record as none (its defaults).

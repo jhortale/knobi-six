@@ -112,14 +112,17 @@ static const wdg_t SCR_AT_W[] = {
     PAD(119, 153, 56, 20, 2, 1, "UNISON"), PAD(119, 175, 56, 20, 3, 1, "VOX %"),
     PAD(175, 173, 58, 20, 4, 1, "PORTA"), PAD(175, 195, 58, 20, 5, 1, "%"),
     FOOTER, END};
-static const wdg_t SCR_CLOCK_W[] = {             /* (the arpeggiator joins it below: Task 6) */
+static const wdg_t SCR_CLOCK_W[] = {             /* ARP + CLOCK (the mockup's "Arp + Clock + Program" page, its upper
+                                                  * two sections: Program has a screen of its own) */
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "CLOCK"},
     {W_BPM, 7, 40, 111, 56, 0, 0, "BPM"}, {W_LIST2, 122, 40, 111, 56, 1, 0, "DIVISION"},
     PAD(7, 100, 75, 22, 2, 2, "TAP"), PAD(82, 100, 75, 22, 3, 2, "CLK %"), PAD(157, 100, 76, 22, 4, 2, "BEAT SYNC"),
-    {W_CLKSTAT, 7, 128, 226, 20, 0, 0, 0},
-    {W_HINT, 7, 193, 226, 9, 0, 0, "TAP 4 TIMES: THE TEMPO"},
-    PADHINT(204), FOOTER, END};
+    {W_CLKSTAT, 7, 126, 226, 20, 0, 0, 0},
+    {W_TITLE, 7, 148, 226, 19, 0, 0, "ARPEGGIATOR"},
+    {W_LIST2, 7, 171, 111, 38, 2, 0, "MODE"}, {W_LIST, 118, 171, 40, 38, 3, 0, "OCT"},
+    PAD(158, 171, 75, 20, 5, 2, "ARP"), PAD(158, 193, 75, 20, 6, 2, "HOLD"),
+    FOOTER, END};
 static const wdg_t SCR_PROGRAM_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "PROGRAM"},

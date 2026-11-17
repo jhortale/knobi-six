@@ -1,0 +1,95 @@
+# Phase 2 Task 6: the arpeggiator (synth/arp.h) through the main loop and the queue. Params: 82 ARP ON, 83 MODE,
+# 84 OCTAVES, 85 ARP HOLD; glob 11 = MIDI CLOCK (0 OFF, 1 OUT, 2 IN), glob 2 = PARAM TX (on by default: arp notes out).
+# Probes: "arpn" keys in the pattern, "arpkey I" its key I (played order), "arpnote" the note sounding (-1 none),
+# "arpout" arp notes sent as MIDI, "keyed" voices with a key down or latched. Keys: bit 7 C4, 9 D4, 11 E4, 12 F4,
+# 14 G4, 16 A4 (octave 0). Internal clock 120 BPM, QTR: a step every 500 ms, the gate 250 ms; ARP BEAT SYNC off: a
+# pattern starts at once (the clock restarts).
+100 expect 0 scrcheck
+100 vel 100
+# ARP ON from Play's pad 2; C E G held: the arp plays C first, one voice, never the chord
+1100 pad 2 100
+1110 pad 2 0
+1200 expect 1 param 82
+1300 keys 0x4880
+1320 expect 3 arpn
+1320 expect 60 arpnote
+1320 expect 1 keyed
+1320 expect 1 arpout
+1820 expect 64 arpnote
+1820 expect 1 keyed
+# HOLD (Play pad 3) on, every key let go: latched, it plays on
+1900 pad 3 100
+1910 pad 3 0
+2000 keys 0
+2010 expect 3 arpn
+2320 expect 67 arpnote
+# relatch: D with no key held replaces the chord
+2500 keys 0x200
+2510 expect 1 arpn
+2510 expect 62 arpkey 0
+2510 expect 62 arpnote
+# append: F while D is held, then A while F is held (D let go meanwhile): D F A
+2600 keys 0x1200
+2610 expect 2 arpn
+2700 keys 0x1000
+2800 keys 0x11000
+2810 expect 3 arpn
+2810 expect 65 arpkey 1
+2810 expect 69 arpkey 2
+2900 keys 0
+2910 expect 3 arpn
+# HOLD off: the latched keys go; the note sounding ends at its gate; nothing left held
+3000 pad 3 100
+3010 pad 3 0
+3020 expect 0 arpn
+3300 expect 0 keyed
+3300 expect -1 arpnote
+# Review Focus 4: MIDI CLOCK = IN (the Arp + Clock screen, pad 3 twice); a key held, no clock: silent
+3400 btn 3
+3410 btn 3
+3420 btn 3
+3430 btn 3
+3440 btn 3
+3450 btn 3
+3500 expect 7 screen
+3600 pad 3 100
+3610 pad 3 0
+3620 pad 3 100
+3630 pad 3 0
+3700 expect 2 glob 11
+3800 keys 0x80
+3810 expect 1 arpn
+4000 expect 0 keyed
+4400 expect 0 keyed
+4400 expect -1 arpnote
+# 0xFA and a 120 BPM clock (4.7 .. 6.78 s): the arp plays on the downbeat (4.7 .. 4.95 s), 5.2 .. 5.45 s ...
+4700 midi 0xFA 0 0
+4700 clock 120 100
+4800 expect 1 clkrun
+4800 expect 60 arpnote
+5300 expect 1 keyed
+# 0xFC: stopped (the ticks go on): its note released at once, silent
+5350 midi 0xFC 0 0
+5360 expect 0 clkrun
+5360 expect 0 keyed
+5360 expect -1 arpnote
+5900 expect 0 keyed
+# 0xFB continues: it plays again; then the clock goes (the last tick ~6.78 s): released after 0.25 s, silent
+5950 midi 0xFB 0 0
+6400 expect 1 clkrun
+7200 expect 0 clkrun
+7200 expect 0 keyed
+7200 expect -1 arpnote
+7600 expect 0 keyed
+7700 keys 0
+7710 expect 0 arpn
+# MIDI CLOCK back to OFF (THRU, IN no start / stop, OFF): the internal clock again
+7800 pad 3 100
+7810 pad 3 0
+7820 pad 3 100
+7830 pad 3 0
+7840 pad 3 100
+7850 pad 3 0
+7900 expect 0 glob 11
+7900 expect 1 clkrun
+8000 end
