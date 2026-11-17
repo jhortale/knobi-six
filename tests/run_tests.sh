@@ -29,7 +29,7 @@ run "the init program: a six-note chord, the wheels, the release (expect)" sh te
 run "the worst-case patch, six voices, set through the event queue (expect)" sh tests/run_host.sh tests/scripts/worst.txt
 run "Review Focus 4: bottom-pad pressure while a top pad toggles: once; aftertouch only from the bottom row (expect)" sh tests/run_host.sh tests/scripts/pads_split.txt
 run "faders through the pot mode: passthru, jump, relative (expect)" sh tests/run_host.sh tests/scripts/faders_potmode.txt
-run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change stub (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
+run "MIDI CC in and out, PARAM TX / RX, MIDI CH, wheel, bend, sustain, program change + CC 32 bank (expect)" sh tests/run_host.sh tests/scripts/midi_cc.txt
 run "chord memory: hold CHORD and play, the chord plays from a key (expect)" sh tests/run_host.sh tests/scripts/chord_memory.txt
 run "the screens: every one drawn and shot, the bindings drawn, only what changed redrawn (expect)" sh tests/run_host.sh tests/scripts/screens.txt
 run "the globals: transpose, tune, velocity curve, LOCAL, MONO, sustain polarity, AT curve; saved while silent (expect)" sh tests/run_host.sh tests/scripts/globals.txt
