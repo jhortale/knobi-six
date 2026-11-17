@@ -1,6 +1,184 @@
 # Measurements
 
-## Phase-1 CPU gate (Task 11): result BLOCKED, NVOICE left at 6
+## Phase-1 CPU gate after the performance push (Task 11, second pass): NVOICE not decided, the CPU guard on
+
+**The gate** (João, replacing "every destination at full"): the **musical stress patch** at 6 voices must take less
+than 50 % of the 256-frame block (5.805 ms) at 240 MHz in **both** cycle models. If it does, `NVOICE = 6`; if not but
+4 voices pass, `NVOICE = 4`; otherwise report. The musical stress patch is played as two chords:
+- C3 G3 C4 E4 G4 C5 (`tests/scripts/musical.txt`, harness PATCH 3);
+- C5 G5 C6 E6 G6 C7 (`musical_high.txt`, PATCH 4).
+
+The extreme patches (every destination at full, below) stay measured, and the CPU guard keeps them from overrunning.
+
+**Result: neither voice count passes at 240 MHz.** The gate is met only by the emu model with 4 voices; the hw
+model is over, so the decision goes back to João.
+
+| musical stress | voices | 240 MHz, emu | 240 MHz, hw | 360 MHz, emu | 360 MHz, hw |
+|---|---|---|---|---|---|
+| C3..C5 | 6 | 55.5 % | 79.9 % | 37.0 % | 53.2 % |
+| C5..C7 | 6 | 63.8 % | 91.0 % | 42.6 % | 60.7 % |
+| C3..C5 | 4 | 38.2 % | 54.9 % | 25.5 % | 36.6 % |
+| C5..C7 | 4 | 44.9 % | 63.9 % | 29.9 % | 42.6 % |
+
+- At 360 MHz, 4 voices pass in both models and 6 voices pass in the emu model only.
+- `NVOICE` stays 6. Whatever the clock turns out to be, the CPU guard keeps the audio interrupt from overrunning:
+  it sheds voices when a block takes more than 80 % (see "CPU guard" below).
+
+### Patches
+
+- **Musical stress** (`tests/scripts/musical.txt`):
+  - mixer at ~75 % (all four at 95);
+  - VCO 1 pulse (PW 90) + VCO 2 pulse (PW 160), sync on;
+  - FILTER FREQ 90, RESONANCE 201 (~100/127 of the 0..255 range), FENV AMOUNT 76 (~60 %) with FENV SUSTAIN 40;
+  - X-Mod VCO 2 at 64 (~50 %) into VCO 1 pitch and the filter frequency;
+  - the LFO at ~20 Hz (FREQUENCY 173), amount 128, into VCO 1 pitch and the filter;
+  - aftertouch (pressure 100) at 64 into the filter;
+  - velocity 100.
+- **Extreme**: `worst.txt`, as in the first pass below, on C3..C5 and on notes 120..127.
+- **Init chord**: `program_init`, C4..G5.
+
+### Cycles per 256-frame block (CI run 44015858853; identical to the local runs)
+
+The 240 MHz and 360 MHz columns are % of the block (emu / hw).
+
+| patch | voices | insns | emu cycles | hw cycles | 240 MHz | 360 MHz |
+|---|---|---|---|---|---|---|
+| init chord | 6 | 449,920 | 638,059 | 902,438 | 45.8 / 64.8 | 30.5 / 43.2 |
+| musical C3..C5 | 6 | 622,581 | 773,843 | 1,112,808 | 55.5 / 79.9 | 37.0 / 53.2 |
+| musical C5..C7 | 6 | 688,674 | 889,222 | 1,268,209 | 63.8 / 91.0 | 42.6 / 60.7 |
+| extreme C3..C5 | 6 | 922,580 | 1,203,942 | 1,712,765 | 86.4 / 122.9 | 57.6 / 82.0 |
+| extreme 120..127 | 6 | 1,056,051 | 1,376,403 | 1,948,252 | 98.8 / 139.8 | 65.9 / 93.2 |
+| init chord | 4 | 307,469 | 438,716 | 620,903 | 31.5 / 44.6 | 21.0 / 29.7 |
+| musical C3..C5 | 4 | 424,352 | 532,395 | 765,363 | 38.2 / 54.9 | 25.5 / 36.6 |
+| musical C5..C7 | 4 | 477,920 | 625,116 | 890,430 | 44.9 / 63.9 | 29.9 / 42.6 |
+| extreme C3..C5 | 4 | 648,252 | 854,035 | 1,212,629 | 61.3 / 87.0 | 40.9 / 58.0 |
+| extreme 120..127 | 4 | 713,090 | 931,120 | 1,318,482 | 66.8 / 94.6 | 44.6 / 63.1 |
+
+How the extreme cases moved (6 voices, hw cycles, against the first pass):
+- C3..C5: 2.40 M → 1.71 M;
+- high chord: 3.45 M → 1.95 M.
+
+How the musical patch moved (6 voices, hw cycles, C5..C7), step by step on the same harness:
+
+| step | hw cycles |
+|---|---|
+| float SVF, control-rate envelopes, X-Mod / 2, two passes (first build) | 1.44 M |
+| struct copies removed (they were byte-loop `memcpy` calls) | 1.30 M |
+| F-FREQ-only coefficient path, branch-free clamps in `mods_fm1` / `svf_gk` | 1.31 M |
+| branch-free VCA clamp (final) | 1.27 M |
+
+The specialised loops and the division by 3 as a multiply came in between; the sync change affects only VCO 2 above
+4 kHz, so the extreme high chord, not this patch.
+
+Two attempts were measured slower and reverted:
+- a branch-free soft clip and drive (more instructions than the branches they replaced);
+- forcing the slow integer SVF inline (in the first pass).
+
+What it still costs (musical C5..C7, 6 voices, hw cycles; harness ablations, removing one feature at a time):
+- base pipeline: 0.95 M. That is two pulse oscillators, sub and noise, the mixer, the float SVF, the VCA and the
+  control rate;
+- X-Mod into VCO 1 pitch: 0.15 M;
+- X-Mod into the filter: 0.08 M;
+- pulse instead of saw: 0.12 M;
+- sync: 0.06 M.
+
+Hot spots (hw cycles per block):
+- `voice_render`: 0.87 M. About 50/50 between the oscillator pass and the filter pass; loads, stores and spills are
+  ~30 % of all cycles, taken branches and calls ~25 %.
+- `osc_vco1_sync`: 0.09 M. `osc_blep`: 0.06 M.
+- Control rate (`voice_control`, `mods_sum`, `osc_exp2`, `svf_coef_fast`): ~0.11 M.
+- `synth_render`, the bus and limiter: 0.04 M.
+- The harness's own buffer clearing and checksum (`main`): 0.012 M.
+
+### What changed (applied from the first pass's list, plus the guard)
+
+1. **X-Mod every 2 samples.** VCO 1 pitch, shape and PW, and the filter coefficients, are computed on even frames of
+   the control period. The frame between gets the targets themselves, and the even frame gets the mean of the
+   previous and new targets: a linear interpolation, one frame (23 µs) late. With only F FREQ modulated, only g, k,
+   a1, a2 and the BP gain are recomputed.
+   - Test: `xmod_filter_audio_rate` checks the interpolated targets frame by frame (error 1.2e-7).
+2. **Float SVF** on the FPU. The app is built with `-mcpu=r3 -mfprev1 -ffp-contract=off` (tools/build.py `APP_FPU`,
+   the app only); every float operation is a native instruction, with no library call. The drive polynomial, soft
+   clips, cutoff and RESONANCE maps, and damping floor are unchanged, and 1 / (1 + g(g + k)) is one FPU division.
+   - It is measured cheaper: the integer path took the 64-bit fallback on 74 % of the overdriven samples.
+   - Tests: every filter test passes (responses, no self-oscillation, overdrive curve, decay to zero, cutoff
+     smoothness). The bit-exact fast/slow test became `extreme_states`: bounded and finite for states up to the old
+     int32 range.
+3. **Sync above 4 kHz VCO 2:** one BLEP per restart (`osc_vco1_sync_fast`). VCO 1's own wrap and pulse edges inside
+   the window, and the sub under sync, go uncorrected up there. Worst alias (`test_osc sync_alias_high`), ours vs
+   naive sync:
+
+   | VCO 2 | VCO 1 +7 st | VCO 1 +19.3 st |
+   |---|---|---|
+   | 4.3 kHz | −32.9 vs −10.8 dB | −11.5 vs −6.1 dB |
+   | 6.3 kHz | −18.7 vs −10.7 dB | −9.4 vs −6.3 dB |
+   | 8.4 kHz | −9.5 vs −4.6 dB | −7.0 vs −6.9 dB |
+
+   Below 4 kHz nothing changed: `sync_alias` and `bspline_exact` pass as before. `bspline_exact` skips its 7 synced
+   cases above 4 kHz.
+4. **Envelopes and VCA at control rate.** `adsr_tick16` runs 16 RC steps as one (1 − c^16 is precomputed in
+   `adsr_rates`), with a per-sample linear ramp clamped to 0..full.
+   - Timing: `adsr_times16` puts all 128 knob positions within 5 % (worst 2.3 %). The per-sample model's
+     `adsr_times` is unchanged.
+   - The 2 ms minimum gate (2.20 ms) and the click/zipper tests (`params_smoothed_no_step`, `amp_mod_fades`) pass.
+   - A note-on between ticks starts its attack at the next tick (≤ 0.36 ms). On the device, events are applied at
+     block starts, which are tick starts.
+5. **Structure.** `voice_render` now runs two passes over the period:
+   1. oscillators, VCO 1 X-Mod and the mixer;
+   2. filter, VCA and pan.
+
+   It has no struct copies (a struct assignment is a call to `libc.c`'s byte-loop `memcpy`). Each pass is
+   specialised by constant arguments (which X-Mod paths, even or odd frame), so the loops do not test the patch's
+   switches per frame.
+6. **The CPU guard** (`synth_guard`, called from `eng_render`). `fm1_ticks()` times `synth_render`; on the host, a
+   fake clock does.
+   - When a block takes more than 80 % of its time, the voice limit drops by one. The voices over the limit are shed
+     (the oldest released first, then the oldest held), each fading out in 5 ms like a steal. It does not shed again
+     while they fade.
+   - After ~1 s (172 blocks) under 55 %, one voice comes back.
+   - New notes and unison stacks respect the limit.
+   - Test: `test_render cpu_guard_sheds`. At 120 % for six voices it sheds to four, with no output step beyond the
+     steady sound's, and recovers to six.
+
+### What it sounds like now
+
+These are the differences against the first pass, by ear-relevant effect; not yet listened to (Task 12):
+- **X-Mod** is sampled at 22 kHz with interpolation, so its very top sidebands differ slightly.
+- **The filter's output** is not bit-identical (float). The responses are within the existing test tolerances.
+- **Envelopes** step every 0.36 ms, with linear segments between steps.
+- **Hard sync with VCO 2 above 4 kHz** aliases more: the figures are in item 3 above.
+- **When the guard sheds**, voices drop out with a 5 ms fade, as a voice steal does.
+
+Host yardstick (`tests/cpu_host.sh`, x86-64 instructions per sample):
+
+| patch | first pass | now |
+|---|---|---|
+| init chord | 2110 | 1805 |
+| musical | — | 2749 |
+| worst | 4900 | 4092 |
+
+### Flash / RAM (device build, Pro, CI)
+
+| | first pass | now |
+|---|---|---|
+| image (of 619,520) | 100,800 B | 116,448 B (+15,648: the specialised passes and the FPU path) |
+| RAM .data+.bss | 23,684 B | 24,100 B |
+| pool | 47,092 B | 47,092 B |
+| `sizeof(synth_t)`, 6 voices | 2,184 B | 2,600 B |
+| `sizeof(synth_t)`, 4 voices | 1,672 B | 1,968 B |
+
+### Concerns
+
+- **No cache model.** fm1-emu does not model a cache: the harness runs from SRAM, while on the device the synth runs
+  from cached XIP flash.
+- **The interrupt's own costs are not included:** the queue drain, the fade, USB and the key scan.
+- **The CPU guard relies on `fm1_ticks()`** (TIMER4, 24 per µs) being readable in the audio interrupt.
+- **The app is now built with `-mcpu=r3 -mfprev1`.** The device build and every host test pass in CI, but nothing
+  has run on a keyboard.
+
+The first pass's record follows.
+
+## Phase-1 CPU gate (Task 11, first pass): result BLOCKED, NVOICE left at 6
 
 **Rule** (spec "Constraints", plan Task 11): `NVOICE = 6` if the 6-voice worst case takes less than 50 % of the audio
 block in **both** cycle models at 240 MHz. If not, profile the hot spots and optimise once. If it is still over,
