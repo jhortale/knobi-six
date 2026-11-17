@@ -83,6 +83,8 @@ static void ctl_program_change(int32_t bank, int32_t prog)
 
 static uint32_t ctl_arp_r;                 /* the arp ring's read index (main loop) */
 static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bit a note) */
+static uint8_t ctl_arp_ch[128];            /* the channel each one's note-on went out on (its note-off's, final review 5:
+                                            * MIDI CH may change during its gate) */
 static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
 static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
 static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
@@ -97,16 +99,24 @@ static void ctl_arp_out(void)
     for (; ctl_arp_r != w; ctl_arp_r++) {
         uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
         uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
-        if (vel && ctl_glob[G_PARAM_TX] && ctl_glob[G_LOCAL]) { midi_send(0x90u | ch, note, vel); *m |= bit; ctl_arp_outs++; }
-        else if (!vel && (*m & bit)) { midi_send(0x80u | ch, note, 0); *m &= ~bit; ctl_arp_offs++, ctl_arp_offch = (uint8_t)ch; }
+        if (vel && ctl_glob[G_PARAM_TX] && ctl_glob[G_LOCAL]) {
+            midi_send(0x90u | ch, note, vel);
+            *m |= bit, ctl_arp_ch[note] = (uint8_t)ch;
+            ctl_arp_outs++;
+        } else if (!vel && (*m & bit)) {
+            midi_send(0x80u | ctl_arp_ch[note], note, 0);
+            *m &= ~bit;
+            ctl_arp_offs++, ctl_arp_offch = ctl_arp_ch[note];
+        }
     }
 }
-/* the receiver has the arp's note on (sent, its off not yet): the key that now goes out raw takes it over (returns 1;
- * the arp's later note-off is then not sent: its ARP OFF reaches the engine after the main loop's pass) */
-static int ctl_arp_take(uint32_t note)
+/* the receiver has the arp's note on (sent, its off not yet) on channel ch: the key that now goes out raw on ch takes it
+ * over (returns 1; the arp's later note-off is then not sent: its ARP OFF reaches the engine after the main loop's pass).
+ * On another channel (MIDI CH changed meanwhile) not: the key sends its own note-on, the arp's off goes on its own */
+static int ctl_arp_take(uint32_t note, uint32_t ch)
 {
     uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[(note & 127u) >> 5];
-    if (!(*m & bit)) return 0;
+    if (!(*m & bit) || ctl_arp_ch[note & 127u] != ch) return 0;
     *m &= ~bit;
     return 1;
 }

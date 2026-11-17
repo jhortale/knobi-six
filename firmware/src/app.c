@@ -214,7 +214,7 @@ static void app_main(void)
             uint8_t ko = (uint8_t)ctl_keys_out();
             for (k = 0; k < FM1_NKEY; k++)
                 if (key_note[k] && key_out[k] != ko) {
-                    if (ko && ctl_arp_take(key_note[k])) {}   /* (the arp's note on there: the key's now) */
+                    if (ko && ctl_arp_take(key_note[k], ch)) {}   /* (the arp's note on there: the key's now) */
                     else if (ko) midi_send(0x90u | ch, key_note[k], key_vel[k]), keys_tx_on++;
                     else midi_send(0x80u | ch, key_note[k], 0), keys_tx_off++;
                     key_out[k] = ko;
