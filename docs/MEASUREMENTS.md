@@ -1,5 +1,22 @@
 # Measurements
 
+## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
+
+The listening round's fixes (FILTER FREQ re-anchored to 16 Hz .. 18.8 kHz, the bus DC blocker at 5 Hz and the new
+soft limiter, the autosave after 3 s of quiet) add per-sample work only on the bus: per frame, two float
+multiply-adds, four int/float conversions and the limiter's knee test (its division only above -4.4 dBFS). Against
+CI run 44018881050 (the commit before), 6 voices, cycles per 256-frame block:
+
+| patch | emu before | emu after | hw before | hw after | 240 MHz hw |
+|---|---|---|---|---|---|
+| musical C3..C5 | 776,089 | 778,541 (+2,452) | 1,116,104 | 1,119,500 (+3,396) | 80.1 -> 80.4 % |
+| musical C5..C7 | 891,468 | 894,504 (+3,036) | 1,271,505 | 1,275,830 (+4,325) | 91.3 -> 91.6 % |
+| init chord | 640,305 | 643,654 (+3,349) | 905,734 | 910,575 (+4,841) | 65.0 -> 65.4 % |
+
+About 13-19 hw cycles a frame (+0.3 % of the block); the musical patches also sound different now (FILTER FREQ 90 is
+~770 Hz on the new map, 262 Hz before), which the filter's float path does not charge for. NVOICE stays 6; the CPU
+guard is unchanged.
+
 ## Phase-1 CPU gate after the performance push (Task 11, second pass): NVOICE not decided, the CPU guard on
 
 **The gate** (João, replacing "every destination at full"): the **musical stress patch** at 6 voices must take less
