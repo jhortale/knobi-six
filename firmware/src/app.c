@@ -54,6 +54,9 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #endif
 #include "synth/voices.c"
 #include "engine.c"
+#if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
+#include "cpu1_probe.c"
+#endif
 #include "ui/controls.c"                        /* the panel: screens' bindings, pot modes, pads (after engine.c) */
 #include "ui/midi_map.c"                        /* MIDI in and the CC map */
 #include "ui/panel_gfx.c"                       /* the panel's drawing parts: knobs, 7-segment digits, wood... */
@@ -69,6 +72,9 @@ static void app_audio(int32_t *out, uint32_t n)
     dual_test_audio(out, n);
 #else
     eng_render(out, n);                         /* the queued events, then n frames added into out (WRITE's fade) */
+#if KNOBI_CPU1_PROBE
+    c1probe_audio();                            /* the probe's checks on CPU1 (nothing into out) */
+#endif
 #endif
     if (app_mono)
         for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;

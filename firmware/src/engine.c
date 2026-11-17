@@ -330,10 +330,18 @@ static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of 
     synth_render_set(j->s, j->mask, j->bus, n);
     j->ticks += eng_ticks() - t0;
 }
+#if KNOBI_CPU1_PROBE
+/* the CPU1 probe build (cpu1_probe.c): its own test renders force one core (0) or two (1) whatever DUAL CORE says;
+ * -1 (outside them): DUAL CORE decides, as in any KNOBI_CPU1 build */
+static volatile int8_t eng_split_force = -1;
+#define ENG_DUAL_NOW() (eng_split_force < 0 ? eng_dual : (uint8_t)eng_split_force)
+#else
+#define ENG_DUAL_NOW() eng_dual
+#endif
 static void eng_split(synth_t *s, int32_t *bus, uint32_t n)
 {
     uint32_t a, b;
-    if (eng_dual && !eng_c1_failed && synth_balance(s, &a, &b) >= 2u) {
+    if (ENG_DUAL_NOW() && !eng_c1_failed && synth_balance(s, &a, &b) >= 2u) {
         eng_c1.s = s, eng_c1.mask = b, eng_c1.n = n;
         if (cpu1_post(cpu1_job_voices, &eng_c1) == 0) {
             synth_render_set(s, a, bus, n);

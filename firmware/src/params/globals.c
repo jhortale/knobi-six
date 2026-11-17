@@ -89,6 +89,10 @@ void globals_load(globals_t *g)
     else if (gb) *g = b, globals_at = 1;
 #if KNOBI_CPU1
     g->v[G_DUAL] = (int8_t)(globals_dual_saved = (int8_t)globals_dual_read());
+#if KNOBI_CPU1_PROBE
+    g->v[G_DUAL] = 0;                                 /* the CPU1 probe: DUAL CORE OFF at every start, whatever was saved
+                                                       * (the player turns it on once the probe's checks pass) */
+#endif
 #endif
 }
 

@@ -4,7 +4,7 @@
 """Build KNOBI-SIX (on Dinghy, Felucca / SLOOP's platform) for the M-Vave SMK-37: the app, the update loader and an
 installable .fwsc package.
 
-  tools/build.py [--release X.Y[-suffix]] [--model pro|elite|mke]
+  tools/build.py [--release X.Y[-suffix]] [--model pro|elite|mke] [--probe-cpu1]
 
 Outputs in build/: app.bin (app), loader/ota.bin (update loader), knobi-six.fwsc (package; knobi-six-local.fwsc with
 the local factory bank). See README.md for the
@@ -19,6 +19,11 @@ The factory bank (docs/FACTORY_BANK.md): firmware/gen/factory_bank.h, when it is
 by the user (tools/ob6_import.py), and the image then contains it. A --release build refuses to run with it there (a
 published build never contains it); any other build names the package knobi-six-local*.fwsc and warns that it must not
 be shared.
+
+--probe-cpu1: the CPU1 probe for a unit's first run of the second core (docs/SMOKE_TEST.md "CPU1 probe";
+firmware/src/cpu1_probe.c): KNOBI_CPU1=1 plus -DKNOBI_CPU1_PROBE=1, the normal firmware with CPU1's checks on the
+Globals screen, DUAL CORE OFF at every start; the package knobi-six-cpu1probe.fwsc (-elite, -mke after it). Never a
+release (refused with --release), never the default package.
 
 The JieLi toolchain is Linux x86-64 only. JIELI_TOOLCHAIN points at it; on
 macOS (or with JIELI_DOCKER=1) each tool runs in a linux/amd64 container.
@@ -73,6 +78,7 @@ PRODUCT = "SMK-37 Pro_" + IDENT
 VERSION = None                      # APP_VER for release builds
 CPU1 = os.environ.get("KNOBI_CPU1", "0") == "1"   # the second core (hal/fm1_cpu1.h; docs/API.md "Second core"): off
                                     # by default, in CI and in every release; KNOBI_CPU1=1 ./build.sh -> knobi-six-cpu1*.fwsc
+PROBE = False                       # --probe-cpu1 (main): the CPU1 probe build (CPU1 too)
 FACTORY_H = FW / "gen" / "factory_bank.h"   # the user's own imported OB-6 bank (never committed, never published)
 
 
@@ -210,6 +216,8 @@ def build_app():
     if CPU1:                         # the second core: its entry, its stacks and the fault resume (fm1_cpu1.S, fm1_vec.S)
         flags.append("-DKNOBI_CPU1=1")
         sdefs = ["-DKNOBI_CPU1=1"]
+    if PROBE:                        # the CPU1 probe (firmware/src/cpu1_probe.c)
+        flags.append("-DKNOBI_CPU1_PROBE=1")
     cmds = [("cc", *sdefs, "-c", FW / "crt0.S", "-o", OUT / "crt0.o"),
             ("cc", *sdefs, "-c", FW / "hal" / "fm1_vec.S", "-o", OUT / "fm1_vec.o"),
             ("cc", *sdefs, "-c", FW / "hal" / "fm1_isr.S", "-o", OUT / "fm1_isr.o"),
@@ -466,13 +474,20 @@ def mmio_check():
 
 
 def main():
-    global PRODUCT, VERSION, BOARD, APP_SLOT
+    global PRODUCT, VERSION, BOARD, APP_SLOT, CPU1, PROBE
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", metavar="X.Y", help="release build: the version string X.Y (the identity stays)")
     ap.add_argument("--model", choices=sorted(MODELS), default=None,
                     help="smk37: the model name, pro (default), elite or mke (default: $MODEL, else pro)")
     ap.add_argument("--sdk", type=Path, help="JieLi AC79 SDK checkout (default: $AC79_SDK)")
+    ap.add_argument("--probe-cpu1", action="store_true",
+                    help="the CPU1 probe build (KNOBI_CPU1=1 + checks; knobi-six-cpu1probe.fwsc; never a release)")
     a = ap.parse_args()
+    if a.probe_cpu1 and a.release:
+        raise SystemExit("--probe-cpu1: a probe is never a release (docs/SMOKE_TEST.md \"CPU1 probe\"); "
+                         "drop --release")
+    if a.probe_cpu1:
+        CPU1 = PROBE = True
     model = (a.model or os.environ.get("MODEL") or "pro").lower()
     if model not in MODELS:
         raise SystemExit(f"MODEL={model}: pro, elite or mke")
@@ -486,7 +501,7 @@ def main():
     PRODUCT = BOARD_PREFIX[BOARD] + IDENT
     local = factory_guard(a.release)    # (before anything is built)
     if CPU1:                        # never the default package: a build with the second core is named so
-        suffix = "-cpu1" + suffix
+        suffix = ("-cpu1probe" if PROBE else "-cpu1") + suffix
     name = f"knobi-six{local}{suffix}.fwsc"
     if a.release:                   # one digit each (X.Y; a .Z only in the text)
         m = re.fullmatch(r"(\d)\.(\d)(\.\d)?(-[A-Za-z0-9]+)?", a.release)

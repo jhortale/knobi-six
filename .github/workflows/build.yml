@@ -109,7 +109,8 @@ jobs:
   # The second core (Phase 2 Task 2, docs/MEASUREMENTS.md "Dual core"): the default build has no CPU1 code (build.py
   # says so); the KNOBI_CPU1=1 build (hal/fm1_cpu1.h, from felucca-bsp) and its test hooks booted in fm1-emu (MIT,
   # pinned, dual core): start + ping, nostart, hang, flaky core 1; Task 3: the voices on two cores bit-exact with one,
-  # a hung voice job, WRITE + autosave with DUAL CORE on (tests/cpu1_emu/). Builds and emulates only.
+  # a hung voice job, WRITE + autosave with DUAL CORE on (tests/cpu1_emu/); Task 4: the CPU1 probe package (its own
+  # artifact, knobi-six-cpu1probe) and its image in the emulator, plain and with a flaky core 1. Builds and emulates only.
   cpu1-emu:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -162,7 +163,31 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, dualmid, write)
+      # Task 4: the CPU1 probe for the first device run (docs/SMOKE_TEST.md "CPU1 probe"): its own artifact, never the
+      # default package (the firmware job's knobi-six-pro) and never a release (build.py refuses --release with it)
+      - name: CPU1 probe package (--probe-cpu1, knobi-six-cpu1probe.fwsc)
+        run: |
+          if ./build.sh --probe-cpu1 --release 9.9 > /dev/null 2>&1; then echo "--release --probe-cpu1 was accepted"; exit 1; fi
+          ./build.sh --probe-cpu1 | tee build-probe.log
+          mkdir -p build/probe
+          cp build/knobi-six-cpu1probe.fwsc build/app.map build/app.dis build/probe/
+          {
+            echo '### CPU1 probe package (separate artifact knobi-six-cpu1probe; never the default or a release)'; echo '```'
+            grep -E 'ok   |app  |package' build-probe.log
+            ls -l build/probe/knobi-six-cpu1probe.fwsc; sha256sum build/probe/knobi-six-cpu1probe.fwsc
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knobi-six-cpu1probe
+          path: |
+            build/probe/knobi-six-cpu1probe.fwsc
+            build/probe/app.map
+            build/probe/app.dis
+          if-no-files-found: error
+
+      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, dualmid, write, probe, probeflaky)
         run: |
           bash tests/cpu1_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/cpu1emu
           { cat build/cpu1emu/summary.md; echo; echo '```'; cat build/cpu1emu/plain.checks; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -176,4 +201,5 @@ jobs:
             build/cpu1emu/*.log
             build/cpu1emu/*.checks
             build/cpu1emu/*.map
+            build/cpu1emu/probe_screen.png
           if-no-files-found: warn

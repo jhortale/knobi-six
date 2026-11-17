@@ -28,6 +28,12 @@
 #   write    test hook 8: DUAL CORE on, a chord held, WRITE + ENTER (the program slot's erases and writes), then the
 #            globals' autosave (the extended record, read back), a chord again: CPU1 stays IDLE (the flash gate never
 #            had to retire it), the jobs go on, no fault, the audio runs
+#   probe    Task 4, the CPU1 probe as João would install it (tools/build.py --probe-cpu1, knobi-six-cpu1probe.fwsc;
+#            firmware/src/cpu1_probe.c), GLOBE at 800 ms, the screen saved at the end (probe_screen.png): a ping a
+#            second, a 16 KB pattern round every 4 blocks, the FPU check, dual vs single on the test patch; the
+#            counters go up, no error, no misread, FPU and DUAL=SINGLE OK, CPU1 IDLE
+#   probeflaky the probe image with --flaky-core1 (as flaky): the misreads show (MISREAD, ERR), CPU1 retired
+#            (FAIL MISREAD), the audio runs
 #   bash tests/cpu1_emu/run.sh FM1_EMU OUTDIR     (as ./build.sh: JIELI_TOOLCHAIN, AC79_SDK, Pillow; Docker off Linux)
 # It leaves build/ holding the last CPU1 image: run ./build.sh again for the default one.
 set -euo pipefail
@@ -38,15 +44,17 @@ MS=${CPU1_EMU_MS:-1500}
 RATE=${CPU1_EMU_FLAKY:-1e-7}
 DMS=${CPU1_EMU_DUAL_MS:-2400}                    # dual, dualfail: the boot + 8 segments of 40 blocks (1.86 s)
 WMS=${CPU1_EMU_WRITE_MS:-6500}                   # write: up to the autosave (~5 s) and a chord after it
+PMS=${CPU1_EMU_PROBE_MS:-4000}                   # probe: four pings (one a second from the first block)
 
-build() {   # name, test hook (empty: none)
+build() {   # name, test hook (empty: none), build.py options...
+    local name=$1 hook=$2; shift 2
     rm -f build/knobi-six*-cpu1*.fwsc
-    if ! KNOBI_CPU1=1 DINGHY_DEFS="${2:+-DKNOBI_CPU1_TEST=$2}" ./build.sh > "$OUT/$1.build.log" 2>&1; then
-        cat "$OUT/$1.build.log"; exit 1
+    if ! KNOBI_CPU1=1 DINGHY_DEFS="${hook:+-DKNOBI_CPU1_TEST=$hook}" ./build.sh "$@" > "$OUT/$name.build.log" 2>&1; then
+        cat "$OUT/$name.build.log"; exit 1
     fi
-    cp build/knobi-six*-cpu1*.fwsc "$OUT/$1.fwsc"
-    cp build/app.map "$OUT/$1.map"
-    grep -E '^  (ok|FAIL)' "$OUT/$1.build.log" > "$OUT/$1.checks"
+    cp build/knobi-six*-cpu1*.fwsc "$OUT/$name.fwsc"
+    cp build/app.map "$OUT/$name.map"
+    grep -E '^  (ok|FAIL)' "$OUT/$name.build.log" > "$OUT/$name.checks"
 }
 sym() { grep -E " $2\$" "$OUT/$1.map" | cut -c1-8; }
 emu() {     # case, image, dump symbol, words, extra emu options...
@@ -64,6 +72,7 @@ build dual 6
 build dualfail 7
 build write 8
 build dualmid 9
+build probe "" --probe-cpu1
 emu plain plain fm1_cpu1_mb 13
 emu start test3 cpu1_test 20
 emu nostart nostart cpu1_test 20
@@ -74,5 +83,9 @@ RUN_MS=$DMS emu dual dual dual_test 66 --keys 800:GLOBE --snap 2000 &
 RUN_MS=$DMS emu dualfail dualfail dual_test 66 &
 RUN_MS=$DMS emu dualmid dualmid dual_test 66 &
 RUN_MS=$WMS emu write write dual_test 66 &
+RUN_MS=$PMS emu probe probe c1probe 29 --keys 800:GLOBE --snap $((PMS - 100)) &
+RUN_MS=$PMS emu probeflaky probe c1probe 29 --flaky-core1 "$RATE" --seed 7 --cpu1-survives &
 wait
-python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" | tee "$OUT/summary.md"
+python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).save(sys.argv[2])' \
+    "$OUT/work/lcd_$((PMS - 100)).bmp" "$OUT/probe_screen.png" || true   # (the probe's Globals screen at the end)
+python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" "$PMS" | tee "$OUT/summary.md"

@@ -150,7 +150,10 @@ shed voices since power-on, the line white once it has: [MEASUREMENTS.md](MEASUR
 raw wheels and faders (checking a unit's travel). A `KNOBI_CPU1=1` build adds the second core after the wheels:
 `C1 OFF` (DUAL CORE off), `C1 ON 40%` (on; the second core's own job time, % of the block; the CPU line stays the
 first core's whole interrupt, the waits for the second included), `C1 FAIL` (on, but the second core is not running:
-it failed, or it never started; one core until power-off).
+it failed, or it never started; one core until power-off). The CPU1 probe (`--probe-cpu1`, a test package only) puts
+four lines of its own above these, `C1 PING n  ERR n  MISREAD n`, `FPU OK  DUAL=SINGLE OK`, `LOAD 1C x%  2C y%  JOB z%`
+and `PROBE  C1 IDLE  DUAL OFF` (the second core's state and the DUAL CORE global, which moves there from the wheels'
+line), and drops the version line: [SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe".
 
 The OB-6 globals not here: MIDI clock and clock port (phase 2), the sequencer jack, alternative tunings, the SysEx and
 MIDI-out ports and program dumps (later, with SysEx), arp beat sync (phase 2).

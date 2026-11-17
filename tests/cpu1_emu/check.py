@@ -9,6 +9,7 @@ import sys
 
 out, ms, rate = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 dms, wms = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (None, None)
+pms = int(sys.argv[6]) if len(sys.argv) > 6 else None
 TICKS_PER_US = 24
 BLOCK_US = 256 * 1_000_000 // 44100                       # one audio block (HALF_FRAMES at 44.1 kHz): 5804 us
 STATE = {0: "OFF", 1: "IDLE", 2: "BUSY", 3: "FAIL"}
@@ -190,7 +191,46 @@ if dms:
          f"back {t['dual_read']}; jobs {t['jobs_before']} before, {t['jobs_write']} after the WRITE, {t['jobs_save']} at the "
          f"autosave, {t['jobs_after']} after; {STATE.get(t['state'])}, rejected {t['rejected']}; {r['halves']} audio halves")
 
-print(f"### Second core in fm1-emu ({ms} ms each; dual and dualfail {dms} ms, write {wms} ms)\n")
+# Task 4: the CPU1 probe (firmware/src/cpu1_probe.c c1probe)
+PR = ["magic", "blocks", "pings", "errs", "c0_mis", "c1_mis", "c0_bits", "c1_bits", "rounds", "fpu_ok", "fpu_bad",
+      "fpu_trap", "fpu_c0", "fpu_c1", "dual_ok", "dual_bad", "dual_none", "sum1", "sum2", "jobs2", "load1", "load2",
+      "loadj", "passes", "state", "why", "rejected", "mbjobs", "c1_failed"]
+if pms:
+    def pr(r):
+        w = r["words"]
+        return dict(zip(PR, w + [None] * (len(PR) - len(w))))
+
+    r = load("probe")
+    t = pr(r)
+    mis = (t["c0_mis"] or 0) + (t["c1_mis"] or 0) + (t["rejected"] or 0)
+    pings = pms // 1000 - 1                               # (one a second from the first block, ~0.3 s in)
+    case("probe", "the CPU1 probe image (--probe-cpu1): ping, 16 KB patterns, FPU, dual vs single, timing",
+         {**common(r, halves=min_halves(pms)), "magic": t["magic"] == 0x52503143,
+          f"pings counted (>= {pings}), no error": (t["pings"] or 0) >= pings and t["errs"] == 0,
+          "pattern rounds (>= 100), no misread": (t["rounds"] or 0) >= 100 and mis == 0,
+          "FPU: CPU1 = CPU0, every check; no trap": (t["fpu_ok"] or 0) >= pings and t["fpu_bad"] == 0
+              and t["fpu_trap"] == 0 and t["fpu_c0"] == t["fpu_c1"],
+          "DUAL=SINGLE: every pass equal, with CPU1 jobs": (t["dual_ok"] or 0) >= 1 and t["dual_bad"] == 0
+              and t["dual_none"] == 0 and t["sum1"] == t["sum2"] and (t["jobs2"] or 0) > 0,
+          "timed (LOAD 1C, 2C, JOB)": (t["passes"] or 0) >= 1 and (t["load1"] or 0) > 0 and (t["load2"] or 0) > 0,
+          "CPU1 IDLE, no failure": (t["state"], t["why"], t["c1_failed"]) == (1, 0, 0)},
+         f"PING {t['pings']} ERR {t['errs']} MISREAD {mis} ({t['rounds']} rounds of 16 KB); FPU {t['fpu_ok']} ok "
+         f"{t['fpu_bad']} bad {t['fpu_trap']} trap ({(t['fpu_c0'] or 0):08x}); DUAL=SINGLE {t['dual_ok']} ok "
+         f"{t['dual_bad']} bad ({(t['sum1'] or 0):08x}, {t['jobs2']} CPU1 jobs a pass); LOAD 1C {t['load1']}% 2C "
+         f"{t['load2']}% JOB {t['loadj']}% (emulator time); {STATE.get(t['state'])}; {r['halves']} audio halves")
+    r = load("probeflaky")
+    t = pr(r)
+    mis = (t["c0_mis"] or 0) + (t["c1_mis"] or 0) + (t["rejected"] or 0)
+    case("probeflaky", f"the probe with --flaky-core1 {rate} --seed 7: the misreads show, CPU1 retired",
+         {**common(r, halves=min_halves(pms)), "misreads injected": (r["misreads"] or 0) > 0,
+          "MISREAD > 0 and ERR > 0 on the screen": mis > 0 and (t["errs"] or 0) > 0,
+          "FAIL (MISREAD)": (t["state"], t["why"]) == (3, 1)},
+         f"{r['misreads']} misreads injected; PING {t['pings']} ERR {t['errs']} MISREAD {mis} (patterns "
+         f"{t['c0_mis']} + {t['c1_mis']}, mailbox {t['rejected']}); {STATE.get(t['state'])} ({WHY.get(t['why'])}); "
+         f"{r['halves']} audio halves")
+
+print(f"### Second core in fm1-emu ({ms} ms each; dual and dualfail {dms} ms, write {wms} ms"
+      + (f", probe {pms} ms" if pms else "") + ")\n")
 print("| case | what | result | seen |")
 print("| --- | --- | --- | --- |")
 for row in rows:

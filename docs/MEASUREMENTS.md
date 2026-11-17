@@ -118,6 +118,24 @@ the version-1 record in blobs 0 / 1 is byte for byte the same in both builds; a 
 blob 2 ("DUAL", the value, a CRC16), which a default build never touches, so swapping the builds keeps the globals both
 ways; blob 2 missing or broken: OFF (`test_store_cpu1` `globals_dual_blob`).
 
+### Phase 2 Task 4: the CPU1 probe in fm1-emu (`--probe-cpu1`; the package for the first device run)
+
+The probe image (`./build.sh --probe-cpu1`, `knobi-six-cpu1probe.fwsc`, `src/cpu1_probe.c`; the device procedure:
+[SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe") booted in fm1-emu `60645a5`, 4,000 emulated ms, GLOBE at 800 ms
+(`tests/cpu1_emu/run.sh` cases `probe`, `probeflaky`; CI job `cpu1-emu`, which also uploads the package as the artifact
+`knobi-six-cpu1probe` and the screen as `probe_screen.png`). Image 225,844 B, RAM .data+.bss 47,284 B (+19,408 B on
+the CPU1 build: the 16 KB pattern buffer and the test patch's synth).
+
+| case | expected | seen |
+|---|---|---|
+| probe | the counters go up, no error, no misread, FPU and DUAL=SINGLE OK, CPU1 IDLE | PING 4, ERR 0, MISREAD 0 over 157 rounds of 16 KB; FPU 4 ok (both cores `d755fe69`), no trap; DUAL=SINGLE 2 passes equal (`17408792`, 128 CPU1 jobs a pass); LOAD 1C 45 % 2C 26 % JOB 19 % (the emulator's time, no cost model: as Task 3's -41 %); IDLE; 634 audio halves |
+| probeflaky | `--flaky-core1 1e-7 --seed 7 --cpu1-survives`: the errors show | 40 misreads injected; ERR 1, MISREAD 40 (the mailbox check refused them; the misread came before the first probe ping), FAIL (MISREAD); the audio ran (634 halves) |
+
+The screen at the end of `probe`: `C1 PING 4  ERR 0  MISREAD 0`, `FPU OK  DUAL=SINGLE OK`, `LOAD 1C 45%  2C 26%  JOB 19%`,
+`PROBE  C1 IDLE  DUAL OFF`, then the CPU, wheels and faders lines. The default build stays byte for byte the same
+(app.bin, app.dis, ota.bin, the package; also the plain `KNOBI_CPU1=1` app.bin). What the emulator cannot say (no
+cache or bus model, no supply-dependent misreads, no FPU trap path) is what the device run is for.
+
 ## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
 
 The listening round's fixes (FILTER FREQ re-anchored to 16 Hz .. 18.8 kHz, the bus DC blocker at 5 Hz and the new

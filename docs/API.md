@@ -294,6 +294,14 @@ than two voices busy, or CPU1 off: one core. A failed join renders set B on CPU0
 core (Globals: `C1 FAIL`). `voice_t` (320 B) and `synth_t.voice[]` sit on 32-byte cache lines (the AC791N's: the SDK's
 `asm/cache.h`), CPU1's bus and counter on lines of their own.
 
+The CPU1 probe (`./build.sh --probe-cpu1`, package `knobi-six-cpu1probe.fwsc`, `KNOBI_CPU1=1` plus
+`KNOBI_CPU1_PROBE=1`; never a release, never the default package) is that build plus `src/cpu1_probe.c`: inside the
+audio interrupt, after each block's render, a ping a second, a 16 KB shared-RAM pattern round every 4th block (both
+directions), an FPU workload on both cores compared bit for bit, and a test patch rendered (to a scratch buffer) on one
+core and on two (`eng_split_force`) with the checksums compared and both timed. DUAL CORE starts OFF at every boot of
+the probe. The Globals screen shows the results ([CONTROLS.md](CONTROLS.md); the device run:
+[SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe").
+
 ## Build options
 
 `./build.sh` takes `--release X.Y` and `--model pro|elite|mke` (or `MODEL=`): the SMK-37 Pro, Elite and MKE-P37 are
@@ -309,6 +317,7 @@ its own package. `DINGHY_DEFS="-DFELUCCA_UAC=0" ./build.sh` adds defines for a t
 | `CV_MAX` | 240 x 64 | the biggest canvas, in pixels |
 | `SMK_MASTER_FROM_APP` | 0 | 1: K1 is the app's, the app sets the volume |
 | `KNOBI_CPU1` | 0 | 1: the second core (an environment variable: `KNOBI_CPU1=1 ./build.sh`; "Second core" above) |
+| `KNOBI_CPU1_PROBE` | 0 | 1: the CPU1 probe (`./build.sh --probe-cpu1`, which sets `KNOBI_CPU1` too; "Second core" above) |
 
 The app is built with `-Os`. Leave it so: with `-O2` (the unity build puts usb.c in it) the USB-MIDI IN babbled on an
 FM-1 and the host dropped the port.

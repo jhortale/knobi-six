@@ -128,9 +128,14 @@ static const wdg_t SCR_GLOBALS_W[] = {
     {W_SEGENC, 157, 81, 76, 39, 6, 0, "VEL CURVE"},
     PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
     PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
+#if KNOBI_CPU1_PROBE
+    {W_DIAG, 7, 148, 226, 62, 0, 0, 0},           /* (the CPU1 probe's four lines over the usual three; no version line) */
+    PADHINT(210), FOOTER, END};
+#else
     {W_DIAG, 7, 148, 226, 30, 0, 0, 0},
     {W_VERTXT, 7, 182, 226, 9, 0, 0, 0},
     PADHINT(204), FOOTER, END};
+#endif
 static const wdg_t *const SCR_W[SCR_COUNT] = {SCR_BOOT_W, SCR_PLAY_W, SCR_VCO_W, SCR_MIX_W, SCR_ENV_W, SCR_LFO_W,
                                               SCR_AT_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
 
@@ -185,6 +190,64 @@ static void scr_c1(char *d)
     d = scr_cat(d, "  C1 ");
     if (q < 2) scr_cat(d, q ? "FAIL" : "OFF");
     else scr_cat(scr_num(scr_cat(d, "ON "), (q - 2) * 5), "%");
+}
+#endif
+#if KNOBI_CPU1_PROBE
+/* the CPU1 probe's lines (cpu1_probe.c), on top of the diagnostics:
+ *   C1 PING n  ERR n  MISREAD n
+ *   FPU OK|BAD|TRAP|--  DUAL=SINGLE OK|BAD|--  [BIT xxxxxxxx: the bits misread]
+ *   LOAD 1C x%  2C y%  JOB z%     (the test patch on one core, on two (CPU0), CPU1's job; -- until measured)
+ *   PROBE  C1 IDLE|BUSY|OFF|FAIL [why]  DUAL OFF|ON n%|FAIL
+ * what is drawn is what is compared (the widget's value) */
+static const char *const SCR_C1ST[4] = {"OFF", "IDLE", "BUSY", "FAIL"};
+static const char *const SCR_C1WHY[6] = {"", " MISREAD", " LATE", " BARRED", " FAULT", " SILENT"};
+static const char *const SCR_CHK[4] = {"--", "OK", "BAD", "TRAP"};
+static char *scr_hex8(char *d, uint32_t v)
+{
+    for (int i = 7; i >= 0; i--) *d++ = "0123456789ABCDEF"[v >> 4 * i & 15u];
+    *d = 0;
+    return d;
+}
+static uint32_t scr_probe_q(void)
+{
+    uint32_t h = c1probe.pings;
+    h = h * 131u + c1probe.errs;
+    h = h * 131u + c1probe_misreads();
+    h = h * 131u + c1probe_bits();
+    h = h * 7u + (uint32_t)c1probe_fpu();
+    h = h * 7u + (uint32_t)c1probe_dual();
+    h = h * 1009u + c1probe.load1 * 1000003u + c1probe.load2 * 999983u + c1probe.loadj * 7919u + c1probe.passes * 31u;
+    h = h * 17u + (c1probe.state & 3u) * 8u + (c1probe.why & 7u);
+    return h;
+}
+static int32_t scr_probe_lines(int32_t cx, int32_t y)   /* draws them from y; returns the y after them */
+{
+    char t[48], *p;
+    uint32_t mis = c1probe_misreads(), bits = c1probe_bits(), st = c1probe.state & 3u, why = c1probe.why;
+    int fpu = c1probe_fpu(), dual = c1probe_dual(), c1 = eng_c1_status();
+    p = scr_num(scr_cat(t, "C1 PING "), (int32_t)c1probe.pings);
+    p = scr_num(scr_cat(p, "  ERR "), (int32_t)c1probe.errs);
+    scr_num(scr_cat(p, "  MISREAD "), (int32_t)mis);
+    pg_text_c(cx, y, &FONT_XS, t, c1probe.errs || mis ? PC_RED : PC_WHITE);
+    p = scr_cat(scr_cat(t, "FPU "), SCR_CHK[fpu]);
+    p = scr_cat(scr_cat(p, "  DUAL=SINGLE "), SCR_CHK[dual]);
+    if (bits) scr_hex8(scr_cat(p, "  BIT "), bits);
+    pg_text_c(cx, y + 9, &FONT_XS, t, fpu >= 2 || dual >= 2 || bits ? PC_RED : PC_WHITE);
+    p = scr_cat(t, "LOAD 1C ");
+    if (!c1probe.passes) scr_cat(p, "--  2C --  JOB --");
+    else {
+        p = scr_num(p, (int32_t)c1probe.load1);
+        p = scr_num(scr_cat(p, "%  2C "), (int32_t)c1probe.load2);
+        scr_cat(scr_num(scr_cat(p, "%  JOB "), (int32_t)c1probe.loadj), "%");
+    }
+    pg_text_c(cx, y + 18, &FONT_XS, t, PC_WHITE);
+    p = scr_cat(scr_cat(t, "PROBE  C1 "), SCR_C1ST[st]);
+    p = scr_cat(p, why < 6u ? SCR_C1WHY[why] : " ?");
+    p = scr_cat(p, "  DUAL ");
+    if (c1 == 1) scr_cat(scr_num(scr_cat(p, "ON "), (int32_t)eng_c1_load), "%");
+    else scr_cat(p, c1 ? "FAIL" : "OFF");
+    pg_text_c(cx, y + 27, &FONT_XS, t, st == CPU1_FAIL ? PC_RED : PC_WHITE);
+    return y + 36;
 }
 #endif
 static int32_t scr_val(uint16_t id)
@@ -302,7 +365,9 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
-#if KNOBI_CPU1
+#if KNOBI_CPU1_PROBE
+        return (int32_t)(h * 2654435761u + scr_cpu_q() + (uint32_t)scr_c1_q() * 40503u + scr_probe_q() * 2246822519u);
+#elif KNOBI_CPU1
         return (int32_t)(h * 2654435761u + scr_cpu_q() + (uint32_t)scr_c1_q() * 40503u);
 #else
         return (int32_t)(h * 2654435761u + scr_cpu_q());   /* (the load in 5 % steps: not a repaint a pass) */
@@ -510,23 +575,30 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_DIAG: {                                 /* the load and the CPU guard (engine.c eng_cpu); the raw wheels
                                                     * and faders (checking a unit's travel) */
         uint32_t q = (uint32_t)scr_cpu_q();
+#if KNOBI_CPU1_PROBE
+        int32_t y = scr_probe_lines(cx, w->y + 1);   /* (the probe's lines first; then the usual, 9 rows apart) */
+#define SCR_DIAG_Y(n) (y + 9 * (n))
+#else
+#define SCR_DIAG_Y(n) (w->y + 1 + 10 * (n))
+#endif
         char *p = scr_num(scr_cat(t, "CPU "), (int32_t)(q & 0xFFu) * 5);
         p = scr_num(scr_cat(p, "% PEAK "), (int32_t)(q >> 8 & 0xFFu) * 5);
         p = scr_num(scr_cat(p, "%  VOX "), (int32_t)(q >> 16 & 0xFu));
         p = scr_num(scr_cat(p, "/"), NVOICE);
         scr_num(scr_cat(p, "  SHED "), (int32_t)(q >> 20));
-        pg_text_c(cx, w->y + 1, &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
+        pg_text_c(cx, SCR_DIAG_Y(0), &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
         p = scr_cat(t, "WHEELS ");
         p = scr_num(p, fm1_in.wheel[0]);
-#if KNOBI_CPU1
+#if KNOBI_CPU1 && !KNOBI_CPU1_PROBE
         scr_c1(scr_num(scr_cat(p, " "), fm1_in.wheel[1]));   /* + "C1 ON 40%" / "C1 OFF" / "C1 FAIL" */
 #else
-        scr_num(scr_cat(p, " "), fm1_in.wheel[1]);
+        scr_num(scr_cat(p, " "), fm1_in.wheel[1]);    /* (the probe: DUAL's state is on its PROBE line) */
 #endif
-        pg_text_c(cx, w->y + 11, &FONT_XS, t, PC_DIM);
+        pg_text_c(cx, SCR_DIAG_Y(1), &FONT_XS, t, PC_DIM);
         p = scr_cat(t, "FADERS");
         for (i = 0; i < 4; i++) p = scr_num(scr_cat(p, " "), fm1_in.fader[i]);
-        pg_text_c(cx, w->y + 21, &FONT_XS, t, PC_DIM);
+        pg_text_c(cx, SCR_DIAG_Y(2), &FONT_XS, t, PC_DIM);
+#undef SCR_DIAG_Y
         break;
     }
     case W_WORD: pg_wordmark(cx - pg_word_w(w->s) / 2, w->y + 1, w->s, PC_WHITE); break;
