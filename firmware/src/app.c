@@ -258,6 +258,10 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "edit")) *got = a0 < P_COUNT_RESERVED ? eng_edit.v[a0] : -1;   /* edit ID: the edit buffer */
     else if (!strcmp(name, "name")) *got = a0 < PROGRAM_NAME_LEN ? (uint8_t)eng_edit.name[a0] : -1;   /* name I: char */
     else if (!strcmp(name, "fade")) *got = eng_fade_g;                 /* the output gain, 32768 = full */
+    else if (!strcmp(name, "vlimit")) *got = eng_vlimit;               /* the CPU guard's voice limit (published) */
+    else if (!strcmp(name, "sheds")) *got = (int)eng_sheds;            /* its sheds since start */
+    else if (!strcmp(name, "load")) *got = eng_load;                   /* the load, % of the block (smoothed) */
+    else if (!strcmp(name, "peak")) *got = eng_peak;                   /* its peak, % (decaying, ~1 s) */
     else if (!strcmp(name, "stored")) {                                /* stored N ID: param ID of program N in flash */
         static program_t p;
         prog_load(a0, &p);

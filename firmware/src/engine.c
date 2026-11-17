@@ -72,6 +72,11 @@ static volatile uint8_t eng_fade_out;     /* producer: 1 = to silence */
 static volatile int32_t eng_fade_g = ENG_FADE_ONE;   /* consumer: the gain now */
 static volatile uint8_t eng_fade_quiet;   /* consumer: whole blocks gone out at gain 0 (saturates) */
 
+#define ENG_LOAD_MAX 999u
+static volatile uint16_t eng_load, eng_peak;   /* the load (eng_cpu) */
+static volatile uint8_t eng_vlimit = NVOICE;
+static volatile uint32_t eng_sheds;
+static uint32_t eng_load_q3, eng_peak_q8;   /* (consumer only) */
 static uint32_t eng_off_pend[4];          /* note-offs waiting for room: bit n = note n (producer only) */
 static uint32_t eng_par_pend[(P_COUNT_PHASE1 + 31u) / 32u];   /* param ids whose latest eng_edit value is not queued */
 static uint8_t eng_panic_pend, eng_alloff_pend, eng_chord_pend;
@@ -105,6 +110,7 @@ static void eng_init(void)                /* the init program; call before audio
     eng_voices = 0;
     eng_last_bend = 8192, eng_last_wheel = eng_last_press = eng_last_hold = 0, eng_last_vol = 127, eng_last_tune = 0;
     eng_fade_out = 0, eng_fade_g = ENG_FADE_ONE, eng_fade_quiet = 0;
+    eng_load = eng_peak = 0, eng_load_q3 = eng_peak_q8 = 0, eng_vlimit = NVOICE, eng_sheds = 0;
     ENG_BARRIER();
     eng_ready = 1;
 }
@@ -263,6 +269,26 @@ static uint32_t eng_ticks(void) { return eng_fake_ticks; }
 static uint32_t eng_ticks(void) { return fm1_ticks(); }
 #endif
 
+/* The load, for the Globals screen's diagnostics line (consumer writes, main loop reads; each a single aligned word or
+ * byte): eng_load the block's load in % of its time (used x 100 / budget, up to 999), smoothed (a one-pole of 8
+ * blocks, ~46 ms); eng_peak the highest block's, decaying toward the load with a time constant of 128 blocks
+ * (~0.74 s: a peak is gone in about a second); eng_vlimit the CPU guard's voice limit; eng_sheds its sheds since
+ * eng_init. */
+static void eng_cpu(uint32_t used, uint32_t budget)
+{
+    uint32_t pct;
+    if (!budget) return;
+    pct = used >= budget * 10u ? ENG_LOAD_MAX : used * 100u / budget;   /* (32-bit: used < 10 budget, ~1.4 M ticks) */
+    if (pct > ENG_LOAD_MAX) pct = ENG_LOAD_MAX;
+    eng_load_q3 += pct - (eng_load_q3 >> 3);
+    if (pct << 8 >= eng_peak_q8) eng_peak_q8 = pct << 8;
+    else eng_peak_q8 -= (eng_peak_q8 - (pct << 8)) >> 7;
+    eng_load = (uint16_t)(eng_load_q3 >> 3);
+    eng_peak = (uint16_t)((eng_peak_q8 + 128u) >> 8);
+    eng_vlimit = eng_synth.vlimit;
+    eng_sheds = eng_synth.sheds;
+}
+
 /* eng_render's 'used' is wall-clock ticks around synth_render: it includes the time of any interrupt that preempted
  * it (USB, the key scan), which is time the block did not have either, so the guard counts it too. */
 static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
@@ -275,7 +301,9 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
 #ifdef DINGHY_HOST
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);
 #endif
-    synth_guard(&eng_synth, eng_ticks() - t0, frames * ENG_TICKS_PER_FRAME_X10 / 10u);
+    uint32_t used = eng_ticks() - t0, budget = frames * ENG_TICKS_PER_FRAME_X10 / 10u;
+    synth_guard(&eng_synth, used, budget);
+    eng_cpu(used, budget);
     eng_voices = (uint8_t)synth_active(&eng_synth);
     tgt = eng_fade_out ? 0 : ENG_FADE_ONE;
     if (g == ENG_FADE_ONE && tgt == ENG_FADE_ONE) return;   /* (the usual case: nothing to do) */

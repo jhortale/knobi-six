@@ -540,6 +540,7 @@ void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
         if (k < 1) k = 1;
         if (k < s->vlimit) s->vlimit = (uint8_t)k;
         else if (s->vlimit > 1) s->vlimit--;
+        s->sheds++;
         for (int n = synth_live(s); n > s->vlimit; n--) {
             int best = -1;
             for (int i = 0; i < NVOICE; i++) {   /* the oldest released first */
@@ -559,9 +560,18 @@ void synth_guard(synth_t *s, uint32_t used, uint32_t budget)
             v->shed = 1, v->key = 0, v->latched = 0, v->pend_off = 0, v->min_gate = 0;
             v->lenv.level = ADSR_ONE, v->lenv.stage = ADSR_RELEASE;
         }
-    } else if ((uint64_t)used * 100u < (uint64_t)budget * SYNTH_GUARD_LO) {
-        if (s->calm < SYNTH_GUARD_HOLD) s->calm++;
-        if (s->calm >= SYNTH_GUARD_HOLD && s->vlimit < NVOICE) s->vlimit++, s->calm = 0;
+    } else if (s->vlimit < NVOICE) {
+        /* back up by one only if the load projected at one voice over the limit, at the measured cost per voice
+         * sounding (used x (vlimit + 1) / busy: with busy = vlimit that is used x (busy + 1) / busy), stays under
+         * SYNTH_GUARD_FIT % (no division: used (vlimit + 1) 100 < FIT budget busy); with nothing sounding (no cost to
+         * measure) when the load is under SYNTH_GUARD_LO %. FIT is under HI with room for the estimate's error, so the
+         * raised limit is not shed again: no oscillation */
+        int busy = 0;
+        for (int i = 0; i < NVOICE; i++) busy += s->voice[i].busy;
+        int fits = busy ? (uint64_t)used * (uint32_t)(s->vlimit + 1) * 100u < (uint64_t)budget * SYNTH_GUARD_FIT * (uint32_t)busy
+                        : (uint64_t)used * 100u < (uint64_t)budget * SYNTH_GUARD_LO;
+        if (!fits) s->calm = 0;
+        else if (++s->calm >= SYNTH_GUARD_HOLD) s->vlimit++, s->calm = 0;
     } else {
         s->calm = 0;
     }

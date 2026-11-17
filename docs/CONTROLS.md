@@ -142,5 +142,10 @@ every 30 s (flash wear). What each does:
 | SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
 | AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
 
+Under the pads, the Globals screen's **diagnostics**: `CPU 65% PEAK 80%  VOX 6/6  SHED 0` (the audio block's load,
+smoothed, and its peak, decaying over ~1 s, in 5 % steps; the CPU guard's voice limit of 6; how many times it has
+shed voices since power-on, the line white once it has: [MEASUREMENTS.md](MEASUREMENTS.md), "CPU guard"), then the
+raw wheels and faders (checking a unit's travel).
+
 The OB-6 globals not here: MIDI clock and clock port (phase 2), the sequencer jack, alternative tunings, the SysEx and
 MIDI-out ports and program dumps (later, with SysEx), arp beat sync (phase 2).

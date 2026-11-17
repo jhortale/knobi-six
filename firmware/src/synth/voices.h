@@ -78,7 +78,8 @@ struct synth {
     int32_t tune;                         /* the globals TRANSPOSE + TUNE, Q16 semitones (added like the bend) */
     uint8_t hold, ctl_left, rates_dirty;
     uint8_t vlimit;                       /* the CPU guard's voice limit, 1..NVOICE (synth_guard) */
-    uint16_t calm;                        /* blocks in a row under SYNTH_GUARD_LO */
+    uint16_t calm;                        /* blocks in a row where one more voice fits (synth_guard) */
+    uint32_t sheds;                       /* the CPU guard's sheds since init (each lowered the limit) */
     float dcx[2], dcy[2];                 /* the bus DC blocker: last input, last output, L R */
 };
 
@@ -101,9 +102,14 @@ int  synth_active(const synth_t *s);                /* voices sounding */
  * fit under it at the measured cost per voice (used / voices sounding; at least one fewer, at least one), and the
  * voices over it are shed at once (the oldest released first, then the oldest held), each fading out linearly in
  * ~2.2 ms (6 control ticks) like a steal and freed as soon as it is silent (no further shedding until they are gone:
- * their fade is in the next measurement); after SYNTH_GUARD_HOLD blocks in a row under SYNTH_GUARD_LO % the limit goes back up by one (hysteresis: a patch on the
- * edge does not toggle every block). New notes respect the limit (they steal instead of taking a free voice). */
+ * their fade is in the next measurement); each shed counts in sheds. The limit goes back up by one after
+ * SYNTH_GUARD_HOLD blocks in a row where one more voice fits: the load projected at limit + 1 voices, at the measured
+ * cost per voice sounding (used x (limit + 1) / voices sounding), under SYNTH_GUARD_FIT % (with no voice sounding: the
+ * load under SYNTH_GUARD_LO %). Projected, not a fixed low mark: the init chord measures ~65 % on the chip, so after a
+ * shed its five voices (~54 %) would sit over a fixed 55 % forever; a patch whose next voice does not fit stays where
+ * it is, a patch on the edge does not toggle. New notes respect the limit (they steal instead of taking a free voice). */
 #define SYNTH_GUARD_HI 80
+#define SYNTH_GUARD_FIT 70
 #define SYNTH_GUARD_LO 55
 #define SYNTH_GUARD_HOLD 172              /* blocks: ~1 s of 256 frames */
 void synth_guard(synth_t *s, uint32_t used, uint32_t budget);

@@ -1,0 +1,43 @@
+# The CPU guard on the device's path (engine.c, synth/voices.h synth_guard), on the host's fake clock: "T cpu TICKS"
+# costs each block TICKS a voice sounding (a block is 139315 ticks: 15789 a voice = 68 % for six, 20897 = 90 %).
+# Probes: "vlimit" the voice limit, "sheds" the sheds, "load" / "peak" the load and its peak (%), as the Globals
+# screen's diagnostics line shows them ("CPU 70% PEAK 90%  VOX 5/6  SHED 1").
+# Six notes at 68 %; a spike to 90 % (other interrupts) sheds one voice; back at 68 % a sixth voice fits (projected
+# 68 % < 70 %), so the limit climbs back after ~1 s and stays: one shed, no oscillation.
+50 btn 12
+100 btn 10
+150 expect 8 screen
+200 cpu 15789
+200 midi 0x90 48 100
+200 midi 0x90 53 100
+200 midi 0x90 57 100
+200 midi 0x90 60 100
+200 midi 0x90 64 100
+200 midi 0x90 67 100
+500 expect 6 voices
+500 expect 6 vlimit
+500 expect 0 sheds
+1000 cpu 20897
+1010 cpu 15789
+1100 expect 1 sheds
+1100 expect 5 vlimit
+1100 expect 5 voices
+1400 shot
+1800 expect 5 vlimit
+2400 expect 6 vlimit
+# a sixth voice again: 68 %, under 80 %: no shed, the limit stays
+2500 midi 0x90 72 100
+2600 expect 6 voices
+4500 expect 6 vlimit
+4500 expect 1 sheds
+4500 shot
+# 85 % for six (19735 a voice): over 80 %, one voice shed; five sound at ~71 %, six would be 85 % (> 70 %): the
+# limit stays at five, no second shed, no oscillation
+4600 cpu 19735
+4700 expect 2 sheds
+4700 expect 5 vlimit
+7000 expect 5 vlimit
+7000 expect 2 sheds
+7000 cpu 0
+7000 midi 0xB0 123 0
+8000 end

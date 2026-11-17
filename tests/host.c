@@ -179,8 +179,10 @@ typedef struct { uint32_t t, keys; int btn; uint8_t st, d1, d2; int8_t enc, encn
 /* SMK-37 builds (BOARD_SMK37) also: "T vel V" (the velocity of the keys pressed from now), "T pad P V" (hardware pad
  * P hit at velocity V, V 0 = let go), "T fader F V" (0..127), "T wheel W RAW" (0 pitch, 1 mod; raw ADC 0..1023),
  * "T xkey K V" (keybed key K 0..36 at V, 0 = let go: the outer keys 0..4, 32..36), "T press P V" (a held pad's
- * pressure now V; "T pad P V" holds it at V, its release at 0); any build: "T shot" (the screen at T -> OUT-T.ppm) */
-enum { HS_NONE, HS_VEL, HS_PAD, HS_FADER, HS_WHEEL, HS_XKEY, HS_SHOT, HS_EXPECT, HS_PRESS };
+ * pressure now V; "T pad P V" holds it at V, its release at 0); any build: "T shot" (the screen at T -> OUT-T.ppm),
+ * "T cpu TICKS" (the CPU guard's fake clock, engine.c: each block costs TICKS a voice sounding; 0, the default, none) */
+enum { HS_NONE, HS_VEL, HS_PAD, HS_FADER, HS_WHEEL, HS_XKEY, HS_SHOT, HS_EXPECT, HS_PRESS, HS_CPU };
+extern uint32_t eng_fake_per_voice;             /* (engine.c, after this file) */
 static const host_ev_t SCRIPT0[] = {
     {200, 1u << 7, -1, 0, 0, 0, -1, 0},                         /* C4 */
     {700, 1u << 7 | 1u << 11 | 1u << 14, -1, 0, 0, 0, -1, 0},   /* + E4 G4: a chord */
@@ -220,6 +222,7 @@ static void read_script(const char *path)
         else if (!strcmp(what, "fader")) { sscanf(line, "%*u %*s %u %u", &a, &b); e.smk = HS_FADER; e.sa = (uint8_t)a; e.sb = (uint16_t)b; }
         else if (!strcmp(what, "wheel")) { sscanf(line, "%*u %*s %u %u", &a, &b); e.smk = HS_WHEEL; e.sa = (uint8_t)a; e.sb = (uint16_t)b; }
         else if (!strcmp(what, "xkey")) { sscanf(line, "%*u %*s %u %u", &a, &b); e.smk = HS_XKEY; e.sa = (uint8_t)a; e.sb = (uint16_t)b; }
+        else if (!strcmp(what, "cpu")) { sscanf(line, "%*u %*s %u", &a); e.smk = HS_CPU; e.keys = a; }
         else if (!strcmp(what, "shot")) e.smk = HS_SHOT;   /* (any board: the screen now -> OUT-<ms>.ppm) */
         else if (!strcmp(what, "expect")) {    /* expect V NAME [A B C D]; a line it cannot read fails the run */
             int *x = host_xarg[host_xn < 4096 ? host_xn : 0], k;
@@ -348,6 +351,8 @@ static void platform_poll(void)                 /* one call = one millisecond */
             if (!ok) host_fails++;
         } else if (script[step].smk == HS_SHOT) {
             write_ppm(fm1_ms);
+        } else if (script[step].smk == HS_CPU) {
+            eng_fake_per_voice = script[step].keys;
         } else if (script[step].smk) {
 #if BOARD_SMK37
             static uint32_t vel = 100;

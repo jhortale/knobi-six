@@ -128,8 +128,8 @@ static const wdg_t SCR_GLOBALS_W[] = {
     {W_SEGENC, 157, 81, 76, 39, 6, 0, "VEL CURVE"},
     PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
     PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
-    {W_DIAG, 7, 152, 226, 20, 0, 0, 0},
-    {W_VERTXT, 7, 178, 226, 9, 0, 0, 0},
+    {W_DIAG, 7, 148, 226, 30, 0, 0, 0},
+    {W_VERTXT, 7, 182, 226, 9, 0, 0, 0},
     PADHINT(204), FOOTER, END};
 static const wdg_t *const SCR_W[SCR_COUNT] = {SCR_BOOT_W, SCR_PLAY_W, SCR_VCO_W, SCR_MIX_W, SCR_ENV_W, SCR_LFO_W,
                                               SCR_AT_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
@@ -162,6 +162,14 @@ static const char *const SCR_ONOFF[2] = {"OFF", "ON"};
 static const char *const SCR_STEREO[2] = {"STEREO", "MONO"};
 static const char *const SCR_SUS[2] = {"N.O.", "N.C."};
 static int32_t scr_prog_shown(void) { return ctl_manual ? -1 : ctl_prog; }   /* the program on the displays, -1 MANUAL */
+/* the diagnostics line's numbers, quantised (what is drawn is what is compared): the load and its peak in 5 % steps
+ * (0..199: up to 995 %), the voice limit, the sheds (up to 999) */
+static int32_t scr_cpu_q(void)
+{
+    uint32_t ld = (eng_load + 2u) / 5u, pk = (eng_peak + 2u) / 5u, sh = eng_sheds;
+    return (int32_t)((ld > 199u ? 199u : ld) | (pk > 199u ? 199u : pk) << 8 | (uint32_t)(eng_vlimit & 15u) << 16 |
+                     (sh > 999u ? 999u : sh) << 20);
+}
 static int32_t scr_val(uint16_t id)
 {
     if (id < P_COUNT_PHASE1) return scr_p->v[id];
@@ -273,7 +281,8 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
                          (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
-        return (int32_t)(h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u);
+        h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
+        return (int32_t)(h * 2654435761u + scr_cpu_q());   /* (the load in 5 % steps: not a repaint a pass) */
     }
     return 0;
 }
@@ -471,14 +480,22 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_text(x, w->y + 2, &FONT_XS, "VOICES", PC_LABEL);
         for (i = 0; i < NVOICE; i++) pg_led(x - 8 - 9 * (NVOICE - 1 - i), w->y + 5, v >> i & 1);
         break;
-    case W_DIAG: {                                 /* the raw wheels and faders (checking a unit's travel) */
-        char *p = scr_cat(t, "WHEELS ");
+    case W_DIAG: {                                 /* the load and the CPU guard (engine.c eng_cpu); the raw wheels
+                                                    * and faders (checking a unit's travel) */
+        uint32_t q = (uint32_t)scr_cpu_q();
+        char *p = scr_num(scr_cat(t, "CPU "), (int32_t)(q & 0xFFu) * 5);
+        p = scr_num(scr_cat(p, "% PEAK "), (int32_t)(q >> 8 & 0xFFu) * 5);
+        p = scr_num(scr_cat(p, "%  VOX "), (int32_t)(q >> 16 & 0xFu));
+        p = scr_num(scr_cat(p, "/"), NVOICE);
+        scr_num(scr_cat(p, "  SHED "), (int32_t)(q >> 20));
+        pg_text_c(cx, w->y + 1, &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
+        p = scr_cat(t, "WHEELS ");
         p = scr_num(p, fm1_in.wheel[0]);
         scr_num(scr_cat(p, " "), fm1_in.wheel[1]);
-        pg_text_c(cx, w->y + 1, &FONT_XS, t, PC_DIM);
+        pg_text_c(cx, w->y + 11, &FONT_XS, t, PC_DIM);
         p = scr_cat(t, "FADERS");
         for (i = 0; i < 4; i++) p = scr_num(scr_cat(p, " "), fm1_in.fader[i]);
-        pg_text_c(cx, w->y + 11, &FONT_XS, t, PC_DIM);
+        pg_text_c(cx, w->y + 21, &FONT_XS, t, PC_DIM);
         break;
     }
     case W_WORD: pg_wordmark(cx - pg_word_w(w->s) / 2, w->y + 1, w->s, PC_WHITE); break;

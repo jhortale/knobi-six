@@ -491,6 +491,69 @@ static void cpu_guard_sheds(void)
     CHECK(synth_active(&eng_synth) == 0 && eng_synth.vlimit == NVOICE);
 }
 
+/* The guard's recovery is projected (voices.h): after a shed it goes back up only where one more voice fits. A load
+ * spike (six voices at 90 %, e.g. other interrupts) sheds to five; then, at a load where six fit (68 %: five sound at
+ * ~57 %, over the old fixed 55 % mark, so a fixed mark never recovered), the limit climbs back to six after
+ * SYNTH_GUARD_HOLD blocks and stays there with six voices sounding; at a load where six do not fit (85 %: five at
+ * ~71 %, six projected at 85 % > SYNTH_GUARD_FIT) it stays at five. In both cases one shed only, no oscillation; and
+ * engine.c publishes the load, its peak, the limit and the sheds (the Globals screen's diagnostics line). */
+static int guard_run(uint32_t per_voice, int extra_note, int *changes, int *lim_mid, int *sheds_end, int *live_end)
+{
+    const uint32_t budget = BLK * ENG_TICKS_PER_FRAME_X10 / 10;
+    int last;
+    eng_init();
+    eng_param(P_MIX_VCO1, 0), eng_param(P_MIX_VCO2, 127), eng_param(P_VCO2_SHAPE, 0);
+    for (int k = 0; k < 6; k++) eng_note(48 + 5 * k, 100);
+    eng_fake_per_voice = 0;
+    render(BLK * 8);
+    eng_fake_per_voice = budget * 90 / 100 / 6;                 /* the spike: six voices at 90 % */
+    render(BLK * 2);
+    int shed_lim = eng_synth.vlimit;
+    eng_fake_per_voice = per_voice;
+    *changes = 0, last = eng_synth.vlimit;
+    for (int b = 0; b < 3 * SYNTH_GUARD_HOLD; b++) {             /* ~3 s */
+        render(BLK);
+        if (b == SYNTH_GUARD_HOLD / 2) *lim_mid = eng_synth.vlimit;
+        if (b == 2 * SYNTH_GUARD_HOLD && extra_note) eng_note(90, 100);   /* a sixth voice again, under the limit */
+        if (eng_synth.vlimit != last) (*changes)++, last = eng_synth.vlimit;
+    }
+    *sheds_end = (int)eng_synth.sheds, *live_end = synth_active(&eng_synth);
+    eng_fake_per_voice = 0;
+    return shed_lim;
+}
+static void cpu_guard_recovers(void)
+{
+    const uint32_t budget = BLK * ENG_TICKS_PER_FRAME_X10 / 10;
+    int ch, mid, sh, live;
+    int shed = guard_run(budget * 68 / 100 / 6, 1, &ch, &mid, &sh, &live);
+    int lim = eng_synth.vlimit, pub_lim = eng_vlimit, pub_sh = (int)eng_sheds, load = eng_load, peak = eng_peak;
+    printf("cpu_guard_recovers: spike to 90 %%: limit %d; at 68 %% for six: limit %d half a second on, %d after 3 s "
+           "(%d change(s)), %d voices sounding, %d shed(s); published: limit %d, sheds %d, load %d %%, peak %d %%\n",
+           shed, mid, lim, ch, live, sh, pub_lim, pub_sh, load, peak);
+    CHECK(shed == 5 && mid == 5 && lim == NVOICE && ch == 1 && sh == 1 && live == 6);
+    CHECK(pub_lim == NVOICE && pub_sh == 1 && load >= 64 && load <= 70 && peak >= load && peak <= 90);
+    shed = guard_run(budget * 85 / 100 / 6, 0, &ch, &mid, &sh, &live);
+    lim = eng_synth.vlimit;
+    printf("cpu_guard_recovers: spike to 90 %%: limit %d; at 85 %% for six: limit %d after 3 s (%d change(s)), "
+           "%d shed(s), load %d %%\n", shed, lim, ch, sh, (int)eng_load);
+    CHECK(shed == 5 && lim == 5 && ch == 0 && sh == 1 && eng_vlimit == 5 && eng_load >= 68 && eng_load <= 74);
+    /* the peak: a block at 90 % among blocks at ~0 % is held, then decays (time constant 128 blocks) */
+    eng_init();
+    eng_note(60, 100);
+    render(BLK * 4);
+    eng_fake_per_voice = budget * 90 / 100;
+    render(BLK);
+    eng_fake_per_voice = 0;
+    int p0 = eng_peak;
+    render(BLK * 128);
+    int p1 = eng_peak;
+    render(BLK * 3 * 128);
+    int p2 = eng_peak;
+    printf("cpu_guard_recovers: a 90 %% block: peak %d %%, %d %% 0.74 s on, %d %% 3 s on (load %d %%)\n", p0, p1, p2,
+           (int)eng_load);
+    CHECK(p0 >= 89 && p0 <= 90 && p1 >= 30 && p1 <= 36 && p2 <= 5 && eng_load == 0);
+}
+
 int main(void)
 {
     voice_worst_case_bounded();
@@ -505,6 +568,7 @@ int main(void)
     midi_volume();
     fade_and_tune();
     cpu_guard_sheds();
+    cpu_guard_recovers();
     if (fails) { printf("test_render: %d FAILED\n", fails); return 1; }
     printf("test_render: all passed\n");
     return 0;

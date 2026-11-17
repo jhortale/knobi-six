@@ -155,7 +155,15 @@ Hot spots (hw cycles per block):
    - The voices over the limit are shed (the oldest released first, then the oldest held). Each holds its VCA gain
      and fades linearly to 0 in 6 control ticks (~2.2 ms), then is freed. The guard does not shed again while they
      fade.
-   - After ~1 s (172 blocks) under 55 %, one voice comes back.
+   - The limit comes back one voice at a time, after ~1 s (172 blocks in a row) where one more voice fits: the load
+     projected at limit + 1 voices, at the measured cost per voice sounding (used x (limit + 1) / voices sounding),
+     under 70 % (with nothing sounding: the load under 55 %). (It was "under 55 %" for 172 blocks; the init chord
+     measures ~65 % in the hw model, so after a shed its five voices, ~54 %, sat on that mark and a patch only a
+     little heavier never got its voice back while playing.) A patch whose next voice does not fit stays where it is:
+     no oscillation.
+   - Every shed is counted; engine.c publishes the load (smoothed), its peak (decaying, ~1 s), the limit and the
+     sheds, and the Globals screen's diagnostics line shows them: `CPU 65% PEAK 80%  VOX 5/6  SHED 1` (5 % steps;
+     white once anything was shed).
    - New notes and unison stacks respect the limit.
    - A long block with no voice sounding is someone else's load (other interrupts): the guard does nothing.
    - Accepted behaviour (controller): on the extreme patches, where even one or two voices can exceed 80 %, the
@@ -166,6 +174,10 @@ Hot spots (hw cycles per block):
        within one block and under 80 % from the second.
      - The output has no step beyond the steady sound's.
      - The limit recovers to six at one voice per 172 calm blocks.
+   - Test: `test_render cpu_guard_recovers` and `tests/scripts/cpu_guard.txt` (the app, the probes `vlimit`, `sheds`,
+     `load`, `peak`; the host's `T cpu TICKS` sets the fake clock). A spike to 90 % sheds six voices to five; at 68 %
+     for six (five at ~57 %) the limit is back at six ~1 s later and stays with six sounding; at 85 % for six it stays
+     at five. One shed each, no oscillation.
 7. **No denormals** (fix round 1). `svf_flush` sets filter states under 1e-20 to 0 at every control tick, far above
    the float denormal range; the FPU's speed on denormals is not known.
    - Test: `test_voices filter_states_flush`. A held voice with the mixer at 0 reaches exactly 0, and no denormal
@@ -211,7 +223,7 @@ Host yardstick (`tests/cpu_host.sh`, x86-64 instructions per sample):
   - Nothing enables it at boot, and nothing is expected to.
   - The floats are passed in the integer registers, so the interrupt's register save covers them.
   - **A device smoke test is required before installing:** boot, play the musical patch, watch the CPU guard's
-    limit and the red-screen fault handler.
+    limit (Globals: `CPU .. PEAK .. VOX n/6 SHED n`) and the red-screen fault handler.
 
 The first pass's record follows.
 
