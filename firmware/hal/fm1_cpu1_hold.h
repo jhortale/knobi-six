@@ -9,7 +9,8 @@
 #include <stdint.h>
 #include "fm1_cc.h"
 
-/* The second core held, registers only: the update loader's first line (ldr_cstart), in every build, behind the app's
+/* The second core held, registers only: the update loader's first line (ldr_cstart) in a KNOBI_CPU1 build (build.py
+ * -DKNOBI_LDR_CPU1_HOLD; the default loader stays the proven one, and there CPU1 never runs), behind the app's
  * own holds (fm1_enter_update, fm1_core_reset with KNOBI_CPU1), for a CPU1 a crashed app may have left running. The
  * hold sequence of felucca-bsp's fm1_cpu1_stop.h (Melodee's): the bus traps masked, C1_CON (0x1EEE004) bit 1 set
  * then bit 3 cleared, the delayed bus flag given time and cleared, the debug enables and the write lock put back.

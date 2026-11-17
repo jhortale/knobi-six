@@ -277,7 +277,7 @@ the wrappers (`FL_IRQ_SAVE`, `fm1_cpu1_flash_quiesce`) wait up to one block with
 interrupt's join, then retire CPU1 and go on; the RAM driver refuses otherwise (`fm1_flash_access_ok`). Name a job
 `cpu1_job_*`: build.py adds its stack to CPU1's (2,560 B for the loop and the deepest job), and checks that the idle
 loop (`.c1_text`) calls nothing but the job and holds no flash address. CPU1 runs no interrupts. Every reset, the
-UBOOT entry and the update hold CPU1 first, and the update loader holds it again at its own start (every build);
+UBOOT entry and the update hold CPU1 first, and in a CPU1 build the update loader holds it again at its own start;
 CPU0's crash holds it and bars it until power-off.
 
 The boot guard: a failure CPU0 sees (no answer, a late job, a misread, a fault of CPU1's) leaves one core and never

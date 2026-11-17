@@ -165,6 +165,8 @@ def build_loader():
     src = FW / "loader"
     flags = [*CFLAGS, *BOARD_DEFS[BOARD], "-Ifirmware/hal", "-Ifirmware/src", f'-DLDR_NAME="{SCREEN_NAME}"',
              f"-DLDR_COLOUR={SCREEN_COLOUR:#x}u"]
+    if CPU1:                         # only a build with the second core: the loader holds CPU1 at its start too (the
+        flags.append("-DKNOBI_LDR_CPU1_HOLD=1")   # default loader stays byte for byte the proven one)
     tc_all(("cc", "-c", src / "crt0_ldr.S", "-o", LDR / "crt0_ldr.o"),
            ("cc", *flags, "-c", src / "loader.c", "-o", LDR / "loader.o"))
     elf = LDR / "loader.elf"

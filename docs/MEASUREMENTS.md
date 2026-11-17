@@ -26,9 +26,9 @@ still running (it does not model the hold); CPU0's side is what the cases check.
 
 Default build (KNOBI_CPU1 unset): `app.bin` sha1 `44541dc3b3f1f62f0021c4c359ae2f3ee1e59ca0`, the loader and the
 package byte for byte the same as before the HAL (e800d7e; local build with the local bank; CI's knobi-six.fwsc and
-app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged). Since fix round 1 the
-update loader holds CPU1 at its start in every build (`ota.bin` 8,509 -> 8,621 B, so the package differs); the app
-stays identical, and the CI job `cpu1-emu` builds e800d7e beside HEAD and compares `app.bin` and `app.dis` byte for byte; build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
+app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged). The update
+loader holds CPU1 at its start only in a KNOBI_CPU1 build (`ota.bin` 8,621 B there); the CI job `cpu1-emu` builds
+e800d7e beside HEAD and compares `app.bin`, `app.dis`, the loader `ota.bin` and the package byte for byte; build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
 CPU1 build: image +2,760 B (221,892 B), RAM +3,216 B (CPU1's stacks 3,072 B and the mailbox), `.c1_text` 148 B in
 the RAM code, with no flash address in it; CPU1's stack 0 B for the loop and the ping (budget 2,560 B).
 

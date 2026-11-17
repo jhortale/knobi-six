@@ -113,7 +113,7 @@ jobs:
     timeout-minutes: 45
     env:
       FM1_EMU_SHA: 60645a58d6cd1597ed565a3f00e4981964623232
-      CPU1_BASE: e800d7e                         # phase2 before the CPU1 HAL: the default app must be byte for byte this
+      CPU1_BASE: e800d7e                         # phase2 before the CPU1 HAL: the default build must be byte for byte this
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,7 +141,7 @@ jobs:
           cd ~/fm1-emu && git checkout -q "$FM1_EMU_SHA"
           CARGO_PROFILE_RELEASE_LTO=false cargo build --release -p fm1-emu 2>&1 | tail -3
 
-      - name: Default build (no CPU1) = the app before the HAL, byte for byte
+      - name: Default build (no CPU1) = the build before the HAL, byte for byte (app, loader, package)
         run: |
           ./build.sh | tee build-default.log
           grep -q 'ok    CPU1: absent' build-default.log
@@ -149,12 +149,14 @@ jobs:
           (cd /tmp/cpu1-base && ./build.sh > /tmp/cpu1-base.log)
           cmp build/app.bin /tmp/cpu1-base/build/app.bin
           cmp build/app.dis /tmp/cpu1-base/build/app.dis
+          cmp build/loader/ota.bin /tmp/cpu1-base/build/loader/ota.bin
+          cmp build/knobi-six.fwsc /tmp/cpu1-base/build/knobi-six.fwsc
           {
             echo '### Default build vs the app before the CPU1 HAL ('"$CPU1_BASE"')'; echo '```'
             grep -E 'ok   |app  ' build-default.log
-            sha256sum build/app.bin /tmp/cpu1-base/build/app.bin
-            echo 'app.bin and app.dis: identical'
-            echo "loader: $(wc -c < build/loader/ota.bin) B now, $(wc -c < /tmp/cpu1-base/build/loader/ota.bin) B before (its CPU1 hold at the start, hal/fm1_cpu1_hold.h)"
+            sha256sum build/app.bin /tmp/cpu1-base/build/app.bin build/loader/ota.bin /tmp/cpu1-base/build/loader/ota.bin \
+                      build/knobi-six.fwsc /tmp/cpu1-base/build/knobi-six.fwsc
+            echo 'app.bin, app.dis, loader/ota.bin, knobi-six.fwsc: identical'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
