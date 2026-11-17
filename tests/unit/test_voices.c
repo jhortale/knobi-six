@@ -72,6 +72,16 @@ static void poly_six(void)
     printf("poly_six: all released and free (%d busy): the next note takes voice %d (63's, released first: %d)\n", idle,
            c, first);
     CHECK(idle == 0 && c == first);
+    /* a same-key retrigger of a releasing voice keeps its voice and its detune slop (no pitch jump) */
+    fresh();
+    set(P_LENV_R, 127), set(P_DETUNE, 127);
+    synth_note(&S, 60, 100); run(256);
+    int rv = voice_of(60);
+    int32_t d1 = S.voice[rv].dr1, d2 = S.voice[rv].dr2;
+    synth_note(&S, 60, 0); run(256); synth_note(&S, 60, 100); run(64);
+    printf("poly_six: same-key retrigger: voice %d -> %d, slop %d / %d -> %d / %d\n", rv, voice_of(60), d1, d2,
+           S.voice[voice_of(60)].dr1, S.voice[voice_of(60)].dr2);
+    CHECK(voice_of(60) == rv && S.voice[rv].dr1 == d1 && S.voice[rv].dr2 == d2);
 }
 
 static void unison_stack(void)
@@ -165,7 +175,7 @@ static void key_mode_low_high(void)
     printf("key_mode_low_high: LOW: 60+55 -> %d, +65 -> %d, +67 retrig %d, release lowest -> %d; HIGH: %d, %d, retrig "
            "%d, release highest -> %d\n", got[0][0], got[0][1], got[0][2], got[0][3], got[1][0], got[1][1], got[1][2],
            got[1][3]);
-    CHECK(got[0][0] == 55 && got[0][1] == 55 && !got[0][2] && got[0][3] == 60);
+    CHECK(got[0][0] == 55 && got[0][1] == 55 && got[0][2] && got[0][3] == 60);   /* -R: every keystroke retriggers */
     CHECK(got[1][0] == 60 && got[1][1] == 65 && got[1][2] && got[1][3] == 65);
 }
 
@@ -196,6 +206,36 @@ static void porta_modes(void)
     CHECK(abs(r12 - 176) <= 3 && abs(r24 - 2 * r12) <= 2 && abs(t12 - 176) <= 3 && abs(t24 - t12) <= 1);
     CHECK(a_leg == r12 && a_sep == 0 && ta_leg == t12 && ta_sep == 0);
     CHECK(r1 <= 4 && abs(r127 - 11290) < 120 && off == 0);
+}
+
+/* poly portamento: a new note glides from the latest note-on, whichever voice it gets */
+static int poly_glide(int mode, int legato, int32_t *start)
+{
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_MODE, mode), set(P_PORTA_RATE, 64);
+    synth_note(&S, 48, 100); run(4096);
+    if (!legato) { synth_note(&S, 48, 0); run(64); }
+    synth_note(&S, 55, 100);
+    voice_t *v = &S.voice[voice_of(55)];
+    *start = v->pitch;
+    int t = 0;
+    while (v->pitch != 55 * 65536 && t < 100000) run(VOICE_CTL), t++;
+    return t;
+}
+static void porta_poly(void)
+{
+    int32_t s0, s1, s2, s3;
+    fresh();
+    set(P_PORTA_ON, 1), set(P_PORTA_RATE, 64);
+    synth_note(&S, 60, 100);
+    int first = S.voice[voice_of(60)].glide;
+    int leg = poly_glide(1, 1, &s0), sep = poly_glide(1, 0, &s1), rate_sep = poly_glide(0, 0, &s2);
+    int time_leg = poly_glide(3, 1, &s3);
+    printf("porta_poly: first note glide step %d; RATE-A legato C3 -> G3 from %.2f in %d ticks (want 7/12 x 176 = "
+           "103), detached from %.2f in %d; RATE detached from %.2f in %d; TIME-A legato from %.2f in %d\n", first,
+           s0 / 65536.0, leg, s1 / 65536.0, sep, s2 / 65536.0, rate_sep, s3 / 65536.0, time_leg);
+    CHECK(first == 0 && s0 == 48 * 65536 && abs(leg - 103) <= 2 && sep == 0 && s2 == 48 * 65536 &&
+          abs(rate_sep - 103) <= 2 && s3 == 48 * 65536 && abs(time_leg - 176) <= 2);
 }
 
 static void bend_range_program(void)
@@ -235,12 +275,14 @@ static void pan_spread_alternates(void)
         for (int i = FS / 20; i < FS / 10; i++)
             l[k] += (double)BUF[2 * i] * BUF[2 * i], r[k] += (double)BUF[2 * i + 1] * BUF[2 * i + 1];
     }
-    printf("pan_spread_alternates: spread 127, L/R dB per voice:");
+    /* voice k at x = -+(k / 2 + 1) / 3: constant power, L/R = cot((x + 1) pi / 4); hard-panned pair: > 60 dB */
+    printf("pan_spread_alternates: spread 127, L/R dB per voice (want):");
     int alt = 1;
     for (int k = 0; k < NVOICE; k++) {
-        double d = 10 * log10((l[k] + 1) / (r[k] + 1));
-        printf(" %+.1f", d);
-        if ((k & 1) ? d > -20 : d < 20) alt = 0;
+        double d = 10 * log10((l[k] + 1) / (r[k] + 1)), x = ((k & 1) ? 1 : -1) * (k / 2 + 1) / 3.0;
+        double want = k / 2 == 2 ? ((k & 1) ? -HUGE_VAL : HUGE_VAL) : 20 * log10(cos((x + 1) * M_PI / 4) / sin((x + 1) * M_PI / 4));
+        printf(" %+.1f (%+.1f)", d, want);
+        if (k / 2 == 2 ? ((k & 1) ? d > -60 : d < 60) : fabs(d - want) > 0.3) alt = 0;
     }
     printf("\n");
     CHECK(alt);
@@ -253,7 +295,8 @@ static void pan_spread_alternates(void)
     for (int k = 0; k < 5; k++) printf(" (%d, %d)", S.voice[k].gl, S.voice[k].gr);
     printf("\n");
     CHECK(S.voice[0].gl == S.voice[0].gr && S.voice[1].gl > S.voice[1].gr && S.voice[2].gl < S.voice[2].gr &&
-          S.voice[3].gl > S.voice[3].gr && S.voice[4].gl < S.voice[4].gr && S.voice[1].gl == S.voice[2].gr);
+          S.voice[3].gl > S.voice[3].gr && S.voice[4].gl < S.voice[4].gr && S.voice[1].gl == S.voice[2].gr &&
+          S.voice[3].gl == S.voice[4].gr && S.voice[3].gl - S.voice[3].gr > S.voice[1].gl - S.voice[1].gr);
     /* spread 0: all centred */
     set(P_PAN_SPREAD, 0);
     run(FS / 10);
@@ -499,6 +542,7 @@ int main(void)
     key_mode_last_legato();
     key_mode_low_high();
     porta_modes();
+    porta_poly();
     bend_range_program();
     pan_spread_alternates();
     hold_latches_and_releases();

@@ -216,10 +216,15 @@ static void synth_poly_on(synth_t *s, int note, int vel, int legato)
 {
     voice_t *v = &s->voice[synth_alloc(s, note)];
     int i = (int)(v - s->voice);
-    v->pan = (int8_t)((i & 1) ? 1 : -1);
-    v->dr1 = (int32_t)synth_rand(s) >> 16;
-    v->dr2 = (int32_t)synth_rand(s) >> 16;
+    if (!(v->busy && v->note == note)) {   /* a new allocation: new slop (a same-key retrigger keeps its own) */
+        v->dr1 = (int32_t)synth_rand(s) >> 16;
+        v->dr2 = (int32_t)synth_rand(s) >> 16;
+    }
+    /* L / R alternating, the offset growing by pair: (i / 2 + 1) / (NVOICE / 2), rounded up for an odd count */
+    v->pan = ((i & 1) ? 1 : -1) * (i / 2 + 1) * 32768 / ((NVOICE + 1) / 2);
+    if (s->last_pitch != VOICE_NO_PITCH) v->pitch = s->last_pitch;   /* glide from the latest note */
     synth_voice_on(s, v, note, vel, legato, 1);
+    s->last_pitch = note * 65536;
 }
 
 static void synth_poly_off(synth_t *s, int note)
@@ -262,12 +267,15 @@ static void synth_mono_go(synth_t *s, int key, int vel, int trigger, int legato)
         /* stack slot k: pan alternates L / R (odd stack: slot 0 centred); detune a fixed spread, outer pair +-1 */
         int sign = odd ? ((k & 1) ? -1 : 1) : ((k & 1) ? 1 : -1);
         int m = odd ? (k + 1) / 2 : 2 * (k / 2) + 1, mm = odd ? (n - 1) / 2 : n - 1;
-        v->pan = (int8_t)(odd && k == 0 ? 0 : sign);   /* left voices flat, right voices sharp */
+        /* pan: the offset grows by pair (odd: pairs 1.., even: pairs 1.. from slot 0); left flat, right sharp */
+        int pair = odd ? (k + 1) / 2 : k / 2 + 1, npair = odd ? (n - 1) / 2 : n / 2;
+        v->pan = odd && k == 0 ? 0 : sign * pair * 32768 / npair;
         v->dr1 = v->dr2 = n > 1 ? sign * m * 32768 / mm : 0;
         int note = synth_clampi(key + (nchord ? chord[k] - ref : 0), 0, 127);
         synth_voice_on(s, v, note, vel, legato, trigger);
     }
     s->mono = (int16_t)key;
+    s->last_pitch = key * 65536;
 }
 
 static void synth_mono_off(synth_t *s)
@@ -307,6 +315,7 @@ void synth_init(synth_t *s)
     s->rnd = 0x2545f491u;
     s->bend14 = 8192;
     s->mono = -1;
+    s->last_pitch = VOICE_NO_PITCH;
     for (int i = 0; i < NVOICE; i++) voice_init(&s->voice[i], synth_rand(s));
     lfo_init(&s->lfo, synth_rand(s));
     program_t p;
@@ -340,6 +349,7 @@ void synth_note(synth_t *s, int note, int vel)
         int p = synth_priority(s), retrig = s->prog.v[P_KEY_MODE] & 1;
         if (!was || s->mono < 0) synth_mono_go(s, s->stack[p], s->svel[p], 1, 0);
         else if (s->stack[p] == note) synth_mono_go(s, note, vel, retrig, 1);   /* it took priority (or re-pressed) */
+        else if (retrig) synth_mono_go(s, s->mono, s->voice[0].vel, 1, 1);    /* -R: every keystroke retriggers */
         return;
     }
     if (s->hold) {
@@ -403,6 +413,7 @@ static void synth_tick(synth_t *s)
         int32_t d = (live ? 32768 : 0) - vo->act;
         vo->act = d > -64 && d < 64 ? vo->act + d : vo->act + (d >> SYNTH_ACT_SHIFT);
         if (!live && !vo->act) { voice_reset(vo, synth_rand(s)); continue; }   /* silent: free, states cleared */
+        voice_glide(vo);
         voice_control(vo, c, v);
     }
 }

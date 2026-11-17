@@ -65,7 +65,7 @@ typedef struct {
     int32_t gl, gr;                       /* output gains Q15 */
     int32_t act;                          /* activity 0..32768: gates the AMP modulation, fades it at the end */
     uint32_t t_on, t_off;                 /* event clock at gate on / release (allocation order) */
-    int8_t pan;                           /* -1 left, 0 centre, +1 right (x PAN SPREAD) */
+    int32_t pan;                          /* position -32768 (left) .. 32768 (right) at PAN SPREAD 127, Q15 */
     uint8_t note, vel;                    /* sounding note (chord offset included), velocity 1..127 */
     uint8_t busy;                         /* 1 from note-on until silent and reset */
     uint8_t key;                          /* the key is down */
@@ -77,6 +77,7 @@ typedef struct {
 void voice_init(voice_t *v, uint32_t seed);
 /* back to silence: filter states 0, sub / sync state cleared, phases from rnd (so a unison stack starts unaligned) */
 void voice_reset(voice_t *v, uint32_t rnd);
+void voice_glide(voice_t *v);             /* one control tick of portamento (before voice_control) */
 void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog);
 /* n <= VOICE_CTL frames, added into bus (L R pairs, int32, Q15 per voice) */
 void voice_render(voice_t *v, const voice_ctx_t *c, const int16_t *prog, int32_t *bus, int n);

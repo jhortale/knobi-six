@@ -49,12 +49,16 @@ void voice_init(voice_t *v, uint32_t seed)
     svf_coef(&v->coef, SVF_CUT_MAX, 0, 0, 0);
 }
 
-void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
+void voice_glide(voice_t *v)
 {
-    /* glide towards the target, one step per tick */
     if (v->pitch == VOICE_NO_PITCH || !v->glide) v->pitch = v->target;
     else if (v->pitch < v->target) v->pitch = v->target - v->pitch <= v->glide ? v->target : v->pitch + v->glide;
     else if (v->pitch > v->target) v->pitch = v->pitch - v->target <= v->glide ? v->target : v->pitch - v->glide;
+}
+
+void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
+{
+    if (v->pitch == VOICE_NO_PITCH || !v->glide) v->pitch = v->target;   /* the glide itself steps in voice_glide */
     int32_t key = v->pitch;
     int32_t fenv = v->fenv.level;
     mods_sum(&v->ctl, prog, c->lfo, c->depth, fenv, 0, c->at);
@@ -84,7 +88,7 @@ void voice_control(voice_t *v, const voice_ctx_t *c, const int16_t *prog)
 
     /* VCA: AMP modulation only while the voice is active (faded by act), output gains */
     v->amp = (int32_t)(((int64_t)v->ctl.amp * v->act) >> 15);
-    int32_t p = 32768 + v->pan * c->spread;                     /* 0..65536 */
+    int32_t p = 32768 + (int32_t)(((int64_t)v->pan * c->spread) >> 15);   /* 0..65536 */
     v->gl = (c->gain * voice_pan_sin(65536 - p)) >> 15;
     v->gr = (c->gain * voice_pan_sin(p)) >> 15;
 }
