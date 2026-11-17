@@ -17,8 +17,11 @@
  * block's start, EV_CLKMODE the mode); then eng_render ticks it once per block, before the synth renders, and gives the
  * synth its tempo for LFO SYNC (synth_clock). The block's step events stay in eng_clk (eng_clk.n, .at[], .step[]) for
  * the arpeggiator (Task 6), which runs there too. The main loop reads what it publishes, one aligned word each:
- * eng_clk_ticks (24 a quarter, never going back: MIDI clock out sends one 0xF8 each), eng_clk_beats (quarter notes:
- * TAP's LED), eng_clk_run (clock_running) and eng_clk_bpm10 (the tempo followed, x 10).
+ * eng_clk_ticks (ticks entered, 24 a quarter, never going back), eng_clk_starts / eng_clk_start_ticks (restarts to
+ * step 0, the tick count before the latest) and eng_clk_mode (the mode applied): MIDI clock out (clock.h
+ * clock_out_poll; written ticks, start_ticks, then starts, so a reader that sees starts unchanged around its reads has a
+ * consistent set); eng_clk_beats (quarter notes: TAP's LED), eng_clk_run (clock_running), eng_clk_alive (an external
+ * clock's ticks arriving, started or not) and eng_clk_bpm10 (the tempo followed, x 10).
  * Overflow policy: the consumer empties the queue at every block (5.8 ms), so it fills only if more than 256 events
  * arrive within one block (37 keys pressed and released together are 74). Nothing that would leave the synth wrong is
  * ever lost:
@@ -78,8 +81,9 @@ static volatile uint8_t eng_ready, eng_voices;
 static int32_t eng_last_bend = 8192, eng_last_wheel, eng_last_press, eng_last_hold, eng_last_vol = 127, eng_last_tune;
 static int32_t eng_last_clkmode;          /* the MIDI CLOCK mode sent (producer) */
 static clk_t eng_clk;                     /* the clock (consumer; eng_init before eng_ready) */
-static volatile uint32_t eng_clk_ticks, eng_clk_beats;   /* published by the consumer (see above) */
-static volatile uint8_t eng_clk_run;
+static volatile uint32_t eng_clk_ticks, eng_clk_beats, eng_clk_starts, eng_clk_start_ticks;   /* published by the
+                                                                                          consumer (see above) */
+static volatile uint8_t eng_clk_run, eng_clk_alive, eng_clk_mode;
 static volatile uint16_t eng_clk_bpm10;
 #define ENG_FADE_ONE 32768                /* the fade's gain, Q15 */
 #define ENG_FADE_MS 10
@@ -130,7 +134,8 @@ static void eng_init(void)                /* the init program; call before audio
     clock_init(&eng_clk);
     clock_set_bpm(&eng_clk, eng_edit.v[P_BPM]);
     clock_set_div(&eng_clk, eng_edit.v[P_CLK_DIV]);
-    eng_clk_ticks = eng_clk_beats = 0, eng_clk_run = 1, eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
+    eng_clk_ticks = eng_clk_beats = eng_clk_starts = eng_clk_start_ticks = 0, eng_clk_run = 1, eng_clk_alive = 0;
+    eng_clk_mode = CLK_MIDI_OFF, eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
     eng_fade_out = 0, eng_fade_g = ENG_FADE_ONE, eng_fade_quiet = 0;
     eng_load = eng_peak = 0, eng_load_q3 = eng_peak_q8 = 0, eng_vlimit = NVOICE, eng_sheds = 0;
     ENG_BARRIER();
@@ -448,8 +453,12 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     if (!eng_ready) return;
     eng_drain();
     clock_tick(&eng_clk, frames);              /* this block's steps (eng_clk.n, .at[]: the arpeggiator's, Task 6) */
-    eng_clk_ticks = eng_clk.ticks, eng_clk_beats = eng_clk.beats;
-    eng_clk_run = (uint8_t)clock_running(&eng_clk), eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
+    eng_clk_ticks = eng_clk.ticks, eng_clk_start_ticks = eng_clk.start_ticks, eng_clk_beats = eng_clk.beats;
+    eng_clk_mode = eng_clk.mode;
+    ENG_BARRIER();
+    eng_clk_starts = eng_clk.starts;           /* (last: the main loop's consistency check) */
+    eng_clk_run = (uint8_t)clock_running(&eng_clk), eng_clk_alive = eng_clk.alive;
+    eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
     synth_clock(&eng_synth, clock_quarter_inc(&eng_clk));   /* LFO SYNC's tempo (a compare when unchanged) */
     uint32_t t0 = eng_ticks();
     synth_render(&eng_synth, lr, frames);

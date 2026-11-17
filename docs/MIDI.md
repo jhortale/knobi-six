@@ -53,9 +53,11 @@ Keys: note on / off on MIDI CH (ALL = channel 1). With PARAM TX = CC, an edit ma
 goes out as its CC on the same channel, only when the 7-bit value changes (a 0..255 parameter moving one step may stay
 on the same CC value). Edits received over MIDI are not echoed.
 
-MIDI clock, with the global MIDI CLOCK = OUT: 0xFA when OUT is chosen (the clock restarts on a downbeat then), 24 0xF8 a
-quarter note at the clock's BPM (sent from the main loop: within a few ms of their time), 0xFC when another setting is
-chosen. THRU: the clock bytes received, as they come. BPM and DIVISION have no CC (NRPN later).
+MIDI clock, with the global MIDI CLOCK = OUT: when OUT is chosen the clock restarts on step 0 and 0xFA goes out with
+that downbeat's 0xF8 right after it (a receiver takes the first 0xF8 after 0xFA as its downbeat: its steps fall with
+ours, not a tick late); then 24 0xF8 a quarter note at the clock's BPM (sent from the main loop: within a few ms of
+their time); a restart of our clock (the arpeggiator starting with ARP BEAT SYNC off) sends 0xFA and the new downbeat's
+0xF8 again, so receivers restart with it; 0xFC when another setting is chosen. THRU: the clock bytes received, as they come. BPM and DIVISION have no CC (NRPN later).
 
 ## The CC map
 

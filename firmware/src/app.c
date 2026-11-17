@@ -139,25 +139,28 @@ static void app_idle(void)
     if (idle_ok) midi_in();
 }
 
-/* MIDI clock out (global MIDI CLOCK = OUT; synth/clock.h): one 0xF8 for each tick the clock counted (engine.c
- * eng_clk_ticks, 24 a quarter), 0xFA when OUT is chosen (the clock restarts on a downbeat then), 0xFC when it is left.
- * From the main loop: a tick goes out within a pass of its time (a few ms at most); more than 8 owed at once (a long
- * stall) are dropped, not sent in a burst */
+/* MIDI clock out (global MIDI CLOCK = OUT; synth/clock.h clock_out_poll): 0xFA with tick 0's 0xF8 when OUT is chosen
+ * (the clock starts on step 0 then) and again on every restart, one 0xF8 for each tick the clock enters, 0xFC when OUT
+ * is left. From the main loop: within a pass of the tick (a few ms); the engine's words read as one consistent set */
+static clk_out_t clk_out;
+static uint32_t clk_out_fa, clk_out_f8, clk_out_fc;   /* (sent so far: host probes) */
 static void clock_out(void)
 {
-    static int8_t mode = -1;
-    static uint32_t sent;
-    int m = ctl_glob[G_MIDI_CLOCK];
-    uint32_t t = eng_clk_ticks;
-    if (m != mode) {
-        if (mode == CLK_MIDI_OUT) midi_send(0xFCu, 0, 0);
-        if (m == CLK_MIDI_OUT) midi_send(0xFAu, 0, 0);
-        mode = (int8_t)m, sent = t;
-        return;
+    uint8_t b[3u + CLOCK_OUT_OWED];
+    uint32_t st, st0, tk, sc, n, k;
+    int ap;
+    do {
+        st = eng_clk_starts;
+        __asm__ volatile("" ::: "memory");
+        st0 = eng_clk_start_ticks, tk = eng_clk_ticks, ap = eng_clk_mode;
+        __asm__ volatile("" ::: "memory");
+        sc = eng_clk_starts;
+    } while (sc != st);
+    n = clock_out_poll(&clk_out, ctl_glob[G_MIDI_CLOCK], ap, st, st0, tk, b, sizeof b);
+    for (k = 0; k < n; k++) {
+        midi_send(b[k], 0, 0);
+        clk_out_fa += b[k] == 0xFAu, clk_out_f8 += b[k] == 0xF8u, clk_out_fc += b[k] == 0xFCu;
     }
-    if (m != CLK_MIDI_OUT) return;
-    if (t - sent > 8u) sent = t - 8u;
-    for (; sent != t; sent++) midi_send(0xF8u, 0, 0);
 }
 
 #if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
@@ -173,6 +176,7 @@ static void app_main(void)
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
     eng_init();                                 /* the synth with the init program; app_audio renders from now on */
+    clock_out_init(&clk_out);
     controls_init();                            /* the pads are the app's (events), the faders' positions now */
     globals_load(&set);                         /* (nothing saved or broken: the defaults) */
     for (k = 0; k < G_COUNT; k++) ctl_glob[k] = set.v[k];
@@ -295,6 +299,9 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "clkdiv")) *got = eng_clk.div;              /* its division */
     else if (!strcmp(name, "clkmode")) *got = eng_clk.mode;            /* its mode (the MIDI CLOCK global, applied) */
     else if (!strcmp(name, "lfoinc")) *got = (int)eng_synth.lfo.inc;   /* the LFO's increment, Q32 cycles a frame */
+    else if (!strcmp(name, "clkfa")) *got = (int)clk_out_fa;           /* MIDI clock out: 0xFA sent so far */
+    else if (!strcmp(name, "clkf8")) *got = (int)clk_out_f8;           /* 0xF8 sent so far */
+    else if (!strcmp(name, "clkfc")) *got = (int)clk_out_fc;           /* 0xFC sent so far */
     else if (!strcmp(name, "bend")) *got = eng_last_bend;              /* the bend sent, 0..16383 */
     else if (!strcmp(name, "wheel")) *got = eng_last_wheel;            /* the mod wheel sent, 0..127 */
     else if (!strcmp(name, "screen")) *got = screen;                   /* the screen, enum screen_id (ui/controls.h) */

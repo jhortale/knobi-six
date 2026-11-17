@@ -44,9 +44,15 @@
  *     clock is not running (the tempo estimate restarts). Ticks again: it runs on (unless a 0xFC stopped it).
  *   - clock_running(): internal modes (OFF, OUT) always; external ones only with ticks arriving and not stopped. Per
  *     the reference, with the clock external and absent the arpeggiator does not run: Task 6 asks clock_running().
- * MIDI clock out (MIDI CLOCK = OUT): switching to OUT restarts the clock at step 0 (a downbeat; the main loop sends
- * 0xFA then, and 0xFC when it leaves OUT); the clock counts ticks (clk_t.ticks, never going back) and the main loop
- * sends one 0xF8 for each (engine.c eng_clk_ticks, app.c). SLAVE THRU: the main loop echoes what comes in.
+ * MIDI clock out (MIDI CLOCK = OUT; clock_out_poll, from the main loop with what engine.c publishes): clk_t.ticks
+ * counts the ticks the clock has ENTERED (never going back), a start (clk_t.starts, start_ticks) included: switching to
+ * OUT starts the clock at step 0, which enters tick 0. The poll then sends 0xFA and at once tick 0's 0xF8 (a slave
+ * takes the first 0xF8 after 0xFA as its downbeat: our step 0), then one 0xF8 for each tick entered, so a slave's
+ * steps fall with ours, not a tick (1/24 beat) behind; 0xFC when OUT is left. clock_restart under OUT is passed on:
+ * it is a start like any other, so the poll re-sends 0xFA with the new tick 0's 0xF8 and the slaves restart with us
+ * (Task 6's arp start with ARP BEAT SYNC off). Owed ticks beyond CLOCK_OUT_OWED (a main-loop stall) are dropped, not
+ * sent in a burst. SLAVE THRU: the main loop echoes what comes in. tests/unit/test_clock.c midi_clock_out runs a
+ * sender into this same clock as a receiver: every step of the receiver within one block after the sender's.
  *
  * Tap tempo (clock_tap, ms = the main loop's millisecond count): the reference says tap at least 4 times. From the
  * 4th tap on the tempo is the average of the last intervals, at most 4 (60000 x intervals / their span, rounded),
@@ -76,6 +82,7 @@
 #define CLOCK_EXT_TIMEOUT 11025u         /* frames without a tick: not running (0.25 s; 3 ticks at 30 BPM = 11025) */
 #define CLOCK_TAP_GAP_MS 2000u           /* a longer gap between taps starts a new tap count */
 #define CLOCK_TAP_MIN 4u                 /* taps before the tempo changes */
+#define CLOCK_OUT_OWED 8u                /* 0xF8 sent at most at once after a stall (clock_out_poll) */
 
 enum { CLK_DIV_HALF, CLK_DIV_QTR, CLK_DIV_8TH, CLK_DIV_8TH_D, CLK_DIV_8TH_S, CLK_DIV_8TH_T, CLK_DIV_16TH, CLK_DIV_16TH_S,
        CLK_DIV_16TH_T, CLK_DIV_32ND, CLK_DIV_COUNT };
@@ -104,7 +111,9 @@ typedef struct clk {
     uint8_t ext_n, ext_w;
     uint8_t tap_n;                       /* tap tempo (the main loop's clk_t) */
     uint32_t tap_t[5];
+    uint32_t starts, start_ticks;        /* restarts to step 0 so far; ticks before the latest one's tick 0 */
 } clk_t;
+typedef struct { int8_t mode; uint8_t started; uint32_t starts, sent; } clk_out_t;   /* MIDI clock out (main loop) */
 
 void clock_init(clk_t *c);                               /* 120 BPM, QTR, OFF (internal), step 0 at the first frame */
 void clock_set_bpm(clk_t *c, int bpm);                   /* 30..250 (clamped); the position is kept */
@@ -118,5 +127,11 @@ void clock_restart(clk_t *c);                            /* internal: step 0 at 
 int clock_running(const clk_t *c);                       /* steps will come: internal, or an external clock arriving */
 int clock_bpm_x10(const clk_t *c);                       /* the tempo followed, BPM x 10 (0: none known) */
 uint32_t clock_quarter_inc(const clk_t *c);              /* Q32 quarter notes per frame (0: none known) */
+void clock_out_init(clk_out_t *o);
+/* the MIDI clock bytes to send now (into bytes, max >= 3 + CLOCK_OUT_OWED; returns how many): mode = the global MIDI
+ * CLOCK, applied = the clock's mode (clk_t.mode: OUT applied means its start happened), starts / start_ticks / ticks as
+ * the clock has them (a consistent snapshot) */
+uint32_t clock_out_poll(clk_out_t *o, int mode, int applied, uint32_t starts, uint32_t start_ticks, uint32_t ticks,
+                        uint8_t *bytes, uint32_t max);
 
 #endif

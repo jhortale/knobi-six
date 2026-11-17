@@ -373,7 +373,7 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     switch (w->t) {
     case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: case W_LIST2: return scr_val(id);
     case W_BPM: return scr_bpm_shown(id) | (int32_t)CLOCK_EXTERNAL(ctl_glob[G_MIDI_CLOCK]) << 12;
-    case W_CLKSTAT: return ctl_glob[G_MIDI_CLOCK] | eng_clk_run << 4;
+    case W_CLKSTAT: return ctl_glob[G_MIDI_CLOCK] | eng_clk_run << 4 | eng_clk_alive << 5;
     case W_PAD: return scr_val(id) | (w->b == 2 || w->b == row) << 16;
     case W_ROWLED: case W_ROWSEL: return row;
     case W_HVAL: return (int32_t)(((uint32_t)ctl_last_v & 0xFFFFu) | (uint32_t)(scr_oct + 2) << 16 |      /* v 0..15, octave 16..18, */
@@ -541,13 +541,14 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         break;
     }
     case W_CLKSTAT: {                              /* what the clock follows (the global MIDI CLOCK), in words */
-        int m = v & 15, run = v >> 4 & 1;
+        int m = v & 15, run = v >> 4 & 1, alive = v >> 5 & 1;
         if (!CLOCK_EXTERNAL(m))
             pg_text_c(cx, w->y + 1, &FONT_XS, m == CLK_MIDI_OUT ? "INTERNAL CLOCK, SENT AS MIDI CLOCK" : "INTERNAL CLOCK",
                       PC_WHITE);
-        else pg_text_c(cx, w->y + 1, &FONT_XS, run ? "FOLLOWING MIDI CLOCK" : "NO MIDI CLOCK: THE ARP WAITS",
-                       run ? PC_WHITE : PC_RED);
-        pg_text_c(cx, w->y + 11, &FONT_XS, CLOCK_EXTERNAL(m) ? "BPM AND TAP: THE PROGRAM'S, FOR LATER" :
+        else if (run) pg_text_c(cx, w->y + 1, &FONT_XS, "FOLLOWING MIDI CLOCK", PC_WHITE);
+        else pg_text_c(cx, w->y + 1, &FONT_XS, alive ? "MIDI CLOCK STOPPED" : "NO MIDI CLOCK: THE ARP WAITS", PC_RED);
+                                                   /* (stopped: ticks arriving, but 0xFC, or no 0xFA yet under IN) */
+        pg_text_c(cx, w->y + 11, &FONT_XS, CLOCK_EXTERNAL(m) ? "BPM AND TAP: THE PROGRAM'S OWN TEMPO" :
                   "CLK: THE GLOBAL MIDI CLOCK", PC_DIM);
         break;
     }

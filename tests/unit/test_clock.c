@@ -261,14 +261,82 @@ static void ticks_and_lfo(void)
     uint64_t ev[8];
     clock_init(&c);
     clock_set_mode(&c, CLK_MIDI_OUT);
-    run(&c, &t, 4u * 22050u, ev, 0);             /* 4 beats */
+    run(&c, &t, 4u * 22050u - 1u, ev, 0);        /* 4 beats less a frame: ticks 0..95 entered, beats 0..3 */
     q = clock_quarter_inc(&c);                   /* 2 quarters a second / 44100: 194783.9 */
-    printf("ticks_and_lfo: OUT then 4 beats -> %u ticks, %u beats (the downbeat OUT starts on, then 4); quarter inc at "
-           "120 %u (want 194784)\n", c.ticks, c.beats, q);
-    CHECK(c.ticks == 96u && c.beats == 5u);
+    printf("ticks_and_lfo: OUT then 4 beats -> %u ticks entered (tick 0 at the start, then 1..95; 96 is the next "
+           "block's frame 0), %u beats; quarter inc at 120 %u (want 194784)\n", c.ticks, c.beats, q);
+    CHECK(c.ticks == 96u && c.beats == 4u);
     CHECK(q >= 194780u && q <= 194788u);
     clock_set_mode(&c, CLK_MIDI_IN);
     CHECK(clock_quarter_inc(&c) == 0u && clock_bpm_x10(&c) == 0);   /* following, no tempo known yet */
+}
+
+/* Review fix 1: MIDI clock out in phase with the steps. A sender (OUT) and a receiver (IN: this same clock) as the
+ * firmware runs them: the sender ticks a block, the main loop polls clock_out_poll with what the engine publishes
+ * (mode applied, starts, start_ticks, ticks) and the bytes reach the receiver at its next block's start. 0xFA comes
+ * with the first 0xF8 (tick 0, step 0); each receiver step lands within one block after the sender's same step (not a
+ * tick later); a clock_restart under OUT re-sends 0xFA with the new tick 0 and the receiver follows; leaving OUT sends
+ * 0xFC, and the receiver stops */
+typedef struct { clk_t c; clk_out_t o; } snd_t;
+static uint32_t snd_poll(snd_t *s, int mode, uint8_t *b)
+{
+    return clock_out_poll(&s->o, mode, s->c.mode, s->c.starts, s->c.start_ticks, s->c.ticks, b, 16);
+}
+static void midi_clock_out(void)
+{
+    static uint64_t se[256], re[256];
+    static uint32_t sst[256], rst[256];
+    snd_t s;
+    clk_t r;
+    uint8_t q[64], b[16];
+    uint32_t qn = 0, sn = 0, rn = 0, t = 0, k, n, fa = 0, f8 = 0, fc = 0, first_two = 0, bad = 0, polls = 0;
+    int mode = CLK_MIDI_OFF, restart_done = 0, stop_done = 0, r_after_stop = 0;
+    clock_init(&s.c);
+    clock_out_init(&s.o);
+    clock_init(&r);
+    clock_set_mode(&r, CLK_MIDI_IN);
+    clock_set_div(&s.c, CLK_DIV_16TH), clock_set_div(&r, CLK_DIV_16TH);
+    for (uint32_t blk = 0; blk < 1200u; blk++, t += BLOCK) {          /* ~7 s */
+        for (k = 0; k < qn; k++) clock_midi(&r, q[k], r.now);         /* last poll's bytes, at this block's start */
+        qn = 0;
+        if (blk == 10u) mode = CLK_MIDI_OUT, clock_set_mode(&s.c, mode);   /* (the engine applies it at a block start) */
+        if (blk == 600u) clock_restart(&s.c), restart_done = 1;        /* Task 6's arp start, BEAT SYNC off */
+        if (blk == 1000u) mode = CLK_MIDI_OFF, clock_set_mode(&s.c, mode), stop_done = 1;
+        clock_tick(&s.c, BLOCK);
+        for (k = 0; k < s.c.n; k++) if (sn < 256u && mode == CLK_MIDI_OUT) se[sn] = t + s.c.at[k], sst[sn++] = s.c.step[k];
+        clock_tick(&r, BLOCK);
+        for (k = 0; k < r.n; k++) {
+            if (rn < 256u) re[rn] = t + r.at[k], rst[rn++] = r.step[k];
+            if (stop_done) r_after_stop++;
+        }
+        n = snd_poll(&s, mode, b);
+        polls += n != 0;
+        for (k = 0; k < n; k++) {
+            fa += b[k] == 0xFA, f8 += b[k] == 0xF8, fc += b[k] == 0xFC;
+            if (b[k] == 0xFA) first_two += k + 1u < n && b[k + 1u] == 0xF8;   /* FA then at once tick 0's F8 */
+            if (qn < 64u) q[qn++] = b[k];
+        }
+    }
+    /* every sender step has the receiver's same step within (0, BLOCK] frames after it (the restart included) */
+    for (k = 0; k < sn && k < rn; k++)
+        if (re[k] < se[k] || re[k] - se[k] > BLOCK || rst[k] != sst[k]) bad++;
+    printf("midi_clock_out: sent FA %u (FA then F8 at once %u), F8 %u, FC %u; sender %u steps, receiver %u, %u not "
+           "within a block after or a different step number; restart re-sent FA %d; receiver steps after FC %d\n",
+           fa, first_two, f8, fc, sn, rn, bad, restart_done && fa == 2u, r_after_stop);
+    CHECK(fa == 2u && first_two == 2u && fc == 1u);
+    CHECK(sn == rn && sn > 40u && bad == 0);
+    CHECK(r_after_stop == 0);
+    (void)polls;
+    {   /* the old fault, measured: the 1st F8 after FA is tick 0 (the downbeat), so its step 0 is our step 0 */
+        snd_t z;
+        clock_init(&z.c), clock_out_init(&z.o);
+        clock_set_mode(&z.c, CLK_MIDI_OUT);
+        clock_tick(&z.c, BLOCK);                 /* step 0 at frame 0 */
+        n = snd_poll(&z, CLK_MIDI_OUT, b);
+        printf("midi_clock_out: the first block in OUT (step 0 at frame %u) sends %u byte(s): %02X %02X\n", z.c.at[0], n,
+               b[0], n > 1 ? b[1] : 0);
+        CHECK(z.c.n == 1u && n == 2u && b[0] == 0xFA && b[1] == 0xF8);
+    }
 }
 
 int main(void)
@@ -280,6 +348,7 @@ int main(void)
     bpm_change_and_restart();
     midi_clock_in();
     ticks_and_lfo();
+    midi_clock_out();
     if (fails) printf("test_clock: %d FAILED\n", fails);
     else printf("test_clock: all passed\n");
     return fails != 0;

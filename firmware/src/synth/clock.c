@@ -19,6 +19,14 @@ static void clk_zero(clk_t *c)                 /* the position back to step 0 (t
     c->pos = c->frac = c->last = c->next = c->steps = 0;
     c->sub = 0;
 }
+/* a start: step 0 now, and tick 0 and beat 0 entered (counted, as clk_advance counts each tick it enters): MIDI clock
+ * out sends 0xFA then this tick's 0xF8, the downbeat, with step 0 (start_ticks: the count before it) */
+static void clk_start(clk_t *c)
+{
+    clk_zero(c);
+    c->start_ticks = c->ticks;
+    c->ticks++, c->beats++, c->starts++;
+}
 
 void clock_init(clk_t *c)
 {
@@ -56,7 +64,7 @@ void clock_set_mode(clk_t *c, int mode)
     c->mode = (uint8_t)mode;
     if (CLOCK_EXTERNAL(mode)) clk_ext_reset(c);
     else c->rate = (uint32_t)c->bpm * CLOCK_RATE_Q;   /* internal: on from where it is, at the program's tempo */
-    if (mode == CLK_MIDI_OUT) clk_zero(c), c->beats++;   /* OUT: from a downbeat (the main loop sends 0xFA with it) */
+    if (mode == CLK_MIDI_OUT) clk_start(c);      /* OUT: from a downbeat (the main loop sends 0xFA with it) */
 }
 
 int clock_tap(clk_t *c, uint32_t ms)
@@ -105,8 +113,7 @@ void clock_midi(clk_t *c, uint8_t status, uint32_t ticks)
         if (c->armed || (nss && !was)) {        /* after 0xFA (or, without start / stop, after a silence): the
                                                  * downbeat, step 0 here */
             c->armed = 0, c->go = 1;
-            clk_zero(c);
-            c->beats++;
+            clk_start(c);
             c->ext_pos = 0;
         } else if (c->go) c->ext_pos++;         /* (stopped: the ticks give the tempo, the position stays) */
         break;
@@ -125,11 +132,10 @@ int clock_running(const clk_t *c)
 void clock_restart(clk_t *c)
 {
     if (CLOCK_EXTERNAL(c->mode)) return;
-    clk_zero(c);
-    c->beats++;
+    clk_start(c);                               /* (under OUT: the slaves get 0xFA and tick 0 again, clock_out_poll) */
 }
 
-/* the position on by a counts (a < 2^31); ticks and beats count the ticks crossed */
+/* the position on by a counts (a < 2^31); ticks and beats count the ticks (beats) entered */
 static void clk_advance(clk_t *c, uint32_t a)
 {
     c->frac += a;
@@ -195,5 +201,26 @@ int clock_bpm_x10(const clk_t *c)
 uint32_t clock_quarter_inc(const clk_t *c)
 {
     return c->rate * 25u + (c->rate * 23754u >> 16);
+}
+void clock_out_init(clk_out_t *o) { o->mode = -1, o->started = 0, o->starts = o->sent = 0; }
+
+uint32_t clock_out_poll(clk_out_t *o, int mode, int applied, uint32_t starts, uint32_t start_ticks, uint32_t ticks,
+                        uint8_t *bytes, uint32_t max)
+{
+    uint32_t n = 0;
+    if (max < 3u) return 0;
+    if (mode != o->mode) {                      /* the global changed: leaving OUT stops the slaves */
+        if (o->mode == CLK_MIDI_OUT && o->started) bytes[n++] = 0xFC;
+        o->mode = (int8_t)mode, o->started = 0;
+    }
+    if (mode != CLK_MIDI_OUT || applied != CLK_MIDI_OUT) return n;   /* (OUT asked, not applied yet: its restart has
+                                                 * not happened) */
+    if (!o->started || starts != o->starts) {   /* a start (OUT chosen, or clock_restart): 0xFA, then from its tick 0 */
+        bytes[n++] = 0xFA;
+        o->started = 1, o->starts = starts, o->sent = start_ticks;
+    }
+    if (ticks - o->sent > CLOCK_OUT_OWED) o->sent = ticks - CLOCK_OUT_OWED;   /* (a long stall: the oldest dropped) */
+    for (; o->sent != ticks && n < max; o->sent++) bytes[n++] = 0xF8;
+    return n;
 }
 #endif

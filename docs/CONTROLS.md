@@ -83,7 +83,9 @@ at least 4 times; from the 4th tap BPM is the average of the last intervals (up 
 a new count (the header counts the taps: `tAP1`..`tAP3`). TAP's pad flashes on each beat while the clock runs. Pad 3
 cycles the global **MIDI CLOCK**, pad 4 the global **ARP BEAT SYNC** (both kept with the globals, below). Following a
 MIDI clock, the display shows the tempo received (`---` until there is one) and BPM MIDI under it, and the line under
-the pads says FOLLOWING MIDI CLOCK, or NO MIDI CLOCK: THE ARP WAITS (in red) while none arrives or it is stopped.
+the pads says FOLLOWING MIDI CLOCK, MIDI CLOCK STOPPED (in red: ticks arrive but a 0xFC stopped it, or no 0xFA yet
+under IN) or NO MIDI CLOCK: THE ARP WAITS (in red: none arriving); the line under it reminds that BPM and TAP set the
+program's own tempo, not the one followed.
 
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to
@@ -160,7 +162,7 @@ every 30 s (flash wear). What each does:
 | STEREO | STEREO / MONO (STEREO) | MONO: both outputs carry the sum |
 | SUSTAIN | N.O. / N.C. (N.O.) | the sustain message's polarity: N.C. reads MIDI CC 64 upside down (the SMK-37 has no pedal jack) |
 | AT CURVE | 0..3 (0) | the bottom pads' pressure: 0 linear, 1 soft, 2 softer, 3 hard (MIDI channel pressure as received) |
-| MIDI CLOCK | OFF / OUT / IN / THRU / IN NO S/S (OFF) | Clock pad 3. OFF: the internal clock (BPM); OUT: the same, sent as MIDI clock (0xFA when chosen, then 24 0xF8 a beat, 0xFC when left); IN: follows a MIDI clock (start / continue / stop obeyed; none arriving, or stopped: the clock and the arpeggiator wait); THRU: IN, and what arrives is sent on; IN NO S/S: follows the clock bytes alone (start / stop ignored). USB only (the SMK-37 has no MIDI jack: no CLOCK PORT). [MIDI.md](MIDI.md) |
+| MIDI CLOCK | OFF / OUT / IN / THRU / IN NO S/S (OFF) | Clock pad 3. OFF: the internal clock (BPM); OUT: the same, sent as MIDI clock (0xFA with the downbeat's 0xF8 when chosen and on every restart, then 24 0xF8 a beat, 0xFC when left); IN: follows a MIDI clock (start / continue / stop obeyed; none arriving, or stopped: the clock and the arpeggiator wait); THRU: IN, and what arrives is sent on; IN NO S/S: follows the clock bytes alone (start / stop ignored). USB only (the SMK-37 has no MIDI jack: no CLOCK PORT). [MIDI.md](MIDI.md) |
 | ARP BEAT SYNC | OFF / ON (OFF) | Clock pad 4: the arpeggiator starts on the clock's next step (ON) or at once (OFF; Task 6) |
 | DUAL CORE | OFF / ON (OFF) | only in a `KNOBI_CPU1=1` build (never a release; [API.md](API.md) "Second core"): Globals pad 7; ON renders half the voices on the second core (the same sound, bit for bit). Saved in a blob of its own (a default build keeps the other globals as they are) |
 

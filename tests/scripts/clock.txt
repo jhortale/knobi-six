@@ -50,6 +50,7 @@
 # 0xFC stops it (the ticks go on); 0xFB continues; the clock gone (the last tick ~5373 ms): stopped after 0.25 s
 5000 midi 0xFC 0 0
 5100 expect 0 clkrun
+5100 shot
 5150 midi 0xFB 0 0
 5200 expect 1 clkrun
 5800 expect 0 clkrun
@@ -64,4 +65,17 @@
 6200 expect 1 clkrun
 6200 expect 1500 bpm10
 6300 shot
-6500 end
+# MIDI clock out (review fix 1): OUT sends 0xFA with tick 0's 0xF8 at once (the slave's downbeat = our step 0), then a
+# 0xF8 a tick (150 BPM: 16.7 ms); leaving OUT sends 0xFC. (Order and phase: tests/unit/test_clock.c midi_clock_out.)
+# The counts are since power-on: the pass through OUT at 3000..3020 ms sent FA, 2 F8, FC. At 6403 ms: FA, F8 at once
+6400 pad 3 100
+6410 pad 3 0
+6420 expect 1 glob 11
+6420 expect 2 clkfa
+6420 expect 4 clkf8
+7420 expect 64 clkf8
+7430 pad 3 100
+7440 pad 3 0
+7450 expect 2 clkfc
+7450 expect 2 clkfa
+7600 end
