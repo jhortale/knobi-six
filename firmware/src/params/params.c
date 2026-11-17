@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX program model (see params.h). Included by app.c (unity build); also built alone by the host unit tests. */
 #include "params.h"
+#ifdef DINGHY_HOST
 #include <string.h>
+#endif                                  /* (the device: memset / memcpy from libc.c, through platform.c) */
 
 static const char *const param_l_track[] = { "OFF", "HALF", "FULL" };
 static const char *const param_l_shape[] = { "SINE", "SAW", "RSAW", "SQR", "RND" };
