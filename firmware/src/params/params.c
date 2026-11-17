@@ -100,12 +100,27 @@ const param_t PARAMS[P_COUNT_PHASE1] = {
 #undef S
 #undef L
 
+/* the reserved phase-2/3 values (params.h): { min, max, def } */
+const int16_t PARAMS_RESERVED[P_RESERVED_N][3] = {
+    [P_DISTORTION - P_COUNT_PHASE1] = {0, 127, 0}, [P_FX_ON - P_COUNT_PHASE1] = {0, 1, 0},
+    [P_FXA_TYPE - P_COUNT_PHASE1] = {0, 9, 0}, [P_FXA_MIX - P_COUNT_PHASE1] = {0, 127, 0},
+    [P_FXA_P1 - P_COUNT_PHASE1] = {0, 255, 0}, [P_FXA_P2 - P_COUNT_PHASE1] = {0, 127, 0},
+    [P_FXA_SYNC - P_COUNT_PHASE1] = {0, 1, 0}, [P_FXA_DIV - P_COUNT_PHASE1] = {0, 10, 0},
+    [P_FXB_TYPE - P_COUNT_PHASE1] = {0, 13, 0}, [P_FXB_MIX - P_COUNT_PHASE1] = {0, 127, 0},
+    [P_FXB_P1 - P_COUNT_PHASE1] = {0, 255, 0}, [P_FXB_P2 - P_COUNT_PHASE1] = {0, 127, 0},
+    [P_FXB_SYNC - P_COUNT_PHASE1] = {0, 1, 0}, [P_FXB_DIV - P_COUNT_PHASE1] = {0, 10, 0},
+    [P_BPM - P_COUNT_PHASE1] = {30, 250, 120}, [P_CLK_DIV - P_COUNT_PHASE1] = {0, 9, 1},
+    [P_ARP_ON - P_COUNT_PHASE1] = {0, 1, 0}, [P_ARP_MODE - P_COUNT_PHASE1] = {0, 4, 0},
+    [P_ARP_RANGE - P_COUNT_PHASE1] = {0, 2, 0}, [P_ARP_HOLD - P_COUNT_PHASE1] = {0, 1, 0},
+};
+
 int16_t param_clamp(uint16_t id, int32_t value)
 {
-    if (id >= P_COUNT_PHASE1) return 0;
-    if (value < PARAMS[id].min) return PARAMS[id].min;
-    if (value > PARAMS[id].max) return PARAMS[id].max;
-    return (int16_t)value;
+    int32_t lo, hi;
+    if (id < P_COUNT_PHASE1) lo = PARAMS[id].min, hi = PARAMS[id].max;
+    else if (id < P_COUNT_RESERVED) lo = PARAMS_RESERVED[id - P_COUNT_PHASE1][0], hi = PARAMS_RESERVED[id - P_COUNT_PHASE1][1];
+    else return 0;
+    return (int16_t)(value < lo ? lo : value > hi ? hi : value);
 }
 
 void program_init(program_t *p)
@@ -114,6 +129,7 @@ void program_init(program_t *p)
     p->version = PROGRAM_VERSION;
     memcpy(p->name, "INIT", 4);
     for (unsigned i = 0; i < P_COUNT_PHASE1; i++) p->v[i] = PARAMS[i].def;
+    for (unsigned i = 0; i < P_RESERVED_N; i++) p->v[P_COUNT_PHASE1 + i] = PARAMS_RESERVED[i][2];
 }
 
 uint16_t program_crc16(const uint8_t *d, uint32_t n)
@@ -130,10 +146,11 @@ uint16_t program_crc16(const uint8_t *d, uint32_t n)
  * ONE entry here (e.g. { P_COUNT_PHASE2 }) and bumps PROGRAM_VERSION; older records then load with the defaults for the
  * ids they lack. Tests may predefine PROGRAM_VERSION_TABLE. */
 #ifndef PROGRAM_VERSION_TABLE
-#define PROGRAM_VERSION_TABLE { P_COUNT_PHASE1 }
+#define PROGRAM_VERSION_TABLE { P_COUNT_PHASE1, P_COUNT_RESERVED }
 #endif
 static const uint16_t program_nparams[PROGRAM_VERSION] = PROGRAM_VERSION_TABLE;
-#define PROGRAM_NCOUNT P_COUNT_PHASE1   /* ids with a PARAMS[] entry in this build: all of them are clamped on load */
+#define PROGRAM_NCOUNT P_COUNT_RESERVED /* ids with a range in this build (PARAMS, PARAMS_RESERVED): all clamped on load */
+_Static_assert(P_COUNT_RESERVED <= PROGRAM_VALUES, "the reserved ids fit program_t");
 
 uint32_t program_packed_size(unsigned version)
 {

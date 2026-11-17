@@ -202,7 +202,14 @@ static int32_t ctl_prg_bank = -1, ctl_prg_req = -1, ctl_bank_sel = -1;   /* the 
 /* programs: the one in play, MANUAL, a load to retry (the engine's buffer busy), WRITE (0 idle, 1 armed: the digits
  * pick the destination, 2 committed: fading out, then the save, then the fade back in) */
 static int32_t ctl_prog, ctl_prog_want = -1, ctl_wr_dest;
-static uint8_t ctl_manual, ctl_wr;
+static uint8_t ctl_manual, ctl_wr, ctl_want_factory;    /* the load to retry is "restore factory" */
+static uint32_t ctl_restores;                          /* restore-factory loads done (probe) */
+/* a notice for the player (the header's display on every screen, words on Program; controls.h NT_*): a broken stored
+ * program, restore factory asked (GLOBE + BT once: again within CTL_RESTORE_MS to confirm), restored */
+static uint8_t ctl_notice;
+static int32_t ctl_restore_ask = -1;                   /* the program a first GLOBE + BT asked to restore, -1 none */
+static uint32_t ctl_restore_t;
+#define CTL_RESTORE_MS 2000u
 static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, 0 none yet */
 static uint32_t ctl_wr_t, ctl_writes;
 #define CTL_FADE_WAIT_MS 100u                          /* the fade-out not confirmed (no audio running): save anyway */
@@ -259,10 +266,38 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
 {
     static program_t p;
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
-    ctl_prog = n, ctl_manual = 0;
+    ctl_prog = n, ctl_manual = 0, ctl_want_factory = 0, ctl_restore_ask = -1;
     if (ctl_wr == 2) { ctl_prog_want = n; return; }   /* (not under a WRITE: it saves the edit as it was) */
-    prog_load((uint32_t)n, &p);                        /* (nothing stored there: the init program) */
+    ctl_notice = prog_load((uint32_t)n, &p) == -2 ? NT_BROKEN : NT_NONE;   /* (never written: the factory program,
+                                                        * else init; broken: init, and the notice says so) */
     ctl_prog_want = eng_program(&p) ? n : -1;
+    if (ctl_notice) ctl_last_id = B_NOTICE, ctl_last_v = ctl_notice, ctl_edits++;
+}
+/* restore factory (hold GLOBE, press WRITE / BT): factory program n into the edit buffer (no factory bank: the init
+ * program); nothing is saved until WRITE. The stored program n stays as it is. */
+static void ctl_restore_factory(int32_t n)
+{
+    static program_t p;
+    if (n < 0 || n >= (int32_t)PROG_COUNT) return;
+    ctl_prog = n, ctl_manual = 0;
+    prog_factory((uint32_t)n, &p);
+    if (eng_program(&p)) { ctl_prog_want = n, ctl_want_factory = 1; return; }   /* busy: again next pass */
+    ctl_prog_want = -1, ctl_want_factory = 0;
+    ctl_restores++;
+    ctl_notice = NT_RESTORED, ctl_last_id = B_NOTICE, ctl_last_v = NT_RESTORED, ctl_edits++;
+}
+/* GLOBE held + BT: the first asks (the edits would be lost: "SurE" in the header, words on Program), the second within
+ * CTL_RESTORE_MS on the same program restores; a WRITE armed: nothing */
+static void ctl_restore_press(void)
+{
+    if (ctl_wr != 0) return;
+    if (ctl_restore_ask == ctl_prog && fm1_ms - ctl_restore_t < CTL_RESTORE_MS) {
+        ctl_restore_ask = -1;
+        ctl_restore_factory(ctl_prog);
+        return;
+    }
+    ctl_restore_ask = ctl_prog, ctl_restore_t = fm1_ms;
+    ctl_notice = NT_RESTORE_ASK, ctl_last_id = B_NOTICE, ctl_last_v = NT_RESTORE_ASK, ctl_edits++;
 }
 static void ctl_manual_press(program_t *edit)          /* MANUAL: the sound is the panel; the faders (Play's: FILTER FREQ,
                                                         * RESO, MODE, ENV AMT) set where they stand. MIDI program change
@@ -412,7 +447,19 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         if (p >> BTN_GLO & 1u) ctl_goto(screen, *screen == SCR_GLOBALS ? ctl_before_glob : SCR_GLOBALS);
         if (p >> BTN_SEL & 1u) ctl_other_row(*screen);
     }
-    if (*screen != SCR_BOOT && ctl_pressed >> BTN_SAVE & 1u) ctl_write_press(screen);   /* BT = WRITE */
+    if (*screen != SCR_BOOT && ctl_pressed >> BTN_SAVE & 1u) {
+        if (fm1_in.buttons >> BTN_GLO & 1u) {          /* GLOBE held + WRITE: restore factory, asked then confirmed */
+            if (ctl_wr == 0) {
+                ctl_restore_press();
+                if (*screen == SCR_GLOBALS) ctl_goto(screen, ctl_before_glob);   /* (GLOBE's press opened Globals) */
+            }
+        } else { ctl_restore_ask = -1; ctl_write_press(screen); }   /* BT = WRITE */
+    }
+    if (ctl_restore_ask >= 0 && fm1_ms - ctl_restore_t >= CTL_RESTORE_MS) {   /* not confirmed in time: forgotten */
+        ctl_restore_ask = -1;
+        if (ctl_notice == NT_RESTORE_ASK) ctl_notice = NT_NONE;
+        if (ctl_last_id == B_NOTICE && ctl_last_v == NT_RESTORE_ASK) ctl_last_v = NT_NONE;
+    }
     if (ctl_pressed >> BTN_ENV & 1u) { ctl_chord_on = 1; ctl_chord_n = 0; }
     if (ctl_released >> BTN_ENV & 1u && ctl_chord_on) ctl_chord_commit(edit);
 
@@ -446,7 +493,10 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) ctl_set(edit, x, ctl_pad_value(x, ctl_glob[x & 0xFFu]), 1);
         else if (B_IS_ACT(x)) ctl_action(screen, x & 0xFFu);
     }
-    if (ctl_prog_want >= 0 && ctl_wr != 2) ctl_prog_select(ctl_prog_want);   /* a load the engine could not take yet */
+    if (ctl_prog_want >= 0 && ctl_wr != 2) {          /* a load the engine could not take yet */
+        if (ctl_want_factory) ctl_restore_factory(ctl_prog_want);
+        else ctl_prog_select(ctl_prog_want);
+    }
     ctl_write_poll(edit);
 
     {

@@ -14,8 +14,26 @@
  * copy whose CRC32 holds with the newest sequence number (compared as a signed difference: wraps around); if no copy
  * holds, the newest readable one (its tag read although the CRC32 failed), and each record's own CRC16 decides.
  * A record that is empty, of a version this build does not know, or broken loads as the init program, as does every
- * program of a logical slot never saved. prog_buf (16 KB, in the pool) caches the logical slot last read. */
+ * program of a logical slot never saved. prog_buf (16 KB, in the pool) caches the logical slot last read.
+ *
+ * The factory bank (optional, read only, docs/FACTORY_BANK.md): firmware/gen/factory_bank.h when it exists at build
+ * time (tools/ob6_import.py writes it locally; it is never committed), else none. It defines FACTORY_COUNT records of
+ * FACTORY_SIZE bytes (program_pack's format) in factory_bank[][]. A program never written (its record all zeros) loads
+ * factory program n (if there is one), else the init program; a broken record (or one of an unknown version) loads
+ * the init program and says so (-2: the panel shows a notice); WRITE (prog_save) never touches the factory bank, and
+ * prog_factory reads it for "restore factory". -DKNOBI_NO_FACTORY builds without it (the host tests, which expect the
+ * init program); -DKNOBI_FACTORY_H='"file.h"' takes another bank (the unit tests' synthetic one). */
 #include "store_prog.h"
+#if defined KNOBI_FACTORY_H
+#include KNOBI_FACTORY_H
+#elif !defined KNOBI_NO_FACTORY && defined __has_include
+#if __has_include("factory_bank.h")
+#include "factory_bank.h"
+#endif
+#endif
+#ifndef FACTORY_COUNT
+#define FACTORY_COUNT 0u                               /* no factory bank: the init program everywhere */
+#endif
 
 #define PROG_DATA_BYTES (PROG_PER_SLOT * PROG_STRIDE)  /* 16354 B of records */
 #define PROG_SLOT_BYTES SLOT_MAX                       /* the image: records, spare, the tag at the end */
@@ -69,6 +87,20 @@ static void prog_fetch(uint32_t l)
     prog_buf_slot = (int32_t)l;
 }
 
+uint32_t prog_factory_count(void) { return FACTORY_COUNT; }
+
+int prog_factory(uint32_t n, program_t *p)
+{
+#if FACTORY_COUNT
+    if (n < FACTORY_COUNT && program_packed_size(factory_bank[n][0]) == FACTORY_SIZE &&
+        program_unpack(p, factory_bank[n], FACTORY_SIZE) == 0) return 0;
+#else
+    (void)n;
+#endif
+    program_init(p);
+    return -1;
+}
+
 int prog_load(uint32_t n, program_t *p)
 {
     const uint8_t *r;
@@ -78,9 +110,11 @@ int prog_load(uint32_t n, program_t *p)
         r = prog_buf + n % PROG_PER_SLOT * PROG_STRIDE;
         size = program_packed_size(r[0]);
         if (size && size <= PROG_STRIDE && program_unpack(p, r, size) == 0) return 0;
+        for (size = 0; size < PROG_STRIDE && !r[size]; size++) {}
+        if (size < PROG_STRIDE) { program_init(p); return -2; }   /* something there but broken (or of an unknown
+                                                        * version): the init program, never silently the factory one */
     }
-    program_init(p);
-    return -1;
+    return prog_factory(n, p) == 0 ? 1 : -1;           /* (never written: the factory program, else init) */
 }
 
 int prog_save(uint32_t n, const program_t *p)

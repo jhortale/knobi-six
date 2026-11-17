@@ -17,6 +17,7 @@ top row of pads is switches, the bottom row is pressure only.
 | CHORD | `BTN_ENV` | chord memory: hold it, play up to 6 notes (keys or MIDI), let go: those notes are the program's chord and UNISON goes on with UNISON VOICES = CHD. Tapped with no note: nothing changes |
 | OCTAVE- / + | `BTN_OCT_DOWN` / `UP` | the keys' octave, -2..+2 |
 | BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
+| GLOBE held + BT, twice within 2 s | | RESTORE FACTORY: the first press asks (the header shows `SurE`, Program says RESTORE FACTORY? EDITS ARE LOST), the second within 2 s puts the current program's factory version into the edit buffer (header `FAC`; nothing is stored until WRITE). Not confirmed in time: forgotten. Globals, opened by GLOBE's press, closes again. No factory bank in the build: the init program. Not while a WRITE is armed (see [Programs](#programs)) |
 | KNOB BANK, FADER BANK, ARP, NOTE REPEAT, FX, SEQ, SEQ PLAY, SEQ REC | | nothing yet (arp, effects, sequencer: phases 2 and 3) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
@@ -90,8 +91,18 @@ shows the wheels' and faders' raw readings (for checking a unit's travel). The h
 500 programs, OB-6 style: **bank** 0..4, then **tens** and **ones** 0..9 (program 2-35 = bank 2, 35). The number is
 set by the flash: the base's 8 slots of 16 KB hold 74 records each at 221 B a record (the largest a program may become
 in later phases), 592 in all, so 5 whole banks of 100 (`firmware/src/params/store_prog.h`). A program is its 66 values,
-its 20-character name and its chord memory, with a CRC; one that was never stored (or is broken) loads as the init
-program.
+its 20-character name and its chord memory, with a CRC (since record version 2 also 20 reserved phase-2/3 values:
+distortion, effects, clock, arpeggiator; stored, not used yet). One that was never stored loads as its **factory
+program** when the build has a factory bank, else as the init program. One whose stored record is broken (or of a
+version this firmware does not know) loads as the init program and says so: `Err` in the header, STORED PROGRAM
+BROKEN: INIT LOADED on Program.
+
+The **factory bank** is optional and read only, like the OB-6's banks 5..9: it exists only in a build made with a
+locally generated `firmware/gen/factory_bank.h` ([FACTORY_BANK.md](FACTORY_BANK.md); the default build and CI have
+none: every program starts as the init program). With one, on the first boot (empty store) program N is factory
+program N, and so is every program never written; a written program replaces it in play, but WRITE never changes the
+factory bank: **GLOBE held + BT, twice within 2 s** (restore factory: the first press only asks, since the edits
+would be lost) brings factory program N back into the edit buffer, to keep with WRITE or to leave.
 
 - **Select:** on Program, K2 / K3 / K4 turn the bank, tens and ones digits; the program loads as a digit moves (a digit
   stops at its ends, it does not carry). MIDI: program change 0..99 in the current bank, CC 32 picks the bank

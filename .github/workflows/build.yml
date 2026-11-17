@@ -58,6 +58,15 @@ jobs:
             build/app.dis
           if-no-files-found: error
 
+      # The optional factory bank (docs/FACTORY_BANK.md) is never in the repo; this measures the image with a full
+      # 500-program bank of made-up programs (tools/ob6_import.py --synthetic; no OB-6 data), after the artifacts.
+      - name: Flash with a full factory bank (500 synthetic programs)
+        run: |
+          python3 tools/ob6_import.py --synthetic 500
+          ./build.sh | tee build-factory.log
+          rm firmware/gen/factory_bank.h
+          { echo '### Device build (Pro) with a 500-program factory bank (synthetic)'; echo '```'; grep -E 'ok   |app  ' build-factory.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   # The CPU gate (Task 11, docs/MEASUREMENTS.md): cycles per 256-frame block of the synth, built with the JieLi clang
   # at the app's flags, run in joakimeriksson/fm1-emu (MIT, pinned) patched to count per-pc costs in two cycle models
   # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale). Builds and emulates only.

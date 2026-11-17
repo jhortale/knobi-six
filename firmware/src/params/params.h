@@ -28,14 +28,28 @@ enum param_id {
     P_XM_FENV, P_XM_VCO2, P_XM_D_VCO1, P_XM_D_SHAPE1, P_XM_D_PW1, P_XM_D_FFREQ, P_XM_D_FMODE, P_XM_D_BP,
     P_AT_AMT, P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE,
     P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_ON, P_PORTA_MODE, P_PORTA_RATE, P_UNISON_ON, P_UNISON_VOICES,
-    /* phase 2/3 ids reserved after this line: distortion, FX A/B, clock, arp, sequencer */
-    P_COUNT_PHASE1
+    P_COUNT_PHASE1,
+    /* Phase 2/3 values, reserved: a program stores and carries them (record version 2), nothing reads them yet (no
+     * PARAMS entry, no screen, no sound). Units are the OB-6's own (docs/FACTORY_BANK.md, tools/ob6_import.py):
+     * FX types as the OB-6 lists them (A 0..9: off bbd ddl cho FL1 FL2 PH1 PH2 PH3 rin; B 0..13: those, then HAL rOO
+     * PLA SPr), P1 0..255, P2 / mix 0..127, the delay sync division 0..10 (1 2d 2 4d 4 4t 8d 8 8t 16d 16), the clock
+     * division 0..9 (half qtr 8th 8thD 8thS 8thT 16th 16thS 16thT 32nd), arp mode 0..4 (up down up+down random
+     * assign), arp range 0..2 (1..3 octaves). The sequencer (64 steps x 6 notes) does not fit a program record. */
+    P_DISTORTION = P_COUNT_PHASE1, P_FX_ON,
+    P_FXA_TYPE, P_FXA_MIX, P_FXA_P1, P_FXA_P2, P_FXA_SYNC, P_FXA_DIV,
+    P_FXB_TYPE, P_FXB_MIX, P_FXB_P1, P_FXB_P2, P_FXB_SYNC, P_FXB_DIV,
+    P_BPM, P_CLK_DIV, P_ARP_ON, P_ARP_MODE, P_ARP_RANGE, P_ARP_HOLD,
+    P_COUNT_RESERVED
 };
+#define P_RESERVED_N (P_COUNT_RESERVED - P_COUNT_PHASE1)
+/* the reserved ids' ranges and defaults (params.c): { min, max, def } */
+extern const int16_t PARAMS_RESERVED[P_RESERVED_N][3];
 
 extern const param_t PARAMS[P_COUNT_PHASE1];
 
 #ifndef PROGRAM_VERSION
-#define PROGRAM_VERSION 1                 /* current record version; bump together with a PROGRAM_VERSIONS entry */
+#define PROGRAM_VERSION 2                 /* current record version; bump together with a PROGRAM_VERSION_TABLE entry
+                                           * (1: the phase-1 values; 2: + the reserved phase-2/3 values) */
 #endif
 #define PROGRAM_NAME_LEN 20
 #define PROGRAM_VALUES 96                 /* sized for phases 2-3 */
@@ -52,7 +66,7 @@ typedef struct {
 void program_init(program_t *p);                                    /* every value = its default, name "INIT" */
 int  program_pack(const program_t *p, uint8_t *buf, uint32_t max);  /* bytes written or -1 */
 int  program_unpack(program_t *p, const uint8_t *buf, uint32_t n);  /* 0 ok, -1 bad crc/version/size */
-int16_t param_clamp(uint16_t id, int32_t value);
+int16_t param_clamp(uint16_t id, int32_t value);           /* a reserved id clamps to PARAMS_RESERVED */
 /* bytes of a packed record of this version (version, name, v[nparams] LE, chord, crc); 0 if the version is unknown */
 uint32_t program_packed_size(unsigned version);
 uint16_t program_crc16(const uint8_t *d, uint32_t n);               /* CRC-16/CCITT-FALSE */

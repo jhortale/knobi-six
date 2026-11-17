@@ -2,3 +2,5 @@ build/
 __pycache__/
 .DS_Store
 .superpowers/
+# the OB-6 factory bank, generated locally by tools/ob6_import.py: Sequential's data, never committed (docs/FACTORY_BANK.md)
+firmware/gen/factory_bank.h

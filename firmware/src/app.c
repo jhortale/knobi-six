@@ -20,7 +20,8 @@
  *
  * The synth is not thread-safe: the main loop talks to it only through engine.c's event queue (eng_*), which
  * app_audio drains before each render. The program at boot: the last one loaded (the globals), else program 0;
- * nothing stored there: program_init (every default).
+ * nothing stored there: the factory program (an optional local factory bank, docs/FACTORY_BANK.md), else
+ * program_init (every default).
  * Rules of the road (no libgcc): no double, no 64-bit division; integers, except the filter's float path, which runs on
  * the FPU (the app is built with -mfprev1, tools/build.py APP_FPU; docs/RULES.md, docs/MEASUREMENTS.md).
  * tests/run_host.sh runs this file on a computer: the screen as PNG, the sound as WAV.
@@ -240,11 +241,16 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "wr")) *got = ctl_wr;                       /* WRITE: 0 idle, 1 armed, 2 fading / saving */
     else if (!strcmp(name, "wrdest")) *got = ctl_wr_dest;              /* WRITE's destination */
     else if (!strcmp(name, "writes")) *got = (int)ctl_writes;          /* WRITEs stored */
+    else if (!strcmp(name, "restores")) *got = (int)ctl_restores;      /* restore-factory loads done */
+    else if (!strcmp(name, "notice")) *got = ctl_notice;               /* the notice (controls.h NT_*) */
+    else if (!strcmp(name, "factory")) *got = (int)prog_factory_count();   /* factory programs in this build */
+    else if (!strcmp(name, "edit")) *got = a0 < P_COUNT_RESERVED ? eng_edit.v[a0] : -1;   /* edit ID: the edit buffer */
+    else if (!strcmp(name, "name")) *got = a0 < PROGRAM_NAME_LEN ? (uint8_t)eng_edit.name[a0] : -1;   /* name I: char */
     else if (!strcmp(name, "fade")) *got = eng_fade_g;                 /* the output gain, 32768 = full */
     else if (!strcmp(name, "stored")) {                                /* stored N ID: param ID of program N in flash */
         static program_t p;
         prog_load(a0, &p);
-        *got = n >= 2 && a[1] >= 0 && a[1] < P_COUNT_PHASE1 ? p.v[a[1]] : -1;
+        *got = n >= 2 && a[1] >= 0 && a[1] < P_COUNT_RESERVED ? p.v[a[1]] : -1;
     }
     else if (!strcmp(name, "saves")) *got = (int)set_saves;            /* the globals saved (blobs 0 / 1) so far */
     else if (!strcmp(name, "tune")) *got = eng_last_tune;              /* the master tune sent, cents */

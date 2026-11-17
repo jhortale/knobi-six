@@ -27,6 +27,31 @@ make -C tests unit                          # unit tests (from Task 1 on)
 CI (`.github/workflows/build.yml`) does the device build and the tests on every push to `phase1` and uploads the
 package, `app.map` and `app.dis`.
 
+## Importing the OB-6 factory programs
+
+KNOBI-SIX ships with **empty banks**: every program starts as the init program. If you own the OB-6 factory programs
+file, you can build your own firmware with them as a read-only factory bank (program N, never written, plays factory
+program N; GLOBE + BT twice restores it; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)).
+
+The programs belong to **Sequential / Dave Smith Instruments**. They are **not included** in this repository or in any
+KNOBI-SIX build we publish, and the header you generate holds their data: **never commit it or redistribute it**, nor
+a firmware built with it (`firmware/gen/factory_bank.h` is in `.gitignore`).
+
+1. Open Sequential's own page "OB-6 Factory Sounds", <https://sequential.com/ob-6-factory-sounds/>, and download
+   the OB-6 factory programs (.syx) offered on that page.
+2. Unzip it: it holds the program file (`OB6_Programs_v1.01.syx` in version 1.01, 500 programs) and a ReadMe.
+3. Generate the local header:
+   ```sh
+   python3 tools/ob6_import.py ~/Downloads/OB-6-Factory-Programs/OB6_Programs_v1.01.syx
+   ```
+   It writes `firmware/gen/factory_bank.h` and a report of every conversion and warning in
+   `build/factory_bank_report.txt`.
+4. Build as usual (`./build.sh`) and install as usual. The bank adds about 100 KB to the image.
+
+Program names are kept as they are, including the ones that contain "OB". The sequencer data of the
+programs is not imported (a program has no room for it); effects, arpeggiator and clock settings are kept for later
+phases but do nothing yet. Delete `firmware/gen/factory_bank.h` to build without the bank again.
+
 ## Credits
 
 KNOBI-SIX starts from [smk37-base](https://github.com/fc79/smk37-base) by fc79, which is the SMK-37 layer of

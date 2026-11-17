@@ -53,7 +53,8 @@ static void ranges_from_reference(void)
     CHECK(PARAMS[P_LFO_SHAPE].max == 4 && PARAMS[P_FLT_TRACK].max == 2 && PARAMS[P_BEND_RANGE].max == 12);
     CHECK(PARAMS[P_PORTA_MODE].max == 3 && PARAMS[P_KEY_MODE].max == 5 && PARAMS[P_UNISON_VOICES].max == 6);
     CHECK(param_clamp(P_VCO1_FREQ, 99) == 60 && param_clamp(P_VCO2_FINE, -99) == -50 && param_clamp(P_VCO1_FREQ, -1) == 0);
-    CHECK(param_clamp(P_COUNT_PHASE1, 5) == 0);
+    CHECK(param_clamp(P_COUNT_RESERVED, 5) == 0);                       /* past every range */
+    CHECK(param_clamp(P_BPM, 5) == 30 && param_clamp(P_BPM, 999) == 250 && param_clamp(P_FXB_TYPE, 14) == 13);
 }
 
 static void rndfill(program_t *p, unsigned seed)
@@ -138,7 +139,8 @@ static void older_version_gets_defaults(void)
     CHECK(b.v[P_VCO1_FREQ] == 60);
     for (unsigned i = 0; i < n1; i++) if (i != P_VCO1_FREQ) CHECK(b.v[i] == PARAMS[i].max);
     for (unsigned i = n1; i < P_COUNT_PHASE1; i++) CHECK(b.v[i] == PARAMS[i].def);   /* not 0 */
-    for (unsigned i = P_COUNT_PHASE1; i < PROGRAM_VALUES; i++) CHECK(b.v[i] == 0);
+    for (unsigned i = P_COUNT_PHASE1; i < P_COUNT_RESERVED; i++) CHECK(b.v[i] == PARAMS_RESERVED[i - P_COUNT_PHASE1][2]);
+    for (unsigned i = P_COUNT_RESERVED; i < PROGRAM_VALUES; i++) CHECK(b.v[i] == 0);
     (void)a;
 }
 

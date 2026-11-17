@@ -17,6 +17,7 @@ fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
 
 run "unit tests (tests/unit/test_*.c)" make -s -C tests unit
+run "the OB-6 importer on synthetic dumps (tools/ob6_import.py; no OB-6 data)" python3 tests/ob6_import_test.py
 
 [ -f build/knobi-six.fwsc ] || { echo "run ./build.sh first"; exit 1; }
 
@@ -38,6 +39,8 @@ run "the globals: transpose, tune, velocity curve, LOCAL, MONO, sustain polarity
 run "Review Focus 3: WRITE during a HOLD drone: stored, the drone sounds on (expect)" sh tests/run_host.sh tests/scripts/write_held.txt
 run "Review Focus 3: WRITE's WAV: no click, only the deliberate fade (10 ms out, 10 ms in) around the save's silence" \
     python3 tests/wav_check.py build/host/app.wav --steady 600 1450 --check 1450 2050 --fade-max 25 --gap-max 300
+run "the factory bank (the synthetic test bank): fallback, WRITE overrides, GLOBE + WRITE restores (expect)" \
+    env FACTORY=tests/unit/factory_test_bank.h sh tests/run_host.sh tests/scripts/factory.txt
 run "Review Focus 3: program change under a held chord and a HOLD drone, MANUAL: nothing sticks (expect)" sh tests/run_host.sh tests/scripts/prog_change_held.txt
 run "Review Focus 3: the program change under the chord: no click" python3 tests/wav_check.py build/host/app.wav --steady 700 990 --check 990 1300
 run "Review Focus 3: the program change under the HOLD drone: no click" python3 tests/wav_check.py build/host/app.wav --steady 2250 2490 --check 2490 2800

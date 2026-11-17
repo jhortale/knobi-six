@@ -270,7 +270,7 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_PROG: return scr_prog_shown();
     case W_WSTAT:
         return (int32_t)((uint32_t)ctl_wr | (uint32_t)ctl_wr_dest << 2 | (uint32_t)ctl_manual << 12 |
-                         (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16);
+                         (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         return (int32_t)(h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u);
@@ -294,6 +294,7 @@ static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's disp
              id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
     else if (id == B_ACT(ACT_HOLD)) scr_cat(d, v ? "On" : "OFF");
+    else if (id == B_NOTICE) scr_cat(d, v == NT_BROKEN ? "Err" : v == NT_RESTORE_ASK ? "SurE" : v == NT_RESTORED ? "FAC" : "");
 }
 
 static void scr_list(const wdg_t *w, uint16_t id, int32_t v)   /* an LED a choice, the lit one the value */
@@ -439,6 +440,13 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
             if (ctl_wr == 1) scr_cat(q, "?");
             pg_text_c(cx, w->y + 1, &FONT_XS, t, PC_WHITE);
             if (ctl_wr == 1) pg_text_c(cx, w->y + 11, &FONT_XS, "ENTER: STORE   WRITE: CANCEL", PC_DIM);
+        } else if (ctl_notice == NT_BROKEN) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "STORED PROGRAM BROKEN: INIT LOADED", PC_RED);
+        } else if (ctl_notice == NT_RESTORE_ASK) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "RESTORE FACTORY? EDITS ARE LOST", PC_WHITE);
+            pg_text_c(cx, w->y + 11, &FONT_XS, "GLOBE + BT AGAIN WITHIN 2 S", PC_DIM);
+        } else if (ctl_notice == NT_RESTORED) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "FACTORY RESTORED: WRITE TO KEEP", PC_WHITE);
         } else if (ctl_manual) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "MANUAL: THE SOUND IS THE PANEL", PC_WHITE);
         } else if (ctl_wr_rc) {

@@ -25,7 +25,11 @@ enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_X
 enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_ARP, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_COUNT };
 /* section back / on, the other row, HOLD, ARP (phase 2: does nothing yet), WRITE (arm / cancel), ENTER (commit the
  * armed WRITE), MANUAL (the live panel) */
-enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };   /* the program number's digits (OB-6: bank / tens / ones) */
+enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
+/* a notice in the header (ctl_last_id = B_NOTICE, the value one of these): none, a broken stored program loaded as
+ * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC") */
+enum { NT_NONE, NT_BROKEN, NT_RESTORE_ASK, NT_RESTORED };
+#define B_NOTICE B_ACT(0x7Fu)   /* the program number's digits (OB-6: bank / tens / ones) */
 
 typedef struct { uint16_t enc[7]; uint16_t fader[4]; uint16_t pad_top[8]; } binding_t;  /* param ids or 0xFFFF; pad_top may be actions */
 extern const binding_t BINDINGS[SCR_COUNT];

@@ -22,8 +22,12 @@
 _Static_assert(PROG_COUNT >= 100u, "at least 100 programs");
 _Static_assert(PROG_BANKS <= 10u, "one bank digit");
 
-int prog_load(uint32_t n, program_t *p);         /* 0 loaded; -1 nothing valid stored there (or n past the end):
-                                                  * *p = the init program */
+int prog_load(uint32_t n, program_t *p);         /* 0 loaded; never written (or n past the end): 1 = the factory
+                                                  * program n (store_prog.c), -1 = the init program (no factory bank,
+                                                  * or n past it); -2 = a broken or unknown-version record: the init
+                                                  * program */
+int prog_factory(uint32_t n, program_t *p);      /* 0 = factory program n; -1 none (no bank, n past it): init */
+uint32_t prog_factory_count(void);               /* factory programs in this build (0: none) */
 int prog_save(uint32_t n, const program_t *p);   /* 0 saved; -1 failed (n past the end, the flash refused) */
 uint32_t prog_count(void);                       /* PROG_COUNT */
 
