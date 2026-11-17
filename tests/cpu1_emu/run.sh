@@ -34,6 +34,9 @@
 #            counters go up, no error, no misread, FPU and DUAL=SINGLE OK, CPU1 IDLE
 #   probeflaky the probe image with --flaky-core1 (as flaky): the misreads show (MISREAD, ERR), CPU1 retired
 #            (FAIL MISREAD), the audio runs
+#   probemis the probe with its test hook (-DKNOBI_PROBE_TEST=1): CPU1 reads 0x00200000 where 0 is in one word of
+#            pattern round 40: MISREAD 1 (CPU1's), BIT 00200000, CPU1 retired (FAIL PATTERN), the audio runs; the
+#            screen saved (probemis_screen.png)
 #   bash tests/cpu1_emu/run.sh FM1_EMU OUTDIR     (as ./build.sh: JIELI_TOOLCHAIN, AC79_SDK, Pillow; Docker off Linux)
 # It leaves build/ holding the last CPU1 image: run ./build.sh again for the default one.
 set -euo pipefail
@@ -49,7 +52,8 @@ PMS=${CPU1_EMU_PROBE_MS:-4000}                   # probe: four pings (one a seco
 build() {   # name, test hook (empty: none), build.py options...
     local name=$1 hook=$2; shift 2
     rm -f build/knobi-six*-cpu1*.fwsc
-    if ! KNOBI_CPU1=1 DINGHY_DEFS="${hook:+-DKNOBI_CPU1_TEST=$hook}" ./build.sh "$@" > "$OUT/$name.build.log" 2>&1; then
+    case $hook in -D*) ;; ?*) hook=-DKNOBI_CPU1_TEST=$hook ;; esac   # (a number: KNOBI_CPU1_TEST; -D...: as given)
+    if ! KNOBI_CPU1=1 DINGHY_DEFS="$hook" ./build.sh "$@" > "$OUT/$name.build.log" 2>&1; then
         cat "$OUT/$name.build.log"; exit 1
     fi
     cp build/knobi-six*-cpu1*.fwsc "$OUT/$name.fwsc"
@@ -73,6 +77,7 @@ build dualfail 7
 build write 8
 build dualmid 9
 build probe "" --probe-cpu1
+build probemis -DKNOBI_PROBE_TEST=1 --probe-cpu1
 emu plain plain fm1_cpu1_mb 13
 emu start test3 cpu1_test 20
 emu nostart nostart cpu1_test 20
@@ -83,9 +88,11 @@ RUN_MS=$DMS emu dual dual dual_test 66 --keys 800:GLOBE --snap 2000 &
 RUN_MS=$DMS emu dualfail dualfail dual_test 66 &
 RUN_MS=$DMS emu dualmid dualmid dual_test 66 &
 RUN_MS=$WMS emu write write dual_test 66 &
-RUN_MS=$PMS emu probe probe c1probe 29 --keys 800:GLOBE --snap $((PMS - 100)) &
-RUN_MS=$PMS emu probeflaky probe c1probe 29 --flaky-core1 "$RATE" --seed 7 --cpu1-survives &
+RUN_MS=$PMS emu probe probe c1probe 33 --keys 800:GLOBE --snap $((PMS - 100)) &
+RUN_MS=$PMS emu probeflaky probe c1probe 33 --flaky-core1 "$RATE" --seed 7 --cpu1-survives &
+RUN_MS=$PMS emu probemis probemis c1probe 33 --keys 800:GLOBE --snap $((PMS - 101)) &
 wait
-python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).save(sys.argv[2])' \
-    "$OUT/work/lcd_$((PMS - 100)).bmp" "$OUT/probe_screen.png" || true   # (the probe's Globals screen at the end)
+png() { python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).save(sys.argv[2])' "$@" || true; }
+png "$OUT/work/lcd_$((PMS - 100)).bmp" "$OUT/probe_screen.png"      # (the probe's Globals screen at the end)
+png "$OUT/work/lcd_$((PMS - 101)).bmp" "$OUT/probemis_screen.png"
 python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" "$PMS" | tee "$OUT/summary.md"

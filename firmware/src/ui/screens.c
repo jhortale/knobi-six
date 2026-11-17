@@ -129,7 +129,7 @@ static const wdg_t SCR_GLOBALS_W[] = {
     PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
     PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
 #if KNOBI_CPU1_PROBE
-    {W_DIAG, 7, 148, 226, 62, 0, 0, 0},           /* (the CPU1 probe's four lines over the usual three; no version line) */
+    {W_DIAG, 7, 147, 226, 63, 0, 0, 0},           /* (the CPU1 probe's four lines over the usual three; no version line) */
     PADHINT(210), FOOTER, END};
 #else
     {W_DIAG, 7, 148, 226, 30, 0, 0, 0},
@@ -197,11 +197,13 @@ static void scr_c1(char *d)
  *   C1 PING n  ERR n  MISREAD n
  *   FPU OK|BAD|TRAP|--  DUAL=SINGLE OK|BAD|--  [BIT xxxxxxxx: the bits misread]
  *   LOAD 1C x%  2C y%  JOB z%     (the test patch on one core, on two (CPU0), CPU1's job; -- until measured)
- *   PROBE  C1 IDLE|BUSY|OFF|FAIL [why]  DUAL OFF|ON n%|FAIL
+ *   PROBE n%  C1 IDLE|BUSY|OFF|FAIL [why]  DUAL OFF|ON n%|FAIL   (n: the probe's own time, the last second's
+ *                                    peak, % of a block; why: PATTERN, FPU, DUAL for the probe's own, else the HAL's)
  * what is drawn is what is compared (the widget's value) */
 static const char *const SCR_C1ST[4] = {"OFF", "IDLE", "BUSY", "FAIL"};
 static const char *const SCR_C1WHY[6] = {"", " MISREAD", " LATE", " BARRED", " FAULT", " SILENT"};
 static const char *const SCR_CHK[4] = {"--", "OK", "BAD", "TRAP"};
+static const char *const SCR_PRFAIL[4] = {"", " PATTERN", " FPU", " DUAL"};
 static char *scr_hex8(char *d, uint32_t v)
 {
     for (int i = 7; i >= 0; i--) *d++ = "0123456789ABCDEF"[v >> 4 * i & 15u];
@@ -218,6 +220,7 @@ static uint32_t scr_probe_q(void)
     h = h * 7u + (uint32_t)c1probe_dual();
     h = h * 1009u + c1probe.load1 * 1000003u + c1probe.load2 * 999983u + c1probe.loadj * 7919u + c1probe.passes * 31u;
     h = h * 17u + (c1probe.state & 3u) * 8u + (c1probe.why & 7u);
+    h = h * 37u + (c1probe.fail & 3u) + c1probe.cost_peak * 4u;
     return h;
 }
 static int32_t scr_probe_lines(int32_t cx, int32_t y)   /* draws them from y; returns the y after them */
@@ -241,8 +244,9 @@ static int32_t scr_probe_lines(int32_t cx, int32_t y)   /* draws them from y; re
         scr_cat(scr_num(scr_cat(p, "%  JOB "), (int32_t)c1probe.loadj), "%");
     }
     pg_text_c(cx, y + 18, &FONT_XS, t, PC_WHITE);
-    p = scr_cat(scr_cat(t, "PROBE  C1 "), SCR_C1ST[st]);
-    p = scr_cat(p, why < 6u ? SCR_C1WHY[why] : " ?");
+    p = scr_num(scr_cat(t, "PROBE "), (int32_t)(c1probe.cost_peak > 999u ? 999u : c1probe.cost_peak));
+    p = scr_cat(scr_cat(p, "%  C1 "), SCR_C1ST[st]);
+    p = scr_cat(p, c1probe.fail ? SCR_PRFAIL[c1probe.fail & 3u] : why < 6u ? SCR_C1WHY[why] : " ?");
     p = scr_cat(p, "  DUAL ");
     if (c1 == 1) scr_cat(scr_num(scr_cat(p, "ON "), (int32_t)eng_c1_load), "%");
     else scr_cat(p, c1 ? "FAIL" : "OFF");

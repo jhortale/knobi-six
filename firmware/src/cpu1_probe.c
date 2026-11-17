@@ -14,12 +14,13 @@
  *     conversions, a value halved through the denormals to 0) run on CPU1 (a job) and at the same time on CPU0, the
  *     two results' bits compared (they must be identical). A trap of CPU1's FPU is a CPU1 fault: the HAL holds and
  *     retires it (cpu1_why FM1_CPU1_FAULT): "FPU TRAP";
- *   - every PR_PAT_EVERY blocks: a shared-RAM pattern round over 16 KB (pr_buf): CPU0 writes pattern P, CPU1 reads it
- *     back and counts the words wrong, then writes pattern ~P, which CPU0 reads back and counts (both directions;
- *     the pattern changes each round: zeros / ones, an address hash, alternating bits, a walking bit, the sides'
- *     roles swapped every 4 rounds). MISREAD = the words read wrong by either
- *     core + the jobs CPU1's mailbox check refused (fm1_cpu1_mb.rejected: a misread of the mailbox, which retires
- *     CPU1); BIT = the bits that came back wrong (OR of the XORs; the known fault reads 0x00200000 where 0 is);
+ *   - every other block: a step of the shared-RAM pattern test over 16 KB (pr_buf, 4 chunks of 4 KB, one chunk a
+ *     step, a whole round every 4 steps): CPU0 writes pattern P into the chunk, CPU1 reads it back and counts the
+ *     words wrong, then writes ~P; meanwhile CPU0 reads back the chunk CPU1 wrote the step before (both cores on the
+ *     RAM at once: misreads are likelier under load). Both directions; the pattern changes each round: zeros / ones,
+ *     an address hash, alternating bits, a walking bit, the sides' roles swapped every 4 rounds. MISREAD = the words
+ *     read wrong by either core + the jobs CPU1's mailbox check refused (fm1_cpu1_mb.rejected); BIT = the bits that
+ *     came back wrong (OR of the XORs; the known fault reads 0x00200000 where 0 is);
  *   - every block: one control period (16 frames) of the dual-vs-single check: a test patch (the musical stress
  *     patch, 6 notes) on a synth of its own, rendered into a scratch buffer (never to the speaker) for PR_PERIODS
  *     periods (8 blocks of audio) on one core, then again from synth_init on two (engine.c eng_split_force): the two
@@ -27,22 +28,30 @@
  *     CPU1's job: LOAD 1C (one core), 2C (CPU0 with two), JOB (CPU1), in % of a block's time at this patch: the
  *     speedup on this unit is 1C / 2C.
  * ERR counts the failures: the probe's own operations that failed while CPU1 was running (a ping wrong or late, a
- * job not back, a post refused, a dual pass whose join failed), and CPU1's retirement for any other reason (its start,
- * a misread or a fault in its idle loop, DUAL CORE's render) once. Any failure leaves CPU1 retired (held, one core
- * until power-off; the HAL's bar), as it would be with DUAL CORE on; the probe then stops posting. The audio's DUAL
+ * job not back, a post refused, a dual pass whose join failed, a pattern misread, FPU BAD, DUAL=SINGLE BAD), and
+ * CPU1's retirement for any other reason (its start, a misread or a fault in its idle loop, DUAL CORE's render) once.
+ * Any failure leaves CPU1 retired (held, one core until power-off; the HAL's bar): a pattern misread, FPU BAD and
+ * DUAL=SINGLE BAD retire it too (pr_fail, the screen's FAIL PATTERN / FPU / DUAL), so DUAL CORE can never render the
+ * sound on a core known to compute or read wrong. The probe then stops posting. The audio's DUAL
  * CORE global starts OFF at every boot of the probe (params/globals.c); the player turns it on (Globals pad 7) once
  * the checks pass.
- * Cost in the interrupt: a period of the test patch every block (1/16 of a block's render), a 16 KB round every 4th. */
+ * Cost in the interrupt: a period of the test patch every block (1/16 of a block's render), a 4 KB pattern step every
+ * other block. c1probe_audio times itself: the screen shows the peak of each second (PROBE n%), and engine.c adds it
+ * to the next block's time for the CPU line and the CPU guard (eng_probe_ticks), so the guard sheds for it as for any
+ * load. Test hook (fm1-emu, tests/cpu1_emu case probemis, never a real build): KNOBI_PROBE_TEST 1 flips 0x00200000 in
+ * one word CPU1 reads in round PR_TEST_ROUND. */
 #if !KNOBI_CPU1 || !KNOBI_CPU1_PROBE
 #error "cpu1_probe.c: the CPU1 probe build only (tools/build.py --probe-cpu1)"
 #endif
 
 #define PR_PING_EVERY 172u                /* blocks: ~1.0 s */
-#define PR_PAT_EVERY 4u                   /* blocks between pattern rounds */
 #define PR_PAT_WORDS 4096u                /* 16 KB */
+#define PR_CHUNK 1024u                    /* words a step (4 KB) */
+#define PR_BLOCK_TICKS (256u * ENG_TICKS_PER_FRAME_X10 / 10u)   /* an audio block (HALF_FRAMES), ticks */
+#define PR_TEST_ROUND 40u                 /* (KNOBI_PROBE_TEST 1: the round whose read is flipped) */
 #define PR_PERIODS 128u                   /* control periods a dual-vs-single pass (8 blocks of audio) */
 #define PR_JOIN_TICKS (2000u * FM1_TICKS_PER_US)   /* a ping's or the FPU job's deadline from its post */
-#define PR_PAT_TICKS (3000u * FM1_TICKS_PER_US)    /* a pattern job's (16 KB read and written: ~0.1..0.2 ms) */
+#define PR_PAT_TICKS (2000u * FM1_TICKS_PER_US)    /* a pattern step's (4 KB read and written: ~0.05 ms) */
 #define PR_PERIOD_BUDGET (VOICE_CTL * ENG_TICKS_PER_FRAME_X10 / 10u)   /* a period's share of the block, ticks */
 #define PR_MAGIC 0x52503143u              /* "C1PR" */
 
@@ -54,12 +63,15 @@ struct {
     uint32_t dual_ok, dual_bad, dual_none, sum1, sum2, jobs2;    /* dual vs single (jobs2: CPU1 jobs, last pass) */
     uint32_t load1, load2, loadj, passes;                        /* % of a block: 1C, 2C, CPU1's job; passes timed */
     uint32_t state, why, rejected, mbjobs, c1_failed;            /* CPU1 now (cpu1_state, cpu1_why, the mailbox) */
+    uint32_t fail, cost_peak, cost_max, steps;   /* the probe's own retirement (PR_FAIL_*); its time, % of a block:
+                                                  * the last second's peak, the highest; pattern steps done */
 } c1probe = { PR_MAGIC };
+enum { PR_FAIL_NONE, PR_FAIL_PATTERN, PR_FAIL_FPU, PR_FAIL_DUAL };
 
 static uint32_t pr_buf[PR_PAT_WORDS] __attribute__((aligned(32)));   /* the shared RAM under test */
 /* a job's argument: CPU0 writes round, CPU1 its results on a cache line of their own */
 static struct pr_c1 {
-    uint32_t round;
+    uint32_t round, chunk;
     uint32_t mis __attribute__((aligned(32))), bits, fpu;
 } pr_c1 __attribute__((aligned(32)));
 
@@ -77,13 +89,18 @@ static uint32_t pr_pat(uint32_t r, uint32_t i, uint32_t side)
     }
     return (side ^ (r >> 2 & 1u)) ? ~p : p;
 }
-static void cpu1_job_pattern(void *arg)    /* on CPU1: CPU0's pattern read back, then its own written */
+static void cpu1_job_pattern(void *arg)    /* on CPU1: CPU0's pattern read back from the chunk, then its own written */
 {
     struct pr_c1 *j = arg;
-    uint32_t r = j->round, mis = 0, bits = 0, i, x;
-    for (i = 0; i < PR_PAT_WORDS; i++)
-        if ((x = pr_buf[i] ^ pr_pat(r, i, 0u)) != 0u) mis++, bits |= x;
-    for (i = 0; i < PR_PAT_WORDS; i++) pr_buf[i] = pr_pat(r, i, 1u);
+    uint32_t r = j->round, i0 = j->chunk * PR_CHUNK, mis = 0, bits = 0, i, x;
+    for (i = i0; i < i0 + PR_CHUNK; i++) {
+        x = pr_buf[i];
+#if KNOBI_PROBE_TEST == 1
+        if (r == PR_TEST_ROUND && i == i0) x ^= 0x00200000u;   /* (fm1-emu case probemis: the known misread) */
+#endif
+        if ((x ^= pr_pat(r, i, 0u)) != 0u) mis++, bits |= x;
+    }
+    for (i = i0; i < i0 + PR_CHUNK; i++) pr_buf[i] = pr_pat(r, i, 1u);
     j->mis = mis, j->bits = bits;
 }
 
@@ -140,6 +157,14 @@ static uint32_t pr_pct(uint32_t ticks)     /* ticks over a pass, % of the blocks
 }
 static int pr_up(void) { return cpu1_state() == CPU1_IDLE; }
 static uint8_t pr_failed;                  /* CPU1's failure counted */
+/* a wrong result: CPU1 retired (held, barred until power-off), as a misread of its mailbox would be, so the audio's
+ * DUAL CORE never renders on it */
+static void pr_fail(uint32_t why)
+{
+    c1probe.errs++;
+    if (!c1probe.fail) c1probe.fail = why;
+    if (fm1_cpu1_on) fm1_cpu1_retire(FM1_CPU1_MISREAD);
+}
 
 static void pr_dual_period(void)
 {
@@ -181,7 +206,7 @@ static void pr_dual_period(void)
     if (!c1probe.jobs2 || pr_lost) { c1probe.dual_none++; return; }   /* (CPU1 not running, or lost on the way: not
                                            * compared; a lost job is an ERR already) */
     if (pr_sum == c1probe.sum1) c1probe.dual_ok++;
-    else c1probe.dual_bad++;
+    else c1probe.dual_bad++, pr_fail(PR_FAIL_DUAL);
     c1probe.load2 = pr_pct(pr_t);
     c1probe.loadj = pr_pct(pr_tj);
     c1probe.passes++;
@@ -208,36 +233,48 @@ static void pr_fpu(void)
     fm1_cpu1_sync();
     c1probe.fpu_c0 = c0, c1probe.fpu_c1 = pr_c1.fpu;
     if (pr_c1.fpu == c0) c1probe.fpu_ok++;
-    else c1probe.fpu_bad++;
+    else c1probe.fpu_bad++, pr_fail(PR_FAIL_FPU);
 }
 
+static uint32_t pr_pend = ~0u, pr_pend_r;   /* the chunk CPU1 wrote last step (~0u: none), its round */
+static uint32_t pr_check(uint32_t c, uint32_t r, uint32_t *bits)   /* CPU0: chunk c as CPU1 wrote it in round r */
+{
+    uint32_t i, x, mis = 0;
+    for (i = c * PR_CHUNK; i < (c + 1u) * PR_CHUNK; i++)
+        if ((x = pr_buf[i] ^ pr_pat(r, i, 1u)) != 0u) mis++, *bits |= x;
+    return mis;
+}
 static void pr_pattern(void)
 {
-    uint32_t r = c1probe.rounds, i, x, mis = 0, bits = 0;
-    for (i = 0; i < PR_PAT_WORDS; i++) pr_buf[i] = pr_pat(r, i, 0u);
-    pr_c1.round = r, pr_c1.mis = 0, pr_c1.bits = 0;
+    uint32_t st = c1probe.steps, c = st & 3u, r = st >> 2, i, mis = 0, bits = 0, c1mis;
+    for (i = c * PR_CHUNK; i < (c + 1u) * PR_CHUNK; i++) pr_buf[i] = pr_pat(r, i, 0u);
+    pr_c1.round = r, pr_c1.chunk = c, pr_c1.mis = 0, pr_c1.bits = 0;
     fm1_cpu1_sync();
     if (cpu1_post(cpu1_job_pattern, &pr_c1) < 0) { c1probe.errs++; return; }
+    if (pr_pend != ~0u) mis = pr_check(pr_pend, pr_pend_r, &bits);   /* (meanwhile: CPU0 reads the step before's) */
     if (cpu1_join(PR_PAT_TICKS) < 0) { c1probe.errs++; return; }
     fm1_cpu1_sync();
-    c1probe.c1_mis += pr_c1.mis, c1probe.c1_bits |= pr_c1.bits;
-    for (i = 0; i < PR_PAT_WORDS; i++)
-        if ((x = pr_buf[i] ^ pr_pat(r, i, 1u)) != 0u) mis++, bits |= x;
+    c1mis = pr_c1.mis;
+    c1probe.c1_mis += c1mis, c1probe.c1_bits |= pr_c1.bits;
     c1probe.c0_mis += mis, c1probe.c0_bits |= bits;
-    c1probe.rounds = r + 1u;
+    pr_pend = c, pr_pend_r = r;
+    c1probe.steps = st + 1u;
+    c1probe.rounds = (st + 1u) >> 2;
+    if (mis || c1mis) pr_fail(PR_FAIL_PATTERN);
 }
 
 /* app_audio, after the block's render (the audio interrupt; eng_render's own jobs are joined) */
 static void c1probe_audio(void)
 {
-    uint32_t b, e0 = c1probe.errs;
+    static uint32_t peak;
+    uint32_t b, e0 = c1probe.errs, t0 = eng_ticks(), pct;
     if (!eng_ready) return;
     b = c1probe.blocks++;
     fm1_cpu1_check();                       /* (a misread or a fault in its idle loop: retired now, its why set) */
     if (pr_up()) {
         if (b % PR_PING_EVERY == 0u) pr_ping();
         else if (b % PR_PING_EVERY == 1u) pr_fpu();
-        else if (b % PR_PAT_EVERY == 2u) pr_pattern();
+        else if (b & 1u) pr_pattern();
     }
     if (pr_up() || pr_k) pr_dual_period();  /* (a pass under way ends on one core if CPU1 went: dual_none) */
     c1probe.state = (uint32_t)cpu1_state();
@@ -250,6 +287,12 @@ static void c1probe_audio(void)
     c1probe.rejected = fm1_cpu1_mb.rejected;
     c1probe.mbjobs = fm1_cpu1_mb.jobs;
     c1probe.c1_failed = eng_c1_failed;
+    t0 = eng_ticks() - t0;                  /* (its own time: into the next block's CPU line and guard) */
+    eng_probe_ticks = t0;
+    pct = t0 >= PR_BLOCK_TICKS * 10u ? 999u : t0 * 100u / PR_BLOCK_TICKS;
+    if (pct > peak) peak = pct;
+    if (pct > c1probe.cost_max) c1probe.cost_max = pct;
+    if (b % PR_PING_EVERY == PR_PING_EVERY - 1u) c1probe.cost_peak = peak, peak = 0;
 }
 
 /* the screen's numbers (main loop): MISREAD, the bits wrong, and the checks' words: 0 not run yet, 1 OK, 2 BAD, 3 TRAP */

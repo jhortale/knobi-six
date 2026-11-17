@@ -194,7 +194,8 @@ if dms:
 # Task 4: the CPU1 probe (firmware/src/cpu1_probe.c c1probe)
 PR = ["magic", "blocks", "pings", "errs", "c0_mis", "c1_mis", "c0_bits", "c1_bits", "rounds", "fpu_ok", "fpu_bad",
       "fpu_trap", "fpu_c0", "fpu_c1", "dual_ok", "dual_bad", "dual_none", "sum1", "sum2", "jobs2", "load1", "load2",
-      "loadj", "passes", "state", "why", "rejected", "mbjobs", "c1_failed"]
+      "loadj", "passes", "state", "why", "rejected", "mbjobs", "c1_failed", "fail", "cost_peak", "cost_max", "steps"]
+FAILWHY = {0: "-", 1: "PATTERN", 2: "FPU", 3: "DUAL"}
 if pms:
     def pr(r):
         w = r["words"]
@@ -207,17 +208,19 @@ if pms:
     case("probe", "the CPU1 probe image (--probe-cpu1): ping, 16 KB patterns, FPU, dual vs single, timing",
          {**common(r, halves=min_halves(pms)), "magic": t["magic"] == 0x52503143,
           f"pings counted (>= {pings}), no error": (t["pings"] or 0) >= pings and t["errs"] == 0,
-          "pattern rounds (>= 100), no misread": (t["rounds"] or 0) >= 100 and mis == 0,
+          "pattern rounds of 16 KB (>= 60), no misread": (t["rounds"] or 0) >= 60 and mis == 0,
+          "its own time measured, under 25 % of a block": 0 < (t["cost_max"] or 0) < 25,
           "FPU: CPU1 = CPU0, every check; no trap": (t["fpu_ok"] or 0) >= pings and t["fpu_bad"] == 0
               and t["fpu_trap"] == 0 and t["fpu_c0"] == t["fpu_c1"],
           "DUAL=SINGLE: every pass equal, with CPU1 jobs": (t["dual_ok"] or 0) >= 1 and t["dual_bad"] == 0
               and t["dual_none"] == 0 and t["sum1"] == t["sum2"] and (t["jobs2"] or 0) > 0,
           "timed (LOAD 1C, 2C, JOB)": (t["passes"] or 0) >= 1 and (t["load1"] or 0) > 0 and (t["load2"] or 0) > 0,
-          "CPU1 IDLE, no failure": (t["state"], t["why"], t["c1_failed"]) == (1, 0, 0)},
+          "CPU1 IDLE, no failure": (t["state"], t["why"], t["c1_failed"], t["fail"]) == (1, 0, 0, 0)},
          f"PING {t['pings']} ERR {t['errs']} MISREAD {mis} ({t['rounds']} rounds of 16 KB); FPU {t['fpu_ok']} ok "
          f"{t['fpu_bad']} bad {t['fpu_trap']} trap ({(t['fpu_c0'] or 0):08x}); DUAL=SINGLE {t['dual_ok']} ok "
          f"{t['dual_bad']} bad ({(t['sum1'] or 0):08x}, {t['jobs2']} CPU1 jobs a pass); LOAD 1C {t['load1']}% 2C "
-         f"{t['load2']}% JOB {t['loadj']}% (emulator time); {STATE.get(t['state'])}; {r['halves']} audio halves")
+         f"{t['load2']}% JOB {t['loadj']}% (emulator time); PROBE {t['cost_peak']}% (highest {t['cost_max']}% of a block, "
+         f"emulator time); {STATE.get(t['state'])}; {r['halves']} audio halves")
     r = load("probeflaky")
     t = pr(r)
     mis = (t["c0_mis"] or 0) + (t["c1_mis"] or 0) + (t["rejected"] or 0)
@@ -228,6 +231,18 @@ if pms:
          f"{r['misreads']} misreads injected; PING {t['pings']} ERR {t['errs']} MISREAD {mis} (patterns "
          f"{t['c0_mis']} + {t['c1_mis']}, mailbox {t['rejected']}); {STATE.get(t['state'])} ({WHY.get(t['why'])}); "
          f"{r['halves']} audio halves")
+
+if pms:
+    r = load("probemis")
+    t = pr(r)
+    case("probemis", "the probe's test hook: CPU1 reads 0x00200000 where 0 is in round 40",
+         {**common(r, halves=min_halves(pms)), "MISREAD 1, CPU1's": (t["c1_mis"], t["c0_mis"], t["rejected"]) == (1, 0, 0),
+          "BIT 00200000": (t["c1_bits"] or 0) | (t["c0_bits"] or 0) == 0x00200000,
+          "retired: FAIL PATTERN (MISREAD), ERR 1": (t["state"], t["why"], t["fail"], t["errs"]) == (3, 1, 1, 1),
+          "stopped at round 40": t["rounds"] == 40 and t["steps"] == 161},
+         f"c1_mis {t['c1_mis']} c0_mis {t['c0_mis']} BIT {(t['c1_bits'] or 0):08x}; {STATE.get(t['state'])} "
+         f"({WHY.get(t['why'])}, probe {FAILWHY.get(t['fail'])}), ERR {t['errs']}, rounds {t['rounds']} "
+         f"(steps {t['steps']}), PING {t['pings']}; {r['halves']} audio halves")
 
 print(f"### Second core in fm1-emu ({ms} ms each; dual and dualfail {dms} ms, write {wms} ms"
       + (f", probe {pms} ms" if pms else "") + ")\n")

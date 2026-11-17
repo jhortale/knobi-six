@@ -152,7 +152,7 @@ raw wheels and faders (checking a unit's travel). A `KNOBI_CPU1=1` build adds th
 first core's whole interrupt, the waits for the second included), `C1 FAIL` (on, but the second core is not running:
 it failed, or it never started; one core until power-off). The CPU1 probe (`--probe-cpu1`, a test package only) puts
 four lines of its own above these, `C1 PING n  ERR n  MISREAD n`, `FPU OK  DUAL=SINGLE OK`, `LOAD 1C x%  2C y%  JOB z%`
-and `PROBE  C1 IDLE  DUAL OFF` (the second core's state and the DUAL CORE global, which moves there from the wheels'
+and `PROBE 8%  C1 IDLE  DUAL OFF` (the probe's own time, the second core's state and the DUAL CORE global, which moves there from the wheels'
 line), and drops the version line: [SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe".
 
 The OB-6 globals not here: MIDI clock and clock port (phase 2), the sequencer jack, alternative tunings, the SysEx and

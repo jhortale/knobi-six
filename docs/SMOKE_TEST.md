@@ -63,8 +63,9 @@ keyboard since; else a new one), the way back ready, and **João installs it him
 `fm1_install.py`, flashes, or uses the USB rescue.
 
 **Package**: `knobi-six-cpu1probe.fwsc`, the CI artifact **`knobi-six-cpu1probe`** of the `build` workflow (job
-`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`: CI run 44104394317 (commit 0568642), 652,737 B,
-SHA-256 `34b7e7197459b213d0cfdb0e164aaaca97f23b6157b4a44c431a8fbb47b51daf`; compare it before installing. Identity
+`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`: download it from CI run RUNID (commit COMMIT;
+an older run's probe is superseded), SIZE B, SHA-256 `SHA`. Before installing, check it:
+`shasum -a 256 knobi-six-cpu1probe.fwsc` must print exactly that. Identity
 `SMK-37 Pro_956`, as the default. (A local build: `./build.sh --probe-cpu1`; `--model elite` / `mke` for those units;
 build.py refuses `--release` with it: a probe is never published.) Never install a `-local` probe on a keyboard you
 lend or sell.
@@ -77,13 +78,15 @@ Four probe lines above the usual three (`CPU ...`, `WHEELS ...`, `FADERS ...`); 
 
 | line | reads | means |
 |---|---|---|
-| `C1 PING n  ERR n  MISREAD n` | PING +1 a second; ERR and MISREAD 0 | PING: round trips through CPU1 that came back right (one a second). ERR: failures (a ping wrong or late, a probe job not back, CPU1 retired for any reason). MISREAD: words read wrong in the 16 KB shared-RAM test (CPU0 writes, CPU1 reads back; CPU1 writes, CPU0 reads back; every 4th audio block) plus jobs CPU1's mailbox check refused |
+| `C1 PING n  ERR n  MISREAD n` | PING +1 a second; ERR and MISREAD 0 | PING: round trips through CPU1 that came back right (one a second). ERR: failures (a ping wrong or late, a probe job not back, CPU1 retired for any reason). MISREAD: words read wrong in the 16 KB shared-RAM test (CPU0 writes, CPU1 reads back; CPU1 writes, CPU0 reads back while CPU1 works; 4 KB every other audio block) plus jobs CPU1's mailbox check refused |
 | `FPU OK  DUAL=SINGLE OK` | `--` for the first ~2 s, then `OK` | FPU: a fixed float workload run on CPU1 and on CPU0 at the same time, every second; `BAD` = the results differ, `TRAP` = CPU1 faulted in it. DUAL=SINGLE: a test patch (the musical stress patch, 6 notes) rendered inside the firmware, never to the speaker, on one core and then on two, every ~1.5 s: the checksums must be equal. After a misread, `BIT xxxxxxxx` = the bits that came back wrong (the known fault is `00200000`) |
 | `LOAD 1C x%  2C y%  JOB z%` | three numbers | the same test patch's render time, in % of an audio block: on one core (1C), on CPU0 with two cores (2C, its wait for CPU1 included), CPU1's own share (JOB). **The real speedup on this unit is 1C / 2C** |
-| `PROBE  C1 IDLE  DUAL OFF` | `C1 IDLE` | CPU1's state: `IDLE` (running, waiting for work), `FAIL` + why (`MISREAD`, `LATE`, `BARRED`, `FAULT`, `SILENT` = it never started). DUAL: the audio's DUAL CORE global, `OFF`, `ON n%` (CPU1's share of the real sound) or `FAIL` |
+| `PROBE n%  C1 IDLE  DUAL OFF` | `C1 IDLE` | PROBE n%: the probe's own time in the audio interrupt, the last second's peak, % of a block (it is also counted in the CPU line and the CPU guard, so a crackle from it sheds voices like any load). CPU1's state: `IDLE` (running, waiting for work), `FAIL` + why: `PATTERN` (a RAM misread in the test), `FPU` (FPU BAD), `DUAL` (DUAL=SINGLE BAD), `MISREAD` (its mailbox), `LATE`, `BARRED`, `FAULT`, `SILENT` (it never started). DUAL: the audio's DUAL CORE global, `OFF`, `ON n%` (CPU1's share of the real sound) or `FAIL` |
 
 Any failure retires CPU1 for the rest of the power-on (held; one core; the keyboard plays on, at most one glitched
-block). The probe never restarts it; a power cycle does.
+block) — a misread in the RAM test, FPU BAD and DUAL=SINGLE BAD included, so DUAL CORE can never put a core known to
+read or compute wrong on the sound (it then shows `DUAL FAIL` and plays on one core). The probe never restarts it; a
+power cycle does. With the probe, the CPU line includes the probe's own time (a few % even when idle).
 
 ### How to run it (about 35 min)
 

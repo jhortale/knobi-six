@@ -296,9 +296,11 @@ core (Globals: `C1 FAIL`). `voice_t` (320 B) and `synth_t.voice[]` sit on 32-byt
 
 The CPU1 probe (`./build.sh --probe-cpu1`, package `knobi-six-cpu1probe.fwsc`, `KNOBI_CPU1=1` plus
 `KNOBI_CPU1_PROBE=1`; never a release, never the default package) is that build plus `src/cpu1_probe.c`: inside the
-audio interrupt, after each block's render, a ping a second, a 16 KB shared-RAM pattern round every 4th block (both
-directions), an FPU workload on both cores compared bit for bit, and a test patch rendered (to a scratch buffer) on one
-core and on two (`eng_split_force`) with the checksums compared and both timed. DUAL CORE starts OFF at every boot of
+audio interrupt, after each block's render, a ping a second, a 16 KB shared-RAM pattern test in 4 KB steps every other
+block (both directions, CPU0 reading while CPU1 works), an FPU workload on both cores compared bit for bit, and a test
+patch rendered (to a scratch buffer) on one core and on two (`eng_split_force`) with the checksums compared and both
+timed. A wrong result retires CPU1 (so DUAL CORE never uses it); the probe's own time goes into the CPU line and the
+guard (`eng_probe_ticks`). DUAL CORE starts OFF at every boot of
 the probe. The Globals screen shows the results ([CONTROLS.md](CONTROLS.md); the device run:
 [SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe").
 

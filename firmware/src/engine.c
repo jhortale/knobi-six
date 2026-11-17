@@ -334,6 +334,7 @@ static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of 
 /* the CPU1 probe build (cpu1_probe.c): its own test renders force one core (0) or two (1) whatever DUAL CORE says;
  * -1 (outside them): DUAL CORE decides, as in any KNOBI_CPU1 build */
 static volatile int8_t eng_split_force = -1;
+static uint32_t eng_probe_ticks;          /* the probe's own time in the interrupt last block: the guard counts it too */
 #define ENG_DUAL_NOW() (eng_split_force < 0 ? eng_dual : (uint8_t)eng_split_force)
 #else
 #define ENG_DUAL_NOW() eng_dual
@@ -413,6 +414,11 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);
 #endif
     uint32_t used = eng_ticks() - t0, budget = frames * ENG_TICKS_PER_FRAME_X10 / 10u;
+#if KNOBI_CPU1_PROBE
+    used += eng_probe_ticks;               /* (the CPU1 probe's checks of the block before: in the CPU line and the
+                                            * guard, so a crackle from the probe's cost sheds voices, as any load) */
+    eng_probe_ticks = 0;
+#endif
     synth_guard(&eng_synth, used, budget);
     eng_cpu(used, budget);
 #if KNOBI_CPU1
