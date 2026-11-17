@@ -95,13 +95,15 @@ program.
 
 - **Select:** on Program, K2 / K3 / K4 turn the bank, tens and ones digits; the program loads as a digit moves (a digit
   stops at its ends, it does not carry). MIDI: program change 0..99 in the current bank, CC 32 picks the bank
-  ([MIDI.md](MIDI.md)). A change while notes sound releases them (their release runs; the values glide, no click).
+  ([MIDI.md](MIDI.md)). A change while notes sound releases them (their release runs; the values glide, no click): the release tails
+  already sound with the new program (its filter, levels, shapes glide to it in ~6 ms; its envelope rates at once).
 - **WRITE** (pad 2, or BT on any screen): arms (the pad blinks; the digits now pick the destination, nothing loads);
   **ENTER** (pad 3) stores the sound as it is (the program in play with its edits) there, and that program is then the
   one in play. WRITE again cancels. Storing rewrites the program's 16 KB slot, whose erase stops the chip for some
   200 ms: the sound fades out (10 ms), goes silent while the flash works, and fades back in (10 ms). A deliberate
   dropout, never a click (`tests/scripts/write_held.txt`, `tests/wav_check.py`). The status line under the pads says
-  WRITE TO b-tt?, STORED or WRITE FAILED.
+  WRITE TO b-tt?, STORED or WRITE FAILED. A power loss during a store loses nothing already stored: the 7 slots of 74
+  programs live in 8 flash slots, a store goes to the spare one and only then replaces the old copy.
 - **MANUAL** (pad 4): the live panel. The sound is what the panel says: the four faders' Play parameters (FILTER FREQ,
   RESONANCE, MODE, ENV AMOUNT) jump to where the faders stand; the program number shows as dashes and MIDI program
   change is ignored. MANUAL again leaves it (the sound stays); turning a digit loads that program. WRITE works from
@@ -110,9 +112,11 @@ program.
 
 ## Globals and what is kept
 
-The globals (GLOBE), the keys' octave and the last program are kept in the base's settings sector, saved 2 s after the
-last change once nothing sounds (an erase stalls the sound), and loaded at power-on; nothing saved, a broken record or
-another version gives the defaults (`firmware/src/params/globals.c`). What each does:
+The globals (GLOBE), the keys' octave and the last program are kept in the base's blobs 0 and 1, in turn (a save
+goes to the other one, with a sequence number: one cut by a power loss leaves the previous record), saved 2 s after
+the last change once nothing sounds (an erase stalls the sound) and loaded at power-on; nothing saved, broken records
+or another version give the defaults (`firmware/src/params/globals.c`). A change of program alone is saved at most once
+every 30 s (flash wear). What each does:
 
 | Global | Range (default) | Does |
 | --- | --- | --- |

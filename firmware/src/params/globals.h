@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX globals: the OB-6's global settings that apply here (docs/ob6-reference.md section 7; the spec's list),
- * the keys' octave and the last program, kept in the base's settings sector (settings_load / settings_save) and
- * restored at power-on. Saved only while silent (an erase stalls the sound). Integers only. */
+ * the keys' octave and the last program, kept in two of the base's blobs (0 and 1) taken in turn, each record with a
+ * sequence number: a save goes to the other blob, so one cut by a power loss leaves the previous record. Restored at
+ * power-on. Saved only while silent (an erase stalls the sound). Integers only. */
 #ifndef KNOBI_GLOBALS_H
 #define KNOBI_GLOBALS_H
 #include <stdint.h>
@@ -21,17 +22,21 @@ enum { POT_RELATIVE, POT_PASSTHRU, POT_JUMP };
 extern const int8_t GLOB_MIN[G_COUNT], GLOB_MAX[G_COUNT], GLOB_DEF[G_COUNT];
 
 #define GLOBALS_VERSION 1
-#define GLOBALS_BYTES (1 + G_COUNT + 1 + 2 + 2)    /* version, the values, octave, last program (LE), CRC16 (LE) */
+#define GLOBALS_BYTES (1 + G_COUNT + 1 + 2 + 4 + 2)   /* version, the values, octave, last program (LE), seq (LE),
+                                                       * CRC16 (LE) */
+#define GLOBALS_BLOB 0u                               /* blobs GLOBALS_BLOB and GLOBALS_BLOB + 1 */
 typedef struct {
     int8_t v[G_COUNT];
     int8_t oct;                                   /* the keys' octave, -2..+2 (OCTAVE - / +) */
     uint16_t last_prog;                           /* the program loaded at power-on, 0..PROG_COUNT-1 */
+    uint32_t seq;                                 /* (the record's sequence number: the newer blob wins) */
 } globals_t;
 
 void globals_default(globals_t *g);
-void globals_load(globals_t *g);                  /* nothing saved, a bad CRC, another version, a value out of range:
-                                                   * the defaults */
-void globals_save(const globals_t *g);            /* main loop, while silent */
+void globals_load(globals_t *g);                  /* the newer good record of the two blobs; none good (nothing saved, a
+                                                   * bad CRC, another version, a value out of range): the defaults */
+void globals_save(globals_t *g);                  /* main loop, while silent: g->seq + 1 into the other blob (g->seq is
+                                                   * then the saved one's) */
 void globals_pack(const globals_t *g, uint8_t *b);   /* GLOBALS_BYTES, the CRC16 last */
 int glob_vel_curve(int curve, int v);             /* 0..127 -> 0..127; 0 stays 0, 1..127 never 0 */
 int glob_at_curve(int curve, int v);              /* 0..127 -> 0..127; 0 -> 0, 127 -> 127 */

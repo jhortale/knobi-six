@@ -34,7 +34,8 @@
  * Smoothing (no zipper): FILTER FREQ, RESONANCE, MODE, the BP switch, the shapes and widths, the four mixer levels,
  * PROGRAM VOLUME and PAN SPREAD glide to a new value with a one-pole at control rate, time constant 16 ticks = 5.8 ms
  * (BP and MODE jumps become crossfades). synth_program snaps them when nothing sounds; with voices still sounding
- * (a program change under held notes: they release) they glide like an edit, so the change does not click.
+ * (a program change under held notes: they release) they glide like an edit, so the change does not click. Those
+ * release tails then sound with the new program's values (timbre, filter, levels: gliding; envelope rates at once).
  *
  * Output: synth_render ADDS its stereo frames (L R int32 pairs, Q15 full scale 32767) into lr. Per-voice gain
  * SYNTH_VOICE_GAIN x PROGRAM VOLUME / 127, constant-power pan (centre: -3 dB each side): a 6-note chord of the init

@@ -267,8 +267,8 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     eng_fade_quiet = 0;
     for (uint32_t i = 0; i < frames; i++) {    /* a straight line to the target, a step a frame */
         g = g < tgt ? (g + ENG_FADE_STEP > tgt ? tgt : g + ENG_FADE_STEP) : g > tgt ? (g - ENG_FADE_STEP < tgt ? tgt : g - ENG_FADE_STEP) : g;
-        lr[2u * i] = lr[2u * i] * g >> 15;
-        lr[2u * i + 1u] = lr[2u * i + 1u] * g >> 15;
+        lr[2u * i] = (int32_t)((int64_t)lr[2u * i] * g >> 15);   /* (64-bit: whatever lr holds, no overflow) */
+        lr[2u * i + 1u] = (int32_t)((int64_t)lr[2u * i + 1u] * g >> 15);
     }
     eng_fade_g = g;
 }

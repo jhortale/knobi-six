@@ -62,4 +62,7 @@
 3950 enc 3 2
 4000 expect 3 prog
 4000 expect 164 param 14
-4100 end
+# the program alone changed (1 -> 3): saved at most once in 30 s, so not now (the 2 s rule alone would at 5950)
+6400 expect 1 saves
+6400 expect 3 prog
+6500 end

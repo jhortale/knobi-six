@@ -14,7 +14,7 @@
  *   buttons    lit while held
  *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change
  *   programs   params/store_prog.c: 500 in the flash slots (bank / tens / ones), WRITE (fade out, save, fade in),
- *              MANUAL; the globals (params/globals.c) and the last program in the settings sector, saved while silent
+ *              MANUAL; the globals (params/globals.c) and the last program in blobs 0 / 1 (A/B), saved while silent
  *   screen     the panels (ui/screens.c, panel_gfx.c): a screen a section, its knobs, switches and faders as bound;
  *              the header shows the octave and the last value edited; Globals shows the raw wheels and faders
  *
@@ -37,7 +37,7 @@ static void app_idle(void);
 /* ---- the sound: the synth, through the event queue (engine.c); app_audio runs in the audio ISR */
 #include "params/params.c"
 #include "params/store_prog.c"                  /* programs in the flash slots */
-#include "params/globals.c"                     /* the globals in the settings sector */
+#include "params/globals.c"                     /* the globals in blobs 0 and 1, in turn */
 #include "synth/osc.c"
 #include "synth/filter.c"
 #include "synth/env.c"
@@ -87,6 +87,7 @@ static int screen = SCR_BOOT;                   /* enum screen_id (ui/controls.h
 /* ---- MIDI in: from the main loop, and from app_idle while the screen draws (idle_ok) */
 static globals_t set;                           /* what survives a power-off: the globals, the octave, the last program */
 static uint32_t idle_ok, set_saves;
+#define SET_PROG_MS 30000u                      /* the last program alone: saved at most this often */
 static void set_now(globals_t *g)               /* the globals as they are now */
 {
     for (unsigned i = 0; i < G_COUNT; i++) g->v[i] = ctl_glob[i];
@@ -115,7 +116,7 @@ static void app_idle(void)
 static void app_main(void)
 {
     uint8_t key_note[FM1_NKEY] = {0};           /* the note each key started (0: none) */
-    uint32_t prev = 0, k, t_change = 0, dirty = 0;
+    uint32_t prev = 0, k, t_change = 0, dirty = 0, t_saved = 0;
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
     eng_init();                                 /* the synth with the init program; app_audio renders from now on */
@@ -187,10 +188,19 @@ static void app_main(void)
         set_now(&now);                          /* a global, the octave or the program changed: save it later */
         if (!set_same(&now, &last)) { last = now; t_change = fm1_ms; }
         dirty = !set_same(&now, &saved);
+        if (dirty) {                            /* only the program changed: at most once in SET_PROG_MS (wear: a
+                                                 * player stepping through programs would erase on every pause) */
+            uint16_t lp = saved.last_prog;
+            saved.last_prog = now.last_prog;
+            dirty = !set_same(&now, &saved) || !set_saves || fm1_ms - t_saved >= SET_PROG_MS;
+            saved.last_prog = lp;
+        }
         if (dirty && !eng_active() && !ctl_wr && fm1_ms - t_change > 2000u) {   /* 2 s after the last change, when silent
                                                                                     (an erase stalls the sound) */
-            globals_save(&now);
-            saved = now;
+            now.seq = set.seq;
+            globals_save(&now);                 /* (the other blob of the two; now.seq the saved one's) */
+            set = saved = now;
+            t_saved = fm1_ms;
             set_saves++;
         }
     }
@@ -234,7 +244,7 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
         prog_load(a0, &p);
         *got = n >= 2 && a[1] >= 0 && a[1] < P_COUNT_PHASE1 ? p.v[a[1]] : -1;
     }
-    else if (!strcmp(name, "saves")) *got = (int)set_saves;            /* the globals saved (settings) so far */
+    else if (!strcmp(name, "saves")) *got = (int)set_saves;            /* the globals saved (blobs 0 / 1) so far */
     else if (!strcmp(name, "tune")) *got = eng_last_tune;              /* the master tune sent, cents */
     else if (!strcmp(name, "mono")) *got = app_mono;                   /* STEREO global = MONO */
     else if (!strcmp(name, "chord")) *got = eng_edit.chord[a0 % 6u];   /* chord I: chord memory slot I */
