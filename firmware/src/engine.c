@@ -366,6 +366,17 @@ static uint32_t eng_ticks(void) { return fm1_ticks(); }
 #define ENG_C1_LINE 32u                   /* bytes: the AC791N's cache line */
 #define ENG_C1_JOIN_TICKS (1500u * FM1_TICKS_PER_US)   /* a period's join, from its post: a 16-frame period is 363 us of
                                            * audio; set B's share of a heavy period takes ~100..200 us in the emulator */
+/* One deadline per audio block (final review 3): a block holds 16 periods (and the arpeggiator's sub-blocks), so a CPU1
+ * slow but not hung (jobs just under ENG_C1_JOIN_TICKS) would stretch every block to ~16 x 1.5 ms and never be
+ * retired. eng_c1_block() (eng_render's start, or a test render's) opens the block; each join then waits at most
+ * min(ENG_C1_JOIN_TICKS from its post, what is left to the block's deadline ENG_C1_BLOCK_TICKS after its start, what
+ * is left of ENG_C1_WAIT_MAX, the joins' total wait a block may take: 50 %). A join that runs out is a timeout like
+ * any other (the HAL retires CPU1, LATE; set B rendered here; one core from then on): a slow CPU1 is retired within
+ * the first block it is slow in, which overruns by at most the wait it was allowed, once. A CPU1 whose joins wait
+ * less than half a block in all is kept (it still saves CPU0 its share). The CPU1 probe's dual renders
+ * (cpu1_probe.c, after eng_render in the same interrupt) count against the same block. */
+#define ENG_C1_BLOCK_TICKS (5805u * FM1_TICKS_PER_US)   /* one audio block: 256 frames at 44.1 kHz */
+#define ENG_C1_WAIT_MAX (ENG_C1_BLOCK_TICKS / 2u)        /* the joins' total wait in a block: 50 % of it */
 _Static_assert(sizeof(voice_t) % ENG_C1_LINE == 0u, "voice_t: a whole number of cache lines (SYNTH_VOICE_ALIGN)");
 _Static_assert(__builtin_offsetof(synth_t, voice) % ENG_C1_LINE == 0u, "synth_t.voice on a cache line");
 static struct eng_c1 {
@@ -379,10 +390,18 @@ static volatile uint8_t eng_c1_failed;    /* consumer: a join failed: one core u
 static volatile uint32_t eng_c1_jobs;     /* consumer: periods set B rendered on CPU1 */
 static volatile uint16_t eng_c1_load;     /* consumer: CPU1's job time, % of the block, smoothed as eng_load */
 static uint32_t eng_c1_load_q3, eng_c1_seen;
-#if KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
-#define ENG_C1_HANG_AT 1000u              /* (fm1-emu cases dualfail / dualmid: the 1000th voice job never returns) */
+static uint32_t eng_c1_t0, eng_c1_wait;   /* consumer: the block's start (eng_ticks), its joins' wait so far */
+static void eng_c1_block(void) { eng_c1_t0 = eng_ticks(), eng_c1_wait = 0; }   /* a block starts (eng_render) */
+#if KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9 || KNOBI_CPU1_TEST == 10
+#define ENG_C1_HANG_AT 1000u              /* (fm1-emu cases dualfail / dualmid: the 1000th voice job never returns; slow:
+                                           * from the 1000th on, every job is slow) */
 static uint32_t eng_c1_test_jobs;
 static volatile uint32_t eng_c1_test_spin;
+#endif
+#if KNOBI_CPU1_TEST == 10
+#define ENG_C1_SLOW_TICKS (1200u * FM1_TICKS_PER_US)   /* (slow: a job spins this long from its start, then renders:
+                                           * ~1.3 ms in all, under ENG_C1_JOIN_TICKS: slow, never hung) */
+static volatile uint8_t eng_c1_test_slow; /* (CPU1's: a slow job has started) */
 #endif
 
 static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of this period into its own bus */
@@ -392,6 +411,13 @@ static void cpu1_job_voices(void *arg)    /* on CPU1 (from the flash): set B of 
 #if KNOBI_CPU1_TEST == 7
     if (++eng_c1_test_jobs == ENG_C1_HANG_AT)
         for (;;) eng_c1_test_spin++;      /* (before it touches a voice: the fallback's output stays exact) */
+#endif
+#if KNOBI_CPU1_TEST == 10
+    if (++eng_c1_test_jobs >= ENG_C1_HANG_AT) {   /* (slow: before it touches a voice, so a join that gives up on it
+                                                   * leaves the output exact) */
+        eng_c1_test_slow = 1;
+        while (eng_ticks() - t0 < ENG_C1_SLOW_TICKS) eng_c1_test_spin++;
+    }
 #endif
     for (uint32_t i = 0; i < 2u * n; i++) j->bus[i] = 0;
 #if KNOBI_CPU1_TEST == 9
@@ -419,8 +445,20 @@ static void eng_split(synth_t *s, int32_t *bus, uint32_t n)
     if (ENG_DUAL_NOW() && !eng_c1_failed && synth_balance(s, &a, &b) >= 2u) {
         eng_c1.s = s, eng_c1.mask = b, eng_c1.n = n;
         if (cpu1_post(cpu1_job_voices, &eng_c1) == 0) {
+            uint32_t tp = eng_ticks(), tj, el, left, lim;
+            int r;
             synth_render_set(s, a, bus, n);
-            if (cpu1_join(ENG_C1_JOIN_TICKS) < 0) {   /* late or lost: set B here, one core from now on. A job that
+            tj = eng_ticks();                 /* the join's limit, from the post (the HAL counts from its own post,
+                                               * a little earlier: never later than this) */
+            el = tj - eng_c1_t0;
+            left = el >= ENG_C1_BLOCK_TICKS ? 0u : ENG_C1_BLOCK_TICKS - el;   /* to the block's deadline */
+            if (eng_c1_wait >= ENG_C1_WAIT_MAX) left = 0;
+            else if (ENG_C1_WAIT_MAX - eng_c1_wait < left) left = ENG_C1_WAIT_MAX - eng_c1_wait;   /* the wait left */
+            lim = tj - tp + left;
+            if (lim > ENG_C1_JOIN_TICKS) lim = ENG_C1_JOIN_TICKS;
+            r = cpu1_join(lim);
+            eng_c1_wait += eng_ticks() - tj;
+            if (r < 0) {                      /* late or lost: set B here, one core from now on. A job that
                                            * stopped part way (late) left some of set B advanced by this period: they
                                            * render it again from there, a jump of up to 16 frames in their waveform,
                                            * once (fm1-emu case dualmid: the step stays within the clean run's) */
@@ -517,6 +555,9 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     synth_clock(&eng_synth, clock_quarter_inc(&eng_clk));   /* LFO SYNC's tempo (a compare when unchanged) */
     if (!eng_clk_run) arp_silence(&eng_arp, &eng_synth);   /* (reference 5: no clock, no arp; no note left held) */
     uint32_t t0 = eng_ticks();
+#if KNOBI_CPU1
+    eng_c1_block();                            /* (the joins' deadline: this block's) */
+#endif
     eng_render_arp(lr, frames);
 #ifdef DINGHY_HOST
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);

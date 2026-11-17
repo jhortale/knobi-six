@@ -25,6 +25,9 @@
 #   dualmid  test hook 9: as dualfail, but the job stops after one voice of set B (late part way): that voice is
 #            rendered again from one period on, once; the patch's checksum differs, its largest step and peak stay
 #            within the one-core run's, the next patches equal again
+#   slow     test hook 10 (final review 3): as dual, but from CPU1's 1000th voice job on every job takes ~1.3 ms (slow,
+#            never hung: under the 1.5 ms a single join may wait): the block's joins share half a block of wait, so CPU1
+#            is retired (LATE) in the block of its first slow job, at most one block over budget, every checksum the same
 #   write    test hook 8: DUAL CORE on, a chord held, WRITE + ENTER (the program slot's erases and writes), then the
 #            globals' autosave (the extended record, read back), a chord again: CPU1 stays IDLE (the flash gate never
 #            had to retire it), the jobs go on, no fault, the audio runs
@@ -76,6 +79,7 @@ build dual 6
 build dualfail 7
 build write 8
 build dualmid 9
+build slow 10
 build probe "" --probe-cpu1
 build probemis -DKNOBI_PROBE_TEST=1 --probe-cpu1
 emu plain plain fm1_cpu1_mb 13
@@ -84,10 +88,11 @@ emu nostart nostart cpu1_test 20
 emu hang hang cpu1_test 20
 emu flaky test3 cpu1_test 20 --flaky-core1 "$RATE" --seed 7 --cpu1-survives
 emu reset reset cpu1_test 20
-RUN_MS=$DMS emu dual dual dual_test 66 --keys 800:GLOBE --snap 2000 &
-RUN_MS=$DMS emu dualfail dualfail dual_test 66 &
-RUN_MS=$DMS emu dualmid dualmid dual_test 66 &
-RUN_MS=$WMS emu write write dual_test 66 &
+RUN_MS=$DMS emu dual dual dual_test 71 --keys 800:GLOBE --snap 2000 &
+RUN_MS=$DMS emu dualfail dualfail dual_test 71 &
+RUN_MS=$DMS emu dualmid dualmid dual_test 71 &
+RUN_MS=$DMS emu slow slow dual_test 71 &
+RUN_MS=$WMS emu write write dual_test 71 &
 RUN_MS=$PMS emu probe probe c1probe 33 --keys 800:GLOBE --snap $((PMS - 100)) &
 RUN_MS=$PMS emu probeflaky probe c1probe 33 --flaky-core1 "$RATE" --seed 7 --cpu1-survives &
 RUN_MS=$PMS emu probemis probemis c1probe 33 --keys 800:GLOBE --snap $((PMS - 101)) &

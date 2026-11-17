@@ -105,7 +105,8 @@ real save with CPU1 on stay for the device and the probe build (Task 4; the emul
 What runs (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a KNOBI_CPU1 build; [API.md](API.md) "Second core"):
 each 16-frame control period of the audio interrupt, CPU0 runs the tick, splits the busy voices (`synth_balance`:
 CPU0 the first n / 2 by index, CPU1 the rest), posts set B (`cpu1_job_voices`, CPU1's own bus), renders set A, joins
-(1.5 ms from the post), adds CPU1's bus, then the DC blocker and the limiter. Under two voices busy, DUAL CORE off
+(1.5 ms from the post at most; and within the block's deadline and its shared join wait of half a block: the final
+review's fix, case `slow` below), adds CPU1's bus, then the DC blocker and the limiter. Under two voices busy, DUAL CORE off
 (the default) or CPU1 off: one core. Cache lines: 32 B (the AC79 SDK's `asm/cache.h` `CACHE_LINE_COUNT`, Melodee's and
 felucca-bsp's mailbox lines): `voice_t` is 320 B = 10 lines and `synth_t.voice[]` starts on a line in a CPU1 build
 (`SYNTH_VOICE_ALIGN`, static asserts), CPU1's bus and its time counter sit on lines of their own.

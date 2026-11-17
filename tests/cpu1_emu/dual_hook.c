@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX dual-core voice rendering in fm1-emu (Phase 2 Task 3; tests/cpu1_emu/run.sh): test hooks of a
  * KNOBI_CPU1=1 image, never in a real build. app.c includes this file (after the main loop's state, before app_main)
- * when KNOBI_CPU1_TEST is 6, 7 or 8; check.py reads dual_test from RAM at the end of the run (--dump).
+ * when KNOBI_CPU1_TEST is 6..10; check.py reads dual_test from RAM at the end of the run (--dump).
  *
  *   6 dual      the audio interrupt plays a fixed script, block by block (so both passes see the same events at the
  *               same blocks): four patches (the init chord, the musical stress patch on C3..C5 and on C5..C7, the
@@ -23,13 +23,22 @@
  *               in the segment no more than the one-core pass's, the peak under full scale; the later patches
  *               (each from synth_init) equal again. Recorded for 6, 7, 9: each segment's largest step and peak, and
  *               after the script C1's status with DUAL CORE on (FAIL after a failure) and then off (OFF).
+ *  10 slow      as 6, but from CPU1's 1000th voice job on every job is slow, never hung (engine.c ENG_C1_SLOW_TICKS:
+ *               it spins 1.2 ms before it renders, ~1.3 ms in all, under the 1.5 ms a single join may wait; final
+ *               review 3): the block's joins run out of their shared wait (half a block, engine.c ENG_C1_WAIT_MAX) and
+ *               CPU1 is retired (LATE) in the block its first slow job ran in (or the next, if that job was in the
+ *               block's last periods), after 1..3 slow jobs came back;
+ *               at most one block over its budget; every checksum still equal pass 0's (a job given up on was still
+ *               spinning: it had touched no voice). Recorded: the blocks (1-based) of the first slow job and of the
+ *               retirement, the blocks over budget from the first slow one on, the longest such block, the slow jobs
+ *               joined back.
  *   8 write     DUAL CORE turned on (as the Globals pad would) at 400 ms and the init chord held from 500 ms; WRITE
  *               (BT) at 900 ms and ENTER at 1000 ms: the fade, the program slot's erase and write with the voices on
  *               two cores; the notes off at 1800 ms; then the globals' autosave after 3 s of quiet (DUAL CORE and the
  *               program changed: the extended record, read back); a chord again after it. CPU1 must stay IDLE (never
  *               retired by the flash gate's wait: every erase and write found it idle in its RAM loop), the jobs go
  *               on before, between and after, and the audio runs throughout. */
-#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
+#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9 || KNOBI_CPU1_TEST == 10
 #define DT_SEG 40u                              /* blocks a segment (256 frames each) */
 #define DT_ON 32u                               /* of them with the notes held */
 #define DT_NPATCH 4u
@@ -41,6 +50,7 @@ struct {
     uint32_t step[2][4], peak[2][4], status_on, status_off;  /* (6, 7, 9) */
     uint32_t dual, wr_rc, writes, write_at, jobs_before, jobs_write, saves, save_at, jobs_save, dual_read, jobs_after,
              at_fail;                                        /* (8) */
+    uint32_t slow_blk, fail_blk, over, used_max, slow_done;  /* (10) */
 } dual_test = { 0x54554444u };                               /* "DDUT" */
 
 static void dual_test_note(void)
@@ -53,7 +63,7 @@ static void dual_test_note(void)
     if (dual_test.state == CPU1_FAIL && !dual_test.at_fail) dual_test.at_fail = fm1_ms;
 }
 
-#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9
+#if KNOBI_CPU1_TEST == 6 || KNOBI_CPU1_TEST == 7 || KNOBI_CPU1_TEST == 9 || KNOBI_CPU1_TEST == 10
 static const int16_t DT_MUSICAL[][2] = {   /* = tests/scripts/musical.txt = harness.c PATCH 3, 4 */
     {P_MIX_VCO1, 95}, {P_MIX_VCO2, 95}, {P_MIX_SUB, 95}, {P_MIX_NOISE, 95},
     {P_VCO1_SHAPE, 255}, {P_VCO1_PW, 90}, {P_VCO2_SHAPE, 254}, {P_VCO2_PW, 160}, {P_VCO1_SYNC, 1},
@@ -120,8 +130,18 @@ static void dual_test_audio(int32_t *out, uint32_t n)
         for (unsigned i = 0; i < 6u; i++) synth_note(&eng_synth, DT_NOTES[pi][i], 0);
     j0 = eng_c1_jobs;
     t0 = eng_ticks();
+    eng_c1_block();                             /* (the joins' deadline: this block's, as eng_render opens it) */
     synth_render(&eng_synth, out, n);
     used = eng_ticks() - t0;
+#if KNOBI_CPU1_TEST == 10
+    if (eng_c1_test_slow && !dual_test.slow_blk) dual_test.slow_blk = blk + 1u;
+    if (eng_c1_failed && !dual_test.fail_blk)
+        dual_test.fail_blk = blk + 1u, dual_test.slow_done = eng_c1_jobs - (ENG_C1_HANG_AT - 1u);
+    if (dual_test.slow_blk) {
+        if (used > n * ENG_TICKS_PER_FRAME_X10 / 10u) dual_test.over++;
+        if (used > dual_test.used_max) dual_test.used_max = used;
+    }
+#endif
     eng_c1_cpu(n * ENG_TICKS_PER_FRAME_X10 / 10u);
     sum = dual_test.sum[pass][pi];
     for (uint32_t i = 0; i < 2u * n; i++) {

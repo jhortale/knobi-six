@@ -289,9 +289,12 @@ emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
 KNOBI-SIX's use (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a `KNOBI_CPU1` build): with the DUAL CORE global
 on (Globals pad 7, off by default, kept in blob 2: the globals' version-1 record stays the default build's), every 16-frame control period of the audio interrupt
 splits the busy voices (`synth_balance`: CPU0 the smaller half), posts set B (`cpu1_job_voices`, into CPU1's own bus),
-renders set A, joins with a 1.5 ms deadline from the post and adds CPU1's bus: bit for bit the one-core output. Fewer
-than two voices busy, or CPU1 off: one core. A failed join renders set B on CPU0 in the same period and leaves one
-core (Globals: `C1 FAIL`). `voice_t` (320 B) and `synth_t.voice[]` sit on 32-byte cache lines (the AC791N's: the SDK's
+renders set A, joins and adds CPU1's bus: bit for bit the one-core output. A join waits at most 1.5 ms from its post,
+and less as the block runs out: one deadline per audio block (`eng_c1_block` at the block's start), so each join's
+limit is also what is left to the end of the block (5.8 ms from its start) and of the block's shared join wait (half a
+block, `ENG_C1_WAIT_MAX`); a CPU1 slow but never hung is retired within the first block it is slow in, which overruns
+once at most (fm1-emu case `slow`). Fewer than two voices busy, or CPU1 off: one core. A failed join renders set B on
+CPU0 in the same period and leaves one core (Globals: `C1 FAIL`). `voice_t` (320 B) and `synth_t.voice[]` sit on 32-byte cache lines (the AC791N's: the SDK's
 `asm/cache.h`), CPU1's bus and counter on lines of their own.
 
 The CPU1 probe (`./build.sh --probe-cpu1`, package `knobi-six-cpu1probe.fwsc`, `KNOBI_CPU1=1` plus
