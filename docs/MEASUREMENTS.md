@@ -367,3 +367,10 @@ spec, so they are listed for a decision and not applied:
 | `f4b216b` (after the pass) | 100,800 B (+2,416: the inlined per-sample path) | 23,684 B | 47,092 B |
 
 `sizeof(synth_t)`: 2,184 B with 6 voices, 1,672 B with 4.
+
+## Decision (João, 2026-11-17)
+
+NVOICE = 6 with the CPU guard. The musical stress patch measures 55–80 % (C3–C5) and 64–91 % (C5–C7) of the block at
+240 MHz (emu / hw); the guard sheds voices in one step above 80 % so no patch can overrun the audio interrupt. The first
+on-device run (after a full flash backup) must read the real load with `fm1_ticks()`; if the guard sheds often on
+musical patches at the real clock, NVOICE = 4 is a one-line change.
