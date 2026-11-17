@@ -63,8 +63,8 @@ keyboard since; else a new one), the way back ready, and **João installs it him
 `fm1_install.py`, flashes, or uses the USB rescue.
 
 **Package**: `knobi-six-cpu1probe.fwsc`, the CI artifact **`knobi-six-cpu1probe`** of the `build` workflow (job
-`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`. The run, size and SHA-256 are in the Task 4 report
-(`.superpowers/sdd/2026-11-17-phase2/task-4-report.md`); compare the SHA-256 before installing. Identity
+`cpu1-emu`), never the `knobi-six-pro` artifact's `knobi-six.fwsc`: CI run 44104394317 (commit 0568642), 652,737 B,
+SHA-256 `34b7e7197459b213d0cfdb0e164aaaca97f23b6157b4a44c431a8fbb47b51daf`; compare it before installing. Identity
 `SMK-37 Pro_956`, as the default. (A local build: `./build.sh --probe-cpu1`; `--model elite` / `mke` for those units;
 build.py refuses `--release` with it: a probe is never published.) Never install a `-local` probe on a keyboard you
 lend or sell.
