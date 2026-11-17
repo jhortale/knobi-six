@@ -44,10 +44,15 @@ static __attribute__((noinline)) uint32_t osc_exp2(int32_t x, unsigned fraction)
     return (uint32_t)p << -shift;
 }
 
+/* -OSC_NOTE_LO as a variable the compiler cannot fold: -60 x 65536 = 0xFFC40000 lies in the chip's ROM window, and
+ * tools/build.py fails a build whose code carries such a constant (it cannot tell a pitch from a ROM address). Kept
+ * positive (the data word too stays out of the window) and never written. */
+int32_t osc_note_lo_neg = -OSC_NOTE_LO;
+
 /* log2 of the increment for a Q16 note, Q24 (clamped to OSC_NOTE_LO..HI) */
 static int32_t osc_log2_inc(int32_t note_q16)
 {
-    if (note_q16 < OSC_NOTE_LO) note_q16 = OSC_NOTE_LO;
+    if (note_q16 < -osc_note_lo_neg) note_q16 = -osc_note_lo_neg;
     if (note_q16 > OSC_NOTE_HI) note_q16 = OSC_NOTE_HI;
     return (note_q16 - 69 * 65536) * 64 / 3 + OSC_LOG2_C;   /* semitones Q16 -> octaves Q24: x 256 / 12 */
 }

@@ -34,6 +34,9 @@
 /* the oscillator's note range (osc.c OSC_NOTE_LO / HI) */
 #define MODS_NOTE_LO (-60 * 65536)
 #define MODS_NOTE_HI (135 * 65536)
+/* -MODS_NOTE_LO as a variable the compiler cannot fold (0xFFC40000 is in the chip's ROM window: osc.c
+ * osc_note_lo_neg). Never written. */
+int32_t mods_note_lo_neg = -MODS_NOTE_LO;
 #if OSC_RATE != 44100
 #error "LFO_L0 and LFO_INC_TOP are computed for 44100 Hz"
 #endif
@@ -251,10 +254,10 @@ void mods_fm1(osc_t *o, uint32_t inc1, uint32_t inv1, int32_t note1_q16, int32_t
     /* clamp the modulated note to the oscillator's range (as osc_set_pitch would), in 64 bits: note + semis may
      * overflow for absurd inputs */
     int64_t t = (int64_t)note1_q16 + semis_q16;
-    if (t < MODS_NOTE_LO) t = MODS_NOTE_LO;
+    if (t < -mods_note_lo_neg) t = -mods_note_lo_neg;
     if (t > MODS_NOTE_HI) t = MODS_NOTE_HI;
     int32_t s = (int32_t)(t - note1_q16);                      /* |s| <= 195 semitones, Q16 */
-    if (note1_q16 < MODS_NOTE_LO || note1_q16 > MODS_NOTE_HI) s = 0;   /* base outside the range: leave it */
+    if (note1_q16 < -mods_note_lo_neg || note1_q16 > MODS_NOTE_HI) s = 0;   /* base outside the range: leave it */
     int32_t x = s * 64 / 3;                                     /* octaves, Q24 (|x| < 2^30); a 32-bit SDIV */
     int n = x >> 24;                                            /* floor */
     int32_t f = x & (LFO_Q24 - 1);

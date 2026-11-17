@@ -28,7 +28,7 @@
 #include <stdint.h>
 
 #define ENG_QLEN 256u                     /* events; a power of two */
-#define ENG_BARRIER() __asm__ __volatile__("" ::: "memory")
+#define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
 enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383 */
