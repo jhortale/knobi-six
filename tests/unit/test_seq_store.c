@@ -620,6 +620,21 @@ static void store_format_verifies(void)
     printf("store_format_verifies: a kill that does not take is erased; one that cannot be: -1 (%d)\n", rc);
 }
 
+/* a put the flash refuses says so (-2), unlike a full store (-1); nothing that counts is written */
+static void store_put_flash_error(void)
+{
+    static seq_t a, out;
+    uint16_t g = 0x4321;
+    f_blank();
+    power_on();
+    seq_of_len(&a, 5, 2);
+    f_dead = 1;                                 /* (every program and erase refused from here) */
+    CHECK(seqst_put(7, &a, &g) == -2 && g == 0x4321);
+    power_on();
+    CHECK(seqst_get(7, 1, &out) == 0 && seqst_used() == 0 && seqst_put(7, &a, &g) == 0 && got_is(7, g, &a));
+    printf("store_put_flash_error: a refused put -> -2 (full stays -1)\n");
+}
+
 /* drop: every generation of a program reclaimable (RESTORE FACTORY written: the record names none) */
 static void store_drop(void)
 {
@@ -794,6 +809,7 @@ int main(void)
     store_wear_near_full();
     store_format();
     store_format_verifies();
+    store_put_flash_error();
     store_drop();
     store_cut_gen_burned();
     store_readback();

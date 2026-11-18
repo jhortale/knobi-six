@@ -293,8 +293,9 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
     ctl_notice = rc == -2 ? NT_BROKEN : NT_NONE;       /* (never written: the factory program, else init; broken: init,
                                                         * and the notice says so) */
     ctl_prog_want = eng_program(&p) ? n : -1;
-    if (ctl_prog_want < 0) (void)prog_seq_open((uint16_t)n, rc, &p);   /* its sequence into the edit buffer (the
+    if (ctl_prog_want < 0 && prog_seq_open((uint16_t)n, rc, &p) == -3)   /* its sequence into the edit buffer (the
                                                         * stored one, else the factory one; params/prog_seq.h) */
+        ctl_notice = NT_SEQ_MISSING;                   /* (named, not found: empty loaded, the panel says so) */
     if (ctl_notice) ctl_last_id = B_NOTICE, ctl_last_v = ctl_notice, ctl_edits++;
 }
 /* restore factory (hold GLOBE, press WRITE / BT): factory program n into the edit buffer (no factory bank: the init

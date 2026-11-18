@@ -1,0 +1,37 @@
+# Phase 3 Task 3: a WRITE whose sequence put has to compact the sequence store (the spare sector erased if needed, the
+# victim copied, then erased; then the program slot's erases), under a HOLD drone. The host stands still and silent
+# for each erase (50 ms, the chip's interrupts held off; the slot's save 200 ms). tests/run_tests.sh checks the WAV with
+# tests/wav_check.py: the fade out and in, then the silent gap, no click. The gap's bound there (--gap-max 450) is this
+# WRITE's silence: 2 sequence-store erases + the slot's save (~300 ms) and margin; a non-compacting WRITE stays under the
+# 300 ms of write_held.txt. "seqchurn" (host hook) fills the store with full-size puts and releases on program 499
+# until the next full-size put must compact (its own erases stall the host for about a second first);
+# "seqtest 64" makes the edit sequence full size; "seqmark" / "seqerased" count the sequence store's erases.
+10 expect 1 seqchurn
+20 expect 0 seqtest 64
+1050 btn 12
+1100 vel 100
+1150 expect 0 set 14 100
+1200 keys 0x80
+1300 pad 3 100
+1310 pad 3 0
+1350 expect 1 holdpad
+1400 keys 0
+1500 expect 1 sounding 60
+2000 btn 11
+2050 expect 1 wr
+2100 enc 3 7
+2150 expect 7 wrdest
+2450 expect 0 seqmark
+2500 pad 3 100
+2510 pad 3 0
+3400 expect 0 wr
+3400 expect 1 writes
+3400 expect 2 seqerased
+3400 expect 1 seqgen 7
+3400 expect 64 seqlen
+3400 expect 1 sounding 60
+3400 expect 32768 fade
+3600 btn 12
+3700 pad 3 100
+3710 pad 3 0
+4200 end

@@ -50,6 +50,10 @@ run "Review Focus 3: the program change under the HOLD drone: no click" python3 
 run "a program change (MIDI or the panel) while WRITE is armed or committing: ignored, the edit is stored (expect)" sh tests/run_host.sh tests/scripts/write_prog_change.txt
 run "the clock (Task 5): tap tempo, the division, LFO SYNC, MIDI clock in: start, stop, continue, gone (expect)" sh tests/run_host.sh tests/scripts/clock.txt
 run "the arpeggiator (Task 6): HOLD latch, relatch, append, HOLD off; MIDI clock in absent / stopped / gone: silent, nothing held (expect)" sh tests/run_host.sh tests/scripts/arp.txt
+run "Phase 3: a stored sequence missing: the notice, an unedited WRITE keeps it named, an edit replaces it (expect)" sh tests/run_host.sh tests/scripts/seq_missing.txt
+run "Phase 3: a WRITE that compacts the sequence store, under a HOLD drone (expect)" sh tests/run_host.sh tests/scripts/write_compact.txt
+run "Phase 3: that WRITE's WAV: the fades, no click; its silence (2 store erases + the slot save) under 450 ms" \
+    python3 tests/wav_check.py build/host/app.wav --steady 1600 2450 --check 2450 3300 --fade-max 25 --gap-max 450
 run "the CPU guard on the fake clock: a spike sheds a voice, the limit comes back only where it fits; the diagnostics (expect)" sh tests/run_host.sh tests/scripts/cpu_guard.txt
 
 $CC -DBOARD_SMK37=1 -Ifirmware/hal -o "$OUT/smk_flash_test" tests/smk_flash_test.c

@@ -154,6 +154,7 @@ static int blobs_save(uint32_t i, uint32_t k, const void *p, uint32_t n) { retur
 /* the sequence store's sectors (params/seq_store.c, store.h SEQST_*) as raw NOR flash: erased at start, an erase sets
  * 0xFF (the chip's 50 ms stall unless sliced), a program clears bits */
 static uint8_t host_seqst[SEQST_SECTORS][0x1000u], host_seqst_on;
+static uint32_t host_seqst_erases, host_seqst_mark;   /* (probes "seqerased", "seqmark") */
 static uint8_t *host_seqst_at(uint32_t off, uint32_t n)
 {
     uint32_t i;
@@ -174,6 +175,7 @@ static int seqst_fl_erase(uint32_t off)
     uint8_t *a = host_seqst_at(off, 0x1000u);
     if (!a || (off & 0xFFFu)) return -1;
     memset(a, 0xFF, 0x1000u);
+    host_seqst_erases++;
     printf("%6u ms  sequence store: sector %05X erased%s\n", fm1_ms, off, store_sliced ? ", sliced" : "");
     if (!store_sliced) host_stall(HOST_ERASE_MS);
     return 0;

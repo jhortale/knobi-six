@@ -8,7 +8,11 @@
  *   es_gen    the stored entry it is (1..65535), 0 none
  *   es_fb     it is the factory fallback of es_prog (the record named no entry, or RESTORE FACTORY): a WRITE of it
  *             unedited to es_prog keeps generation 0, so no entry is spent on a copy of the factory sequence
+ *   es_miss   es_gen is what the record names but the store did not give it (the buffer holds an empty sequence in
+ *             its place): an unedited WRITE keeps naming es_gen and releases nothing, so the entry is not given up
  *   es_dirty  changed since (edit_seq_mut): a WRITE puts a new entry
+ *   es_sum    a hash of es_seq when es_dirty was last cleared: a change that bypassed edit_seq_mut (a cast of
+ *             edit_seq()) is still seen as an edit at WRITE, never stored under the old generation
  * A WRITE stores a new entry unless the sequence is es_prog's own, unedited, and written to es_prog (prog_seq.h). */
 #ifndef KNOBI_PROG_SEQ_C
 #define KNOBI_PROG_SEQ_C
@@ -21,14 +25,28 @@ static seq_t es_seq __attribute__((section(".pool")));   /* (897 B; the pool: no
 #endif
 static int32_t es_prog = -1;
 static uint16_t es_gen;
-static uint8_t es_fb, es_dirty;
+static uint8_t es_fb, es_dirty, es_miss;
+static uint32_t es_sum;
 static program_t prog_wr;                       /* the record WRITE stores: the program, its generation */
+
+static uint32_t es_hash(void)                   /* FNV-1a over the whole buffer */
+{
+    const uint8_t *b = (const uint8_t *)&es_seq;
+    uint32_t h = 2166136261u, i;
+    for (i = 0; i < sizeof es_seq; i++) h = (h ^ b[i]) * 16777619u;
+    return h;
+}
+static void es_set(int32_t n, uint16_t g, int fb, int miss)   /* the source, unedited */
+{
+    es_prog = n, es_gen = g, es_fb = (uint8_t)fb, es_miss = (uint8_t)miss, es_dirty = 0;
+    es_sum = es_hash();
+}
 
 void prog_seq_boot(void)
 {
     (void)seqst_init();
     seq_clear(&es_seq);
-    es_prog = -1, es_gen = 0, es_fb = 0, es_dirty = 0;
+    es_set(-1, 0, 0, 0);
 }
 
 int factory_seq(uint16_t prog, seq_t *out)
@@ -51,22 +69,24 @@ seq_t *edit_seq_mut(void) { es_dirty = 1; return &es_seq; }
 int prog_seq_open(uint16_t n, int load_rc, const program_t *p)
 {
     uint16_t g = load_rc == 0 ? program_seq_gen(p) : 0;
-    es_prog = n, es_gen = 0, es_fb = 0, es_dirty = 0;
-    if (load_rc == -2) { seq_clear(&es_seq); return -2; }   /* a broken record: empty, never the factory sequence */
+    if (load_rc == -2) { seq_clear(&es_seq); es_set(n, 0, 0, 0); return -2; }   /* a broken record: empty, never the
+                                                 * factory sequence */
     if (g) {
-        if (seqst_get(n, g, &es_seq) == 1) { es_gen = g; return 0; }
-        seq_clear(&es_seq);                     /* (named, not there: empty; es_gen 0 so a WRITE stores it) */
-        return -2;
+        if (seqst_get(n, g, &es_seq) == 1 || seqst_get(n, g, &es_seq) == 1) { es_set(n, g, 0, 0); return 0; }   /* (a
+                                                 * read that failed once: once more) */
+        seq_clear(&es_seq);                     /* named, not there: empty in its place, the name kept (es_miss) */
+        es_set(n, g, 0, 1);
+        return -3;
     }
     (void)factory_seq(n, &es_seq);              /* no generation, never written: the factory sequence (or empty) */
-    es_fb = 1;
+    es_set(n, 0, 1, 0);
     return 1;
 }
 
 void prog_seq_factory(uint16_t n)
 {
     (void)factory_seq(n, &es_seq);
-    es_prog = n, es_gen = 0, es_fb = 1, es_dirty = 0;
+    es_set(n, 0, 1, 0);
 }
 
 int prog_open(uint16_t n, program_t *p)
@@ -79,19 +99,24 @@ int prog_open(uint16_t n, program_t *p)
 int prog_write(uint16_t n, const program_t *p)
 {
     uint16_t g = 0;
-    int own = !es_dirty && es_prog == (int32_t)n;
-    if (n >= PROG_COUNT) return -1;
+    int own, miss = 0, r;
+    if (n >= PROG_COUNT) return PROG_ERR_FLASH;
+    if (!es_dirty && es_hash() != es_sum) es_dirty = 1;   /* (changed behind edit_seq_mut's back: an edit all the same) */
+    own = !es_dirty && es_prog == (int32_t)n;
     if (!seqst_total()) g = 0;                  /* (no sequence store on this board: the program only) */
-    else if (own && es_gen) g = es_gen;         /* the entry it already is */
+    else if (own && es_gen) g = es_gen, miss = es_miss;   /* the entry it already is (or names: missing, kept) */
     else if (own && es_fb) g = 0;               /* the factory sequence, unedited: no entry */
-    else if (seqst_put(n, &es_seq, &g)) return PROG_ERR_SEQ_FULL;   /* (nothing written: refused before any flash
-                                                 * operation, or a flash error that leaves the store as it was) */
+    else if ((r = seqst_put(n, &es_seq, &g)) != 0)   /* nothing written: full (refused before any flash operation), or a
+                                                 * flash error that leaves the store as it was */
+        return r == -1 ? PROG_ERR_SEQ_FULL : PROG_ERR_FLASH;
     prog_wr = *p;
     program_set_seq_gen(&prog_wr, g);
-    if (prog_save(n, &prog_wr)) return -1;      /* the old record still holds (and names the old entry) */
-    if (g) seqst_release(n, g);                 /* the older entries reclaimable */
+    if (prog_save(n, &prog_wr)) return PROG_ERR_FLASH;   /* the old record still holds (and names the old entry) */
+    if (miss) {}                                /* (the missing entry stays named and nothing is released: it may read
+                                                 * again after a reboot) */
+    else if (g) seqst_release(n, g);            /* the older entries reclaimable */
     else seqst_drop(n);                         /* every entry of n reclaimable */
-    es_prog = n, es_gen = g, es_fb = (uint8_t)!g, es_dirty = 0;
+    es_set(n, g, !g, miss);
     return 0;
 }
 

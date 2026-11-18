@@ -432,7 +432,7 @@ static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's disp
              id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
     else if (id == B_ACT(ACT_HOLD)) scr_cat(d, v ? "On" : "OFF");
-    else if (id == B_NOTICE) scr_cat(d, v == NT_BROKEN ? "Err" : v == NT_RESTORE_ASK ? "SurE" : v == NT_RESTORED ? "FAC" : "");
+    else if (id == B_NOTICE) scr_cat(d, v == NT_BROKEN ? "Err" : v == NT_RESTORE_ASK ? "SurE" : v == NT_RESTORED ? "FAC" : v == NT_SEQ_MISSING ? "Err" : "");
 }
 
 static void scr_list(const wdg_t *w, uint16_t id, int32_t v)   /* an LED a choice, the lit one the value */
@@ -614,6 +614,9 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
             if (ctl_wr == 1) pg_text_c(cx, w->y + 11, &FONT_XS, "ENTER: STORE   WRITE: CANCEL", PC_DIM);
         } else if (ctl_notice == NT_BROKEN) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "STORED PROGRAM BROKEN: INIT LOADED", PC_RED);
+        } else if (ctl_notice == NT_SEQ_MISSING) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "STORED SEQUENCE MISSING: EMPTY LOADED", PC_RED);
+            pg_text_c(cx, w->y + 11, &FONT_XS, "WRITE KEEPS IT; AN EDIT REPLACES IT", PC_DIM);
         } else if (ctl_notice == NT_RESTORE_ASK) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "RESTORE FACTORY? EDITS ARE LOST", PC_WHITE);
             pg_text_c(cx, w->y + 11, &FONT_XS, "GLOBE + BT AGAIN WITHIN 2 S", PC_DIM);
@@ -623,7 +626,9 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
             pg_text_c(cx, w->y + 1, &FONT_XS, "MANUAL: THE SOUND IS THE PANEL", PC_WHITE);
         } else if (ctl_wr_rc) {
             pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : ctl_wr_rc == -2 ? "SEQ FULL: NOTHING STORED" :
-                      "WRITE FAILED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+                      "WRITE FAILED: NOTHING CHANGED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+            if (ctl_wr_rc == -2)                   /* (the spec's way to free room) */
+                pg_text_c(cx, w->y + 11, &FONT_XS, "CLEAR SEQS OR RESTORE FACTORY+WRITE", PC_DIM);
         } else pg_text_c(cx, w->y + 1, &FONT_XS, "WRITE (OR BT) TO STORE THE SOUND", PC_DIM);
         break;
     }

@@ -99,6 +99,8 @@ numbers (the sequencer is cheap in CPU), unlike the effects (2C), which wait for
   clear sequences of programs you don't need, or RESTORE FACTORY and write).
 - **Edit buffer**: the sequence is part of the edit buffer like any parameter: COMPARE, RESTORE FACTORY, a program
   change and a power cut behave as for program edits (lost without WRITE; not autosaved).
+  (Note, Task 3: the firmware has no COMPARE feature yet; a future COMPARE must carry the sequence too, one more
+  `seq_t` copy, +897 B of pool.)
 - **Flash allow-list**: the store's sectors are added to `FL_RANGE_OK` explicitly; flash-map checks prove every
   protected range stays refused.
 - **Factory import**: the importer decodes the OB-6 sequence bytes (offset 128: 6 lanes × 64 notes + 64 velocities;

@@ -85,9 +85,13 @@ static uint8_t *f_at(uint32_t off, uint32_t n)
     f_guard_bad++;
     return NULL;
 }
+static uint32_t f_read_fail, f_reads;            /* the next f_read_fail reads of the sequence store fail */
+static int f_seq_refuse;                        /* the sequence store's programs and erases are refused */
 static int seqst_fl_read(uint32_t off, void *p, uint32_t n)
 {
     const uint8_t *a = f_at(off, n);
+    f_reads++;
+    if (f_read_fail) { f_read_fail--; return -1; }
     if (!a) return -1;
     memcpy(p, a, n);
     return 0;
@@ -96,7 +100,7 @@ static int seqst_fl_erase(uint32_t off)
 {
     uint8_t *a = f_at(off, 0x1000u);
     uint32_t i, k;
-    if (!a || (off & 0xFFFu) || f_dead) return -1;
+    if (!a || (off & 0xFFFu) || f_dead || f_seq_refuse) return -1;
     f_ops++, f_erases++;
     if (f_cut_now() && !f_cut_full) {
         k = frnd() % 0x1000u;
@@ -113,7 +117,7 @@ static int seqst_fl_prog(uint32_t off, const void *p, uint32_t n)
 {
     const uint8_t *s = p;
     uint8_t *a = f_at(off, n);
-    if (!a || f_dead) return -1;
+    if (!a || f_dead || f_seq_refuse) return -1;
     while (n) {
         uint32_t chunk = 256u - (off & 0xFFu), i, k;
         if (chunk > n) chunk = n;
@@ -416,7 +420,7 @@ static void load_fallbacks(void)
     int ok = 1;
     uint8_t rec[PROGRAM_PACKED_MAX];
     uint32_t size, used;
-    uint16_t g;
+    uint16_t g = 0;
     static program_t p;
     static seq_t f0, f1, e;
     seq_clear(&e);
@@ -476,11 +480,18 @@ static void load_fallbacks(void)
     ok &= prog_write(0, &p) == 0 && gen_of(0) != 0;
     power_cycle();
     ok &= prog_open(0, &p) == 0 && edit_seq()->len == 0;
-    /* a record naming a generation the store does not have: empty, and its WRITE stores it explicitly */
+    /* a record naming a generation the store does not have: empty (-3); a WRITE without a sequence edit keeps naming
+     * it and frees nothing; an explicit clear stores the empty one (seq_missing_kept: the entry coming back) */
     program_init(&p), program_set_seq_gen(&p, 777);
     size = (uint32_t)program_pack(&p, rec, sizeof rec), inject(3, rec, size);
     ok &= prog_open(3, &p) == 0 && program_seq_gen(&p) == 777 && edit_seq()->len == 0;
-    ok &= prog_seq_open(3, 0, &p) == -2;
+    ok &= prog_seq_open(3, 0, &p) == -3;
+    used = seqst_used();
+    memcpy(p.name, "RENAMED", 7);
+    ok &= prog_write(3, &p) == 0 && gen_of(3) == 777 && seqst_used() == used;
+    power_cycle();
+    ok &= prog_open(3, &p) == 0 && !memcmp(p.name, "RENAMED", 7) && prog_seq_open(3, 0, &p) == -3;
+    seq_clear(edit_seq_mut());
     ok &= prog_write(3, &p) == 0 && gen_of(3) != 0 && gen_of(3) != 777;
     power_cycle();
     ok &= prog_open(3, &p) == 0 && prog_seq_open(3, 0, &p) == 0 && edit_seq()->len == 0;
@@ -523,6 +534,99 @@ static void edit_lost_without_write(void)
     (void)prog_open(10, &p);
     ok &= seq_eq(edit_seq(), &a);
     printf("edit_lost_without_write: a program change or a power cut drops the edited sequence: %d\n", ok);
+    CHECK(ok);
+}
+
+/* a stored entry that does not read (a read error): retried once; still unreadable, the panel is told (-3) and a
+ * WRITE that leaves the sequence alone keeps it named and released nothing, so it reads again after a reboot */
+static void seq_missing_kept(void)
+{
+    int ok = 1;
+    uint32_t r0, k, used;
+    uint16_t g = 0;
+    static program_t p;
+    static seq_t a, out;
+    fresh(); power_cycle();
+    (void)prog_open(4, &p);
+    rand_seq(edit_seq_mut());
+    a = *edit_seq();
+    ok &= prog_write(4, &p) == 0 && (g = (uint16_t)gen_of(4)) != 0;
+    power_cycle();
+    r0 = f_reads, f_read_fail = 1000u;          /* how many reads one failing seqst_get makes */
+    (void)seqst_get(4, g, &out);
+    k = f_reads - r0, f_read_fail = k;          /* the first get fails, the retry reads it */
+    ok &= prog_open(4, &p) == 0 && seq_eq(edit_seq(), &a);
+    f_read_fail = 2u * k;                       /* both fail: missing */
+    ok &= prog_open(4, &p) == 0 && f_read_fail == 0 && edit_seq()->len == 0;
+    f_read_fail = 2u * k;
+    ok &= prog_seq_open(4, 0, &p) == -3;
+    used = seqst_used();
+    memcpy(p.name, "KEPT", 4);
+    ok &= prog_write(4, &p) == 0 && gen_of(4) == g && seqst_used() == used;   /* (no put, no release) */
+    power_cycle();
+    ok &= prog_open(4, &p) == 0 && !memcmp(p.name, "KEPT", 4) && seq_eq(edit_seq(), &a);   /* back */
+    f_read_fail = 2u * k;                       /* missing again; this time the sequence is edited: stored */
+    ok &= prog_open(4, &p) == 0 && edit_seq()->len == 0;
+    rand_seq(edit_seq_mut());
+    a = *edit_seq();
+    ok &= prog_write(4, &p) == 0 && gen_of(4) != g;
+    power_cycle();
+    ok &= prog_open(4, &p) == 0 && seq_eq(edit_seq(), &a) && !seqst_get(4, g, &out);
+    f_read_fail = 0;
+    printf("seq_missing_kept: one failed read retried; unreadable: -3, an unedited WRITE keeps gen %u and frees nothing, "
+           "back after a reboot; an edit replaces it: %d\n", (unsigned)g, ok);
+    CHECK(ok);
+}
+
+/* the flash refuses the sequence's put: WRITE FAILED (not SEQ FULL), nothing changed */
+static void write_flash_error(void)
+{
+    int ok = 1, rc;
+    static program_t p, q, old;
+    static seq_t a, b;
+    fresh(); power_cycle();
+    (void)prog_open(5, &p);
+    rand_seq(edit_seq_mut());
+    a = *edit_seq();
+    ok &= prog_write(5, &p) == 0;
+    old = p;
+    edit_params(&p);
+    rand_seq(edit_seq_mut());
+    b = *edit_seq();
+    snap();
+    f_seq_refuse = 1;
+    rc = prog_write(5, &p);
+    f_seq_refuse = 0;
+    ok &= rc == PROG_ERR_FLASH && !memcmp(f_slot, snap_slot, sizeof f_slot);
+    ok &= seq_eq(edit_seq(), &b);               /* (the edit kept: WRITE again) */
+    power_cycle();
+    ok &= prog_open(5, &q) == 0 && prog_eq(&q, &old) && seq_eq(edit_seq(), &a);
+    *edit_seq_mut() = b;
+    ok &= prog_write(5, &p) == 0;
+    power_cycle();
+    ok &= prog_open(5, &q) == 0 && prog_eq(&q, &p) && seq_eq(edit_seq(), &b);
+    printf("write_flash_error: a refused put -> PROG_ERR_FLASH (not SEQ FULL), record and sequence unchanged: %d\n", ok);
+    CHECK(ok);
+}
+
+/* a change made through a cast of edit_seq() (bypassing edit_seq_mut) is still stored as an edit */
+static void edit_bypass_caught(void)
+{
+    int ok = 1;
+    uint16_t g = 0;
+    static program_t p;
+    static seq_t a;
+    fresh(); power_cycle();
+    (void)prog_open(6, &p);
+    rand_seq(edit_seq_mut());
+    ok &= prog_write(6, &p) == 0 && (g = (uint16_t)gen_of(6)) != 0;
+    (void)prog_open(6, &p);
+    seq_rec_back((seq_t *)edit_seq());          /* (what Task 5 must not do) */
+    a = *edit_seq();
+    ok &= prog_write(6, &p) == 0 && gen_of(6) != g;
+    power_cycle();
+    ok &= prog_open(6, &p) == 0 && seq_eq(edit_seq(), &a);
+    printf("edit_bypass_caught: a change behind edit_seq_mut's back is stored as an edit: %d\n", ok);
     CHECK(ok);
 }
 
@@ -569,6 +673,9 @@ int main(void)
     record_v3_compat();
     load_fallbacks();
     edit_lost_without_write();
+    seq_missing_kept();
+    write_flash_error();
+    edit_bypass_caught();
     write_pairs();
     write_full_refuses_whole();
     write_powercut_pairs();

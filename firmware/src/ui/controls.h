@@ -27,8 +27,10 @@ enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_WRITE, ACT_ENTER, ACT_MANUAL, 
  * panel), TAP (tap tempo: the program's BPM from the 4th tap; synth/clock.h). ARP ON is a param pad (P_ARP_ON) */
 enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
 /* a notice in the header (ctl_last_id = B_NOTICE, the value one of these): none, a broken stored program loaded as
- * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC") */
-enum { NT_NONE, NT_BROKEN, NT_RESTORE_ASK, NT_RESTORED };
+ * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC"), the stored
+ * sequence missing ("Err") */
+enum { NT_NONE, NT_BROKEN, NT_RESTORE_ASK, NT_RESTORED, NT_SEQ_MISSING };   /* NT_SEQ_MISSING: the record names a
+                                                 * sequence the store does not give (params/prog_seq.h): empty loaded */
 #define B_NOTICE B_ACT(0x7Fu)   /* the program number's digits (OB-6: bank / tens / ones) */
 
 typedef struct { uint16_t enc[7]; uint16_t fader[4]; uint16_t pad_top[8]; } binding_t;  /* param ids or 0xFFFF; pad_top may be actions */

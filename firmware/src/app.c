@@ -399,6 +399,42 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
                                                                           set ID V" queues the edit PARAM ID = V as the
                                                                           main loop would (0 = queued); worst.txt's
                                                                           patch (quicker than the panel's gestures) */
+    else if (!strcmp(name, "seqlen")) *got = edit_seq()->len;          /* the edit buffer's sequence: its steps */
+    else if (!strcmp(name, "seqgen")) {                                /* seqgen N: the generation program N's record
+                                                                          names (0 none) */
+        static program_t p;
+        *got = prog_load(a0, &p) == 0 ? (int)program_seq_gen(&p) : -1;
+    }
+    else if (!strcmp(name, "seqerased")) *got = (int)(host_seqst_erases - host_seqst_mark);   /* sequence-store sectors
+                                                                          erased since "seqmark" */
+    else if (!strcmp(name, "seqmark")) { host_seqst_mark = host_seqst_erases; *got = 0; }   /* (a hook) */
+    else if (!strcmp(name, "seqtest")) {                               /* host hooks, not probes ("T expect 0 seqtest K"):
+                                                                          the edit sequence = K steps of 6-note chords,
+                                                                          as a recording would make it (edit_seq_mut) */
+        static const uint8_t nt[6] = {48, 52, 55, 60, 64, 67}, vl[6] = {100, 100, 100, 100, 100, 100};
+        seq_t *s = edit_seq_mut();
+        seq_clear(s);
+        for (uint32_t k = 0; k < a0 && k < SEQ_MAX_STEPS; k++) (void)seq_rec_step(s, nt, vl, 6);
+        *got = 0;
+    }
+    else if (!strcmp(name, "seqformat")) *got = seqst_format();        /* every stored sequence gone (records keep
+                                                                          naming theirs: "missing") */
+    else if (!strcmp(name, "seqchurn")) {                              /* full-size puts and releases on program 499
+                                                                          until the next full-size put must compact:
+                                                                          got = the puts */
+        static seq_t s;
+        static const uint8_t nt[6] = {48, 52, 55, 60, 64, 67}, vl[6] = {90, 90, 90, 90, 90, 90};
+        uint16_t g;
+        int k = 0;
+        seq_clear(&s);
+        while (s.len < SEQ_MAX_STEPS) (void)seq_rec_step(&s, nt, vl, 6);
+        while (k < 1000 && !(seqst_nfree() <= 1u && seqst_head >= 0 && 0x1000u - seqst_fill[seqst_head] < SEQST_REC_MAX)) {
+            if (seqst_put(499, &s, &g)) break;
+            seqst_release(499, g);
+            k++;
+        }
+        *got = k < 1000 && seqst_nfree() <= 1u ? 1 : 0;              /* 1: there (the next full-size put compacts) */
+    }
     else return -1;                                                    /* a name the app does not know */
     return 0;
 }

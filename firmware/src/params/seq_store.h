@@ -77,7 +77,9 @@ int seqst_init(void);                                    /* at boot: scan, finis
                                                           * the directory; 0 */
 int seqst_get(uint16_t prog, uint16_t gen, seq_t *out);  /* 1 found (an empty entry too: out->len 0), 0 none */
 int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out);   /* 0 written, *gen_out its generation; -1 full
-                                                          * (or the flash refused): nothing written */
+                                                          * (or not ready / a bad argument): nothing written, no flash
+                                                          * touched; -2 the flash failed (refused, or a record that
+                                                          * twice did not read back): nothing that counts written */
 void seqst_release(uint16_t prog, uint16_t keep_gen);    /* entries of prog older than keep_gen reclaimable; call it
                                                           * after the program record naming keep_gen is committed */
 void seqst_drop(uint16_t prog);                          /* every generation of prog reclaimable (its record names

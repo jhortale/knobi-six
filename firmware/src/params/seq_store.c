@@ -371,14 +371,17 @@ int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out)
     for (tries = 0; tries < 2u && r == 1; tries++) {   /* (a record that did not read back: once more, elsewhere,
                                                  * the same bytes: should the weak one ever read whole it says the same) */
         if ((r = seqst_room(size)) != 0) break;
-        if (seq_pack(s, seqst_buf + SEQST_REC_HDR, SEQ_PACKED_MAX) != (int)len) return -1;
+        if (seq_pack(s, seqst_buf + SEQST_REC_HDR, SEQ_PACKED_MAX) != (int)len) return -2;   /* (an invalid
+                                                 * sequence: not "full") */
         seqst_put16(seqst_buf, SEQST_TAG_SEQ), seqst_put16(seqst_buf + 2, prog), seqst_put16(seqst_buf + 4, g);
         seqst_put16(seqst_buf + 6, len);
         c = ~seqst_crc(seqst_crc(~0u, seqst_buf, 8u), seqst_buf + SEQST_REC_HDR, len);
         seqst_put32(seqst_buf + 8, c);
         r = seqst_append(SEQST_REC_HDR + len, &at);
     }
-    if (r != 0) { if (r != -1) (void)seqst_init(); return -1; }
+    if (r == -1) return -1;                     /* full: no flash touched */
+    if (r != 0) { (void)seqst_init(); return -2; }   /* the flash failed (or two weak writes): nothing that counts
+                                                 * written, RAM rebuilt from the flash */
     seqst_top[prog] = g, seqst_loc_top[prog] = seqst_loc((uint32_t)seqst_head, at);
     if (gen_out) *gen_out = g;
     return 0;
