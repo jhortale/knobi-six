@@ -14,6 +14,6 @@ SECTIONS
         . = ALIGN(4); __data_end = .;
     } > RAM AT > XIP
     __data_lma = LOADADDR(.data);
-    .bss (NOLOAD) : { . = ALIGN(4); __bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __bss_end = .; } > RAM
+    .bss (NOLOAD) : { . = ALIGN(4); __bss_start = .; *(.bss*) *(.sbss*) *(.pool*) *(COMMON) . = ALIGN(4); __bss_end = .; } > RAM
     /DISCARD/ : { *(.comment) *(.note*) }
 }

@@ -10,6 +10,7 @@ import sys
 out, ms, rate = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 dms, wms = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (None, None)
 pms = int(sys.argv[6]) if len(sys.argv) > 6 else None
+sms = int(sys.argv[7]) if len(sys.argv) > 7 else None
 TICKS_PER_US = 24
 BLOCK_US = 256 * 1_000_000 // 44100                       # one audio block (HALF_FRAMES at 44.1 kHz): 5804 us
 STATE = {0: "OFF", 1: "IDLE", 2: "BUSY", 3: "FAIL"}
@@ -260,8 +261,51 @@ if pms:
          f"({WHY.get(t['why'])}, probe {FAILWHY.get(t['fail'])}), ERR {t['errs']}, rounds {t['rounds']} "
          f"(steps {t['steps']}), PING {t['pings']}; {r['halves']} audio halves")
 
+# Phase 3 Task 7: a WRITE with a sequence, the sequence playing (tests/cpu1_emu/seq_hook.c, seq_test), in the default
+# build (no CPU1 code at all) and in a KNOBI_CPU1=1 build with DUAL CORE on
+SQ = ["magic", "done", "blocks", "phase", "len", "played", "wr_rc", "writes", "write_at", "play_before", "play_after",
+      "cur_a", "cur_b", "gen", "rb_len", "rb_equal", "open_rc", "open_equal", "used"] + \
+     [f"{f}{i}" for f in ("n", "silent", "step", "peak") for i in range(4)] + \
+     ["dual", "state", "why", "failed", "rejected"]
+if sms:
+    for name, dual in (("seqwrite", False), ("seqwrite1", True)):
+        r = load(name)
+        w = r["words"]
+        t = dict(zip(SQ, w + [None] * (len(SQ) - len(w))))
+        g = lambda k: t[k] if t[k] is not None else 0
+        ok = {"no halt": not r["halt"], "no chip reset": r["log"].count("chip reset") == 0,
+              f"audio ran (>= {min_halves(sms)} halves)": r["halves"] >= min_halves(sms),
+              "magic, script done": t["magic"] == 0x54535145 and t["done"] == 1,
+              "an 8-step sequence recorded and playing before the WRITE": (t["len"], t["play_before"]) == (8, 1),
+              "WRITE stored (rc 1, 1 write)": (t["wr_rc"], t["writes"]) == (1, 1),
+              "the sequence still playing after it, on another step": t["play_after"] == 1 and t["cur_a"] < 8
+                  and t["cur_b"] < 8 and t["cur_a"] != t["cur_b"],
+              "read back as a power cycle would: the record names a generation, the store gives the same sequence":
+                  g("gen") >= 1 and t["rb_len"] == 8 and t["rb_equal"] == 1,
+              "prog_open: the edit buffer = the stored sequence": (t["open_rc"], t["open_equal"]) == (0, 1),
+              "blocks before and after the WRITE": g("n1") >= 50 and g("n3") >= 20,
+              "its fade: silent block(s), nothing sharper or louder than the playing before it":
+                  g("silent2") >= 1 and g("step2") <= g("step1") and g("peak2") <= g("peak1"),
+              "no click after it either (largest step <= before)": g("step3") <= g("step1")}
+        if dual:
+            ok.update({"DUAL CORE on, CPU1 IDLE throughout (never retired by the flash gate), nothing refused":
+                       (t["dual"], t["state"], t["why"], t["failed"], t["rejected"]) == (1, 1, 0, 0, 0),
+                       "cpu1 released": r["released"]})
+        seen = (f"WRITE rc {t['wr_rc']} at {t['write_at']} ms, the sequence ({t['len']} steps, record generation "
+                f"{t['gen']}, {t['used']} B in the store) read back {'equal' if t['rb_equal'] else 'NOT equal'}, opened "
+                f"{'equal' if t['open_equal'] else 'NOT equal'}; playing on after it (step {t['cur_a']} -> {t['cur_b']}); "
+                f"before: {t['n1']} blocks, {t['silent1']} silent, largest step {t['step1']}, peak {t['peak1']}; the "
+                f"WRITE: {t['n2']} blocks, {t['silent2']} silent, step {t['step2']}, peak {t['peak2']}; after: {t['n3']} "
+                f"blocks, step {t['step3']}, peak {t['peak3']}")
+        if dual:
+            seen += f"; DUAL CORE {t['dual']}, {STATE.get(t['state'])}, rejected {t['rejected']}"
+        seen += f"; {r['halves']} audio halves"
+        case(name, ("a KNOBI_CPU1=1 build, DUAL CORE on" if dual else "the default build (one core, no CPU1 code)")
+             + ": a sequence playing, WRITE + ENTER (fade, the sequence store's put, the slot), read back",
+             ok, seen)
+
 print(f"### Second core in fm1-emu ({ms} ms each; dual and dualfail {dms} ms, write {wms} ms"
-      + (f", probe {pms} ms" if pms else "") + ")\n")
+      + (f", probe {pms} ms" if pms else "") + (f", seqwrite {sms} ms" if sms else "") + ")\n")
 print("| case | what | result | seen |")
 print("| --- | --- | --- | --- |")
 for row in rows:

@@ -71,12 +71,20 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #include "ui/screens.c"                         /* the screens (after controls.c: they show its bindings) */
 
 static volatile uint8_t app_mono;               /* the STEREO global = MONO: both sides the sum (main loop sets it) */
+#ifndef KNOBI_SEQ_TEST
+#define KNOBI_SEQ_TEST 0                        /* fm1-emu case seqwrite (tests/cpu1_emu/seq_hook.c): 0 in every real build */
+#endif
 #if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
 static void dual_test_audio(int32_t *out, uint32_t n);   /* (fm1-emu cases, tests/cpu1_emu/dual_hook.c) */
 #endif
+#if KNOBI_SEQ_TEST
+static void seq_test_audio(int32_t *out, uint32_t n);    /* (tests/cpu1_emu/seq_hook.c) */
+#endif
 static void app_audio(int32_t *out, uint32_t n)
 {
-#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+#if KNOBI_SEQ_TEST
+    seq_test_audio(out, n);
+#elif KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
     dual_test_audio(out, n);
 #else
     eng_render(out, n);                         /* the queued events, then n frames added into out (WRITE's fade) */
@@ -173,6 +181,9 @@ static void clock_out(void)
 #if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
 #include "../../tests/cpu1_emu/dual_hook.c"     /* (fm1-emu cases 6..8; never in a real build) */
 #endif
+#if KNOBI_SEQ_TEST
+#include "../../tests/cpu1_emu/seq_hook.c"      /* (fm1-emu case seqwrite; never in a real build) */
+#endif
 
 static uint32_t keys_tx_on, keys_tx_off;       /* the keys' own note-ons / offs sent as MIDI (host probes) */
 
@@ -206,6 +217,9 @@ static void app_main(void)
         platform_poll();
 #if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
         dual_test_main(&screen);
+#endif
+#if KNOBI_SEQ_TEST
+        seq_test_main(&screen);
 #endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
         if (edit_seq_ver() != seq_sent && eng_seq_load(edit_seq()) == 0) seq_sent = edit_seq_ver();   /* the edit
@@ -445,6 +459,10 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     else if (!strcmp(name, "seqplay")) *got = eng_seq_play((int)a0);   /* host hook: SEQ PLAY on / off (0 = queued) as
                                                                           Task 5's button will */
     else if (!strcmp(name, "seqxp") && n >= 1) *got = eng_seq_transpose(a[0]);   /* host hook: transpose (semitones) */
+#if KNOBI_SEQ_TEST
+    else if (!strcmp(name, "seqwr")) *got = (int)((const uint32_t *)&seq_test)[a0];   /* host: word I of seq_test (the
+                                                                          fm1-emu case's record, tests/cpu1_emu/seq_hook.c) */
+#endif
     else if (!strcmp(name, "seqplaying")) *got = eng_seq_playing();    /* SEQ PLAY as the main loop sent it */
     else if (!strcmp(name, "seqstate")) *got = eng_seq_state;          /* the player: 0 stopped, 1 playing, 2 armed */
     else if (!strcmp(name, "seqcur")) *got = eng_seq_cur == SEQ_NO_STEP ? -1 : eng_seq_cur;   /* the step played last

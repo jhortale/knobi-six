@@ -40,6 +40,11 @@
 #   probemis the probe with its test hook (-DKNOBI_PROBE_TEST=1): CPU1 reads 0x00200000 where 0 is in one word of
 #            pattern round 40: MISREAD 1 (CPU1's), BIT 00200000, CPU1 retired (FAIL PATTERN), the audio runs; the
 #            screen saved (probemis_screen.png)
+#   seqwrite, seqwrite1   Phase 3 Task 7 (tests/cpu1_emu/seq_hook.c, -DKNOBI_SEQ_TEST=1): a recorded 8-step sequence playing at
+#            250 BPM, WRITE + ENTER with it playing (the fade, the sequence store's put, the program slot), then read
+#            back as a power cycle would and opened: the same sequence, the sound running, a fade and no click. seqwrite is
+#            the default build (one core, no CPU1 code at all, build.sh as João would install it), seqwrite1 a
+#            KNOBI_CPU1=1 build with DUAL CORE on (CPU1 stays IDLE: the flash gate never had to retire it)
 #   bash tests/cpu1_emu/run.sh FM1_EMU OUTDIR     (as ./build.sh: JIELI_TOOLCHAIN, AC79_SDK, Pillow; Docker off Linux)
 # It leaves build/ holding the last CPU1 image: run ./build.sh again for the default one.
 set -euo pipefail
@@ -51,6 +56,7 @@ RATE=${CPU1_EMU_FLAKY:-1e-7}
 DMS=${CPU1_EMU_DUAL_MS:-2400}                    # dual, dualfail: the boot + 8 segments of 40 blocks (1.86 s)
 WMS=${CPU1_EMU_WRITE_MS:-6500}                   # write: up to the autosave (~5 s) and a chord after it
 PMS=${CPU1_EMU_PROBE_MS:-4000}                   # probe: four pings (one a second from the first block)
+SMS=${CPU1_EMU_SEQ_MS:-3000}                     # seqwrite: the sequence from 0.5 s, the WRITE at 1.2 s, 0.3 s after it
 
 build() {   # name, test hook (empty: none), build.py options...
     local name=$1 hook=$2; shift 2
@@ -60,6 +66,16 @@ build() {   # name, test hook (empty: none), build.py options...
         cat "$OUT/$name.build.log"; exit 1
     fi
     cp build/knobi-six*-cpu1*.fwsc "$OUT/$name.fwsc"
+    cp build/app.map "$OUT/$name.map"
+    grep -E '^  (ok|FAIL)' "$OUT/$name.build.log" > "$OUT/$name.checks"
+}
+buildd() {   # name, test hook (-D...), build.py options...: the default build (one core, no CPU1 code at all)
+    local name=$1 hook=$2; shift 2
+    rm -f build/knobi-six.fwsc
+    if ! DINGHY_DEFS="$hook" ./build.sh "$@" > "$OUT/$name.build.log" 2>&1; then
+        cat "$OUT/$name.build.log"; exit 1
+    fi
+    cp build/knobi-six.fwsc "$OUT/$name.fwsc"
     cp build/app.map "$OUT/$name.map"
     grep -E '^  (ok|FAIL)' "$OUT/$name.build.log" > "$OUT/$name.checks"
 }
@@ -82,6 +98,8 @@ build dualmid 9
 build slow 10
 build probe "" --probe-cpu1
 build probemis -DKNOBI_PROBE_TEST=1 --probe-cpu1
+build seqwrite1 -DKNOBI_SEQ_TEST=1
+buildd seqwrite -DKNOBI_SEQ_TEST=1
 emu plain plain fm1_cpu1_mb 13
 emu start test3 cpu1_test 20
 emu nostart nostart cpu1_test 20
@@ -96,8 +114,10 @@ RUN_MS=$WMS emu write write dual_test 71 &
 RUN_MS=$PMS emu probe probe c1probe 33 --keys 800:GLOBE --snap $((PMS - 100)) &
 RUN_MS=$PMS emu probeflaky probe c1probe 33 --flaky-core1 "$RATE" --seed 7 --cpu1-survives &
 RUN_MS=$PMS emu probemis probemis c1probe 33 --keys 800:GLOBE --snap $((PMS - 101)) &
+RUN_MS=$SMS emu seqwrite seqwrite seq_test 40 &
+RUN_MS=$SMS emu seqwrite1 seqwrite1 seq_test 40 &
 wait
 png() { python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).save(sys.argv[2])' "$@" || true; }
 png "$OUT/work/lcd_$((PMS - 100)).bmp" "$OUT/probe_screen.png"      # (the probe's Globals screen at the end)
 png "$OUT/work/lcd_$((PMS - 101)).bmp" "$OUT/probemis_screen.png"
-python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" "$PMS" | tee "$OUT/summary.md"
+python3 tests/cpu1_emu/check.py "$OUT" "$MS" "$RATE" "$DMS" "$WMS" "$PMS" "$SMS" | tee "$OUT/summary.md"
