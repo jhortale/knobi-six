@@ -414,6 +414,8 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
                                                                           main loop would (0 = queued); worst.txt's
                                                                           patch (quicker than the panel's gestures) */
     else if (!strcmp(name, "seqlen")) *got = edit_seq()->len;          /* the edit buffer's sequence: its steps */
+    else if (!strcmp(name, "seqdirty")) *got = es_dirty;               /* it is edited (a WRITE stores it as a new entry) */
+    else if (!strcmp(name, "recfresh")) *got = seqrec_fresh(&ctl_rec); /* recording, nothing entered yet */
     else if (!strcmp(name, "seqgen")) {                                /* seqgen N: the generation program N's record
                                                                           names (0 none) */
         static program_t p;

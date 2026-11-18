@@ -9,7 +9,7 @@ top row of pads is switches, the bottom row is pressure only.
 
 | Button (printed) | id | Does |
 | --- | --- | --- |
-| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Arp + Clock, Sequencer, Program, Globals (stops at the ends). **While recording a sequence: `<` = DEC (back: the last step erased), `>` = INC (a rest; with notes held, a tie)**, see [Sequencer](#sequencer) |
+| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Arp + Clock, Sequencer, Program, Globals (stops at the ends). **While recording a sequence, on the Sequencer screen: `<` = DEC (back: the last step erased), `>` = INC (a rest; with notes held, a tie)**, see [Sequencer](#sequencer); on any other screen they move between screens as ever |
 | PATCH | `BTN_HOME` | Play |
 | PARA | `BTN_EDIT` | the last edit section visited (VCO 1 + 2 at first) |
 | GLOBE | `BTN_GLO` | Globals; again: back to where you were |
@@ -21,7 +21,7 @@ top row of pads is switches, the bottom row is pressure only.
 | FX held + any encoder K2..K8 | `BTN_FX` | DISTORTION (0..127, the program's), on every screen: the OB-6's "hold EFFECT and turn MIX" (reference 2.9, 4). The effects (and a MIX knob) are not there yet, so every knob does it while FX is held; the header shows the value. FX alone: nothing yet. **This narrows when the effects land**: it will be FX held + the MIX knob only, and FX's other uses will belong to the effects |
 | SEQ | `BTN_SEQ` | the Sequencer screen; again: back to where you were |
 | SEQ PLAY | `BTN_PLAY` | the sequence plays / stops (lit while it plays). While recording: recording ends and the sequence plays |
-| SEQ REC | `BTN_REC` | recording: arms (the Sequencer screen; the edit buffer's sequence is replaced, from step 1); again: ends (lit while recording). While the sequence plays: **held + a key** transposes it; **tapped** (let go with no key pressed) stops it and starts recording |
+| SEQ REC | `BTN_REC` | recording: arms (the Sequencer screen; the edit buffer's sequence is replaced, from step 1, at the first entry); again: ends (lit while recording). While the sequence plays: **held + a key** transposes it; **tapped** (let go with no key pressed, the sequence still playing) stops it and starts recording |
 | KNOB BANK, FADER BANK, ARP, NOTE REPEAT | | nothing yet (effects: phase 2C; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
@@ -126,8 +126,8 @@ buttons and the recording: [Sequencer](#sequencer) below):
   arms it: it plays only while that clock runs: 0xFA from step 1, 0xFB on from the step it stopped at, 0xFC pauses
   (notes released, the step kept); no clock, silent. IN NO S/S: the ticks alone.
 - **Transpose**: while it plays, hold SEQ REC and press a key: the sequence plays that many semitones from middle C
-  (C4, 60 = none: the key's note after the octave buttons) from its next note; with UNISON on (and LOCAL ON), a key
-  alone transposes. That key does nothing else: it does not sound, is not sent as MIDI, is not recorded, and neither is
+  (C4, 60 = none: the key's note after the octave buttons) from its next note; with UNISON on (and LOCAL ON, and a
+  sequence that is not empty), a key alone transposes. That key does nothing else: it does not sound, is not sent as MIDI, is not recorded, and neither is
   its release; the header shows the transpose. MIDI notes in never transpose. A transposed note outside MIDI 0..127 is
   dropped. Not stored; a program change puts it back to none.
 - **Arp and sequencer are exclusive**: SEQ PLAY turns ARP ON off; ARP ON stops the sequence (its notes released).
@@ -156,7 +156,9 @@ buttons do now. Play shows `SEQ` (playing), `ARM` (armed) or `REC` (recording) b
 buffer: recording only edits it, **WRITE** stores it with the program (a program change, RESTORE FACTORY or a power cut
 without WRITE loses it, as any edit).
 - **SEQ REC** arms: the Sequencer screen shows, ARP ON goes off (the arp and the sequencer are exclusive; turning ARP ON
-  while recording ends the recording), and the sequence is **replaced** from step 1 (no overdub). SEQ REC again, SEQ
+  while recording ends the recording), and the sequence is **replaced** from step 1 (no overdub) at the first entry (a
+  step, `>`, `<`): until then the screen shows it empty, and a recording ended with no entry leaves the sequence as it
+  was (not edited: a later WRITE keeps the stored one). SEQ REC again, SEQ
   PLAY (which then plays it), WRITE, a program change or RESTORE FACTORY end it. Recording also ends by itself at **64
   steps** (the 64th entry makes it the last).
 - **A step**: press a key (or a MIDI note in) and let it go: one step of that note, at its velocity. **A chord**: keep
@@ -168,12 +170,15 @@ without WRITE loses it, as any edit).
 - **`>` = INC**: with nothing held, a **rest**. With notes held: they are recorded now and a **tie** follows (the step
   held on, extended); each further `>` while they stay held adds one more tie; their release then adds nothing. A new
   key pressed after that, while some are still held, starts the next step.
-- **`<` = DEC**: back one step, erasing it (a chord being entered is not touched). `<` / `>` change screens again once
-  recording ends; the pads ◀ / ▶ still change screens while recording.
+- **`<` = DEC**: back one step, erasing it (a chord being entered is not touched). Erasing the step of a chord that is
+  still held after `>` tied it gives that chord back as being entered: its release records it again, `>` records and
+  ties it again.
+- `<` / `>` are DEC / INC on the Sequencer screen only: on any other screen (PATCH, PARA, GLOBE, SEQ take you there)
+  they change screens as ever, and recording goes on; the pads ◀ / ▶ always change screens.
 - The keys **sound** while recording, and go out as MIDI, as when playing (the OB-6 sounds them). Under **LOCAL OFF**
   the keys are not recorded (they go to MIDI only, as ever): a DAW echoing them back records them once, as MIDI in.
-- SEQ REC while the sequence plays: **tapped** (let go with no key pressed while it was held) it stops the sequence
-  (its notes released) and arms recording; **held + a key** it transposes instead (above), and its release then does
+- SEQ REC while the sequence plays: **tapped** (let go with no key pressed while it was held, the sequence still
+  playing: SEQ PLAY pressed meanwhile cancels it) it stops the sequence (its notes released) and arms recording; **held + a key** it transposes instead (above), and its release then does
   nothing. The Sequencer screen's SEQ REC pad acts at once (stop, record), never a transpose.
 
 **Key routing** (the keybed; MIDI notes in are only ever played, captured by CHORD and recorded):
@@ -184,7 +189,7 @@ without WRITE loses it, as any edit).
 | recording | plays, goes out as MIDI, and is recorded (LOCAL ON) |
 | playing | plays live beside the sequence (the voices compete), goes out; not recorded |
 | playing, SEQ REC held | transposes (the key minus C4); nothing else, its release neither |
-| playing, UNISON on (LOCAL ON) | transposes, no hold needed; nothing else |
+| playing, UNISON on (LOCAL ON), the sequence not empty | transposes, no hold needed; nothing else (an empty sequence: the key plays) |
 
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to

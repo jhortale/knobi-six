@@ -312,11 +312,17 @@ static int scr_seq_state(void)
     if (!ctl_seq_on()) return 0;
     return eng_seq_state == 2 ? 2 : 1;
 }
+static const seq_t *scr_seq(void)                 /* the sequence shown: a fresh recording (nothing entered yet; it
+                                                  * replaces the sequence at its first entry) as empty */
+{
+    static seq_t none;                            /* (zero: empty) */
+    return seqrec_fresh(&ctl_rec) ? &none : edit_seq();
+}
 static int32_t scr_seq_mark(void)
 {
     int st = scr_seq_state();
-    if (st == 3) return edit_seq()->len < SEQ_MAX_STEPS ? edit_seq()->len : -1;
-    if (st == 1 && eng_seq_cur != SEQ_NO_STEP && eng_seq_cur < edit_seq()->len) return eng_seq_cur;
+    if (st == 3) return scr_seq()->len < SEQ_MAX_STEPS ? scr_seq()->len : -1;
+    if (st == 1 && eng_seq_cur != SEQ_NO_STEP && eng_seq_cur < scr_seq()->len) return eng_seq_cur;
     return -1;
 }
 static int32_t scr_kb(uint32_t b) { return (int32_t)((b + 1023u) / 1024u); }   /* bytes -> KB, rounded up */
@@ -418,10 +424,10 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_CLKSTAT: return ctl_glob[G_MIDI_CLOCK] | eng_clk_run << 4 | eng_clk_alive << 5;
     case W_SEQSTAT: {
         int32_t m = scr_seq_mark();
-        return scr_seq_state() | (m + 1) << 4 | (int32_t)edit_seq()->len << 12 | (eng_last_seqxp + 128) << 20;
+        return scr_seq_state() | (m + 1) << 4 | (int32_t)scr_seq()->len << 12 | (eng_last_seqxp + 128) << 20;
     }
     case W_SEQROW: {                               /* its 16 steps as drawn, and the mark if it is in this row */
-        const seq_t *q = edit_seq();
+        const seq_t *q = scr_seq();
         int32_t m = scr_seq_mark();
         for (i = 16u * w->a; i < 16u * w->a + 16u; i++)
             h = h * 37u + (i < q->len ? 16u + q->step[i].count + 8u * q->step[i].tie : 0u);
@@ -628,7 +634,7 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_SEQROW: {                               /* 16 cells of 13 x 23: a frame, the notes as dots from the bottom
                                                     * (one a note, up to 6), a rest a dash, a tie a blue bar from the step
                                                     * before; past the length: an empty frame; the marked step: white */
-        const seq_t *q = edit_seq();
+        const seq_t *q = scr_seq();
         int32_t m = scr_seq_mark(), j, k;
         for (j = 0; j < 16; j++) {
             uint32_t si = 16u * w->a + (uint32_t)j;

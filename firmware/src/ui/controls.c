@@ -305,7 +305,7 @@ static void ctl_rec_end(void)                          /* recording ends (SEQ RE
                                                         * held is recorded */
 {
     ctl_rec_arm = 0;
-    if (ctl_rec.on) (void)seqrec_stop(&ctl_rec, edit_seq_mut());
+    if (ctl_rec.on) (void)seqrec_stop(&ctl_rec);
 }
 static void ctl_rec_forget(void)                       /* the edit buffer is replaced (a program load, RESTORE FACTORY):
                                                         * recording ends with nothing more; the load stops the player,
@@ -317,6 +317,7 @@ static void ctl_rec_forget(void)                       /* the edit buffer is rep
 }
 static void ctl_seq_play_press(void)                   /* SEQ PLAY: play / stop; recording: ends it, then plays */
 {
+    ctl_rec_xhold = 0;                                 /* (SEQ REC held meanwhile: its release no longer records) */
     if (ctl_rec.on || ctl_rec_arm) { ctl_rec_end(); ctl_seq_send(1); return; }
     ctl_seq_send(!ctl_seq_on());
 }
@@ -336,15 +337,17 @@ static void ctl_seq_poll(program_t *edit)              /* every pass: what is ow
     if (ctl_rec_arm && ctl_seq_want < 0) {             /* (the stop queued first: the player never plays a recording) */
         ctl_rec_arm = 0;
         if (edit->v[P_ARP_ON]) ctl_set(edit, P_ARP_ON, 0, 1);   /* the arp and the sequencer are exclusive */
-        seqrec_start(&ctl_rec, edit_seq_mut());        /* from step 1, replacing the sequence */
+        seqrec_start(&ctl_rec, edit_seq_mut);          /* from step 1, replacing the sequence at its first entry (a
+                                                        * recording with none leaves it as it was, unedited) */
     } else if (ctl_rec.on && edit->v[P_ARP_ON]) ctl_rec_end();   /* ARP ON while recording: recording ends */
 }
 int controls_seq_key(int note)
 {
     if (ctl_rec.on || ctl_rec_arm || !ctl_seq_on()) return 0;
     if (ctl_rec_xhold) ctl_rec_xused = 1;              /* SEQ REC held */
-    else if (!(eng_edit.v[P_UNISON_ON] && ctl_glob[G_LOCAL])) return 0;   /* UNISON on (OS 1.5.5+): no hold needed; LOCAL
-                                                        * OFF: the keys are a controller's, they go out */
+    else if (!(eng_edit.v[P_UNISON_ON] && ctl_glob[G_LOCAL] && edit_seq()->len)) return 0;   /* UNISON on (OS 1.5.5+): no
+                                                        * hold needed; LOCAL OFF: the keys are a controller's, they go
+                                                        * out; an empty sequence "playing": the keys play */
     ctl_xp_want = note - SEQ_XP_CENTER, ctl_xp_pend = 1;
     if (eng_seq_transpose(ctl_xp_want) == 0) ctl_xp_pend = 0;
     ctl_last_id = B_SEQXP, ctl_last_v = ctl_xp_want, ctl_edits++;
@@ -352,7 +355,7 @@ int controls_seq_key(int note)
 }
 void controls_rec_note(int note, int vel)
 {
-    if (ctl_rec.on) (void)seqrec_note(&ctl_rec, edit_seq_mut(), note, vel);
+    if (ctl_rec.on) (void)seqrec_note(&ctl_rec, note, vel);
 }
 int controls_btn_lit(uint32_t btn)
 {
@@ -573,10 +576,11 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     if (*screen == SCR_BOOT && (ctl_pressed || fm1_ms >= CTL_BOOT_MS)) { *screen = SCR_PLAY; ctl_scr_n++; }
     if (*screen != SCR_BOOT) {
         uint32_t p = ctl_pressed;
-        if (ctl_rec.on) {                              /* recording: < = DEC (back, erase), > = INC (rest; tie while
-                                                        * notes are held) */
-            if (p >> BTN_LEFT & 1u) (void)seqrec_dec(&ctl_rec, edit_seq_mut());
-            if (p >> BTN_RIGHT & 1u) (void)seqrec_inc(&ctl_rec, edit_seq_mut());
+        if (ctl_rec.on && *screen == SCR_SEQ) {        /* recording, on the Sequencer screen: < = DEC (back, erase),
+                                                        * > = INC (rest; tie while notes are held). Elsewhere they move
+                                                        * between screens as ever */
+            if (p >> BTN_LEFT & 1u) (void)seqrec_dec(&ctl_rec);
+            if (p >> BTN_RIGHT & 1u) (void)seqrec_inc(&ctl_rec);
         } else {
             if (p >> BTN_LEFT & 1u) ctl_goto(screen, *screen - 1);
             if (p >> BTN_RIGHT & 1u) ctl_goto(screen, *screen + 1);
@@ -593,7 +597,8 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         }
         if (ctl_released >> BTN_REC & 1u && ctl_rec_xhold) {
             ctl_rec_xhold = 0;
-            if (!ctl_rec_xused) ctl_seq_rec_press(screen);   /* tapped: stop, record */
+            if (!ctl_rec_xused && ctl_seq_on()) ctl_seq_rec_press(screen);   /* tapped: stop, record (not if it
+                                                        * stopped meanwhile: nothing) */
         }
     }
     if (*screen != SCR_BOOT && ctl_pressed >> BTN_SAVE & 1u) {
