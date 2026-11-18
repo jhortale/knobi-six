@@ -37,6 +37,8 @@ static int seqst_fl_prog(uint32_t off, const void *p, uint32_t n)
 #define SEQST_MAGIC 0x3151534Bu         /* "KSQ1" */
 #define SEQST_VERSION 1u
 #define SEQST_NONE 0xFFFFFFFFu          /* src: not a compacted copy */
+#define SEQST_FORMAT 0xFFFFFFFEu        /* src: a format's first sector: every older sector is gone */
+#define SEQST_AGE_MAX (2u * SEQST_SECTORS)   /* a sector this many sector-opens old is compacted next, live or not */
 #define SEQST_TAG_SEQ 0x5153u           /* "SQ": an entry */
 #define SEQST_TAG_REL 0x4C52u           /* "RL": a release */
 #define SEQST_NOLOC 0xFFFFu
@@ -141,6 +143,28 @@ static int seqst_erase(uint32_t i)
     return 0;
 }
 
+/* program and read back: 0 the same; -1 a weak cell reads otherwise; -2 the flash refused */
+static int seqst_prog_ok(uint32_t addr, const uint8_t *p, uint32_t n)
+{
+    uint8_t b[64];
+    uint32_t o, k, j;
+    if (seqst_fl_prog(addr, p, n)) return -2;
+    for (o = 0; o < n; o += k) {
+        k = n - o > sizeof b ? (uint32_t)sizeof b : n - o;
+        if (seqst_fl_read(addr + o, b, k)) return -2;
+        for (j = 0; j < k; j++) if (b[j] != p[o + j]) return -1;
+    }
+    return 0;
+}
+
+/* a sector's header made invalid (its magic programmed to 0: one page program, no erase): free, erased before use */
+static void seqst_kill(uint32_t i)
+{
+    static const uint8_t z[4] = {0, 0, 0, 0};
+    (void)seqst_fl_prog(SEQST_SECTOR_AT(i), z, sizeof z);
+    seqst_state[i] = SEQST_FREE, seqst_blank[i] = 0, seqst_live[i] = 0, seqst_fill[i] = 0x1000u;
+}
+
 /* walk sector i's log: pass 1 (the generations), pass 2 (live bytes, where the entries are, where the log ends) */
 static void seqst_walk(uint32_t i, int pass)
 {
@@ -149,6 +173,9 @@ static void seqst_walk(uint32_t i, int pass)
     for (;;) {
         r = seqst_rec(i, off, 1, &size);
         if (r <= 0) break;
+        if (r == 2 && pass == 1 && seqst_tag() == SEQST_TAG_SEQ && seqst_newer(seqst_gen(), seqst_top[seqst_prog()]))
+            seqst_top[seqst_prog()] = (uint16_t)seqst_gen();   /* a cut put's generation is spent: if its weak bytes
+                                                 * ever read whole, it still names only that sequence */
         if (r == 1) {
             p = seqst_prog(), g = seqst_gen();
             if (pass == 1) {
@@ -171,7 +198,7 @@ static void seqst_walk(uint32_t i, int pass)
 int seqst_init(void)
 {
     uint8_t h[SEQST_SECT_HDR];
-    uint32_t i, j, k, sum;
+    uint32_t i, j, k, sum, fseq = 0;
     seqst_ready = 1, seqst_head = -1, seqst_maxseq = 0;
     memset(seqst_top, 0, sizeof seqst_top), memset(seqst_rel, 0, sizeof seqst_rel);
     memset(seqst_loc_top, 0xFF, sizeof seqst_loc_top), memset(seqst_loc_rel, 0xFF, sizeof seqst_loc_rel);
@@ -181,18 +208,21 @@ int seqst_init(void)
         for (k = 0, sum = 0; k < 13u; k++) sum += h[k];
         if (seqst_get32(h) == SEQST_MAGIC && h[12] == SEQST_VERSION && h[13] == (uint8_t)(0xA5u - sum)) {
             seqst_state[i] = SEQST_USED, seqst_seq[i] = seqst_get32(h + 4), seqst_src[i] = seqst_get32(h + 8);
-            if (seqst_src[i] != SEQST_NONE) {
+            if (seqst_src[i] == SEQST_FORMAT && seqst_seq[i] > fseq) fseq = seqst_seq[i];
+            if (seqst_src[i] < SEQST_FORMAT) {
                 if (h[15] == 0xFFu) { (void)seqst_erase(i); continue; }   /* a compaction cut while copying: T
                                                  * still holds it all */
                 if (h[15] != 0u) { uint8_t z = 0; (void)seqst_fl_prog(SEQST_SECTOR_AT(i) + 15u, &z, 1u); }
             }
             if (seqst_seq[i] > seqst_maxseq) seqst_maxseq = seqst_seq[i];
-            if (seqst_src[i] != SEQST_NONE && seqst_src[i] > seqst_maxseq) seqst_maxseq = seqst_src[i];
-        } else
-            seqst_blank[i] = (uint8_t)seqst_blank_at(SEQST_SECTOR_AT(i), 0x1000u);
+            if (seqst_src[i] < SEQST_FORMAT && seqst_src[i] > seqst_maxseq) seqst_maxseq = seqst_src[i];
+        }                               /* (a free sector is erased before use even if it reads blank: a cut erase
+                                         * can leave cells that read 1 and are not) */
     }
+    for (i = 0; i < SEQST_SECTORS; i++)         /* a format: everything older than its sector is gone for good */
+        if (seqst_state[i] == SEQST_USED && seqst_seq[i] < fseq) seqst_kill(i);
     for (i = 0; i < SEQST_SECTORS; i++)         /* a compaction cut before its source was erased: erase it now */
-        if (seqst_state[i] == SEQST_USED && seqst_src[i] != SEQST_NONE)
+        if (seqst_state[i] == SEQST_USED && seqst_src[i] < SEQST_FORMAT)
             for (j = 0; j < SEQST_SECTORS; j++)
                 if (j != i && seqst_state[j] == SEQST_USED && seqst_seq[j] == seqst_src[i]) (void)seqst_erase(j);
     for (i = 0; i < SEQST_SECTORS; i++) if (seqst_state[i] == SEQST_USED) seqst_walk(i, 1);
@@ -216,7 +246,7 @@ static int seqst_open(uint32_t i, uint32_t src)
     h[12] = SEQST_VERSION;
     for (k = 0, sum = 0; k < 13u; k++) sum += h[k];
     h[13] = (uint8_t)(0xA5u - sum), h[14] = 0xFFu, h[15] = 0xFFu;
-    if (seqst_fl_prog(SEQST_SECTOR_AT(i), h, sizeof h)) return -1;
+    if (seqst_prog_ok(SEQST_SECTOR_AT(i), h, sizeof h)) return -1;
     seqst_state[i] = SEQST_USED, seqst_seq[i] = seqst_maxseq, seqst_src[i] = src;
     seqst_fill[i] = SEQST_SECT_HDR, seqst_live[i] = 0;
     seqst_head = (int32_t)i;
@@ -242,11 +272,24 @@ static int32_t seqst_oldest(void)
         if (seqst_state[i] == SEQST_USED && (o < 0 || seqst_seq[i] < seqst_seq[o])) o = (int32_t)i;
     return o;
 }
-
-/* compaction: the oldest sector's live records into the spare, commit, erase the oldest. The spare is the head now */
-static int seqst_compact(void)
+/* what to compact for size bytes: the sector with the fewest live bytes (the oldest of equals), the head only when
+ * no other one makes the room; -1 none does */
+static int32_t seqst_victim(uint32_t size)
 {
-    int32_t t = seqst_oldest(), s = t < 0 ? -1 : seqst_free_after((uint32_t)t + 1u);
+    uint32_t i;
+    int32_t v = -1;
+    for (i = 0; i < SEQST_SECTORS; i++)
+        if (seqst_state[i] == SEQST_USED && (int32_t)i != seqst_head &&
+            (v < 0 || seqst_live[i] < seqst_live[v] || (seqst_live[i] == seqst_live[v] && seqst_seq[i] < seqst_seq[v])))
+            v = (int32_t)i;
+    if (v >= 0 && SEQST_ROOM - seqst_live[v] >= size) return v;
+    return seqst_head >= 0 && SEQST_ROOM - seqst_live[seqst_head] >= size ? seqst_head : -1;
+}
+
+/* compaction of sector t: its live records into the spare, commit, erase t. The spare is the head now */
+static int seqst_compact(int32_t t)
+{
+    int32_t s = t < 0 ? -1 : seqst_free_after((uint32_t)t + 1u);
     uint32_t off = SEQST_SECT_HDR, size = 0, at, p, g;
     uint8_t z = 0;
     int r;
@@ -256,7 +299,8 @@ static int seqst_compact(void)
         if (r <= 0) break;
         if (r == 1 && seqst_rec_live()) {
             at = seqst_fill[s];
-            if (seqst_fl_prog(SEQST_SECTOR_AT(s) + at, seqst_buf, SEQST_REC_HDR + seqst_get16(seqst_buf + 6))) return -1;
+            if (seqst_prog_ok(SEQST_SECTOR_AT(s) + at, seqst_buf, SEQST_REC_HDR + seqst_get16(seqst_buf + 6))) return -1;   /* (a
+                                                 * copy that does not read back: no commit, init drops S, T stays) */
             p = seqst_prog(), g = seqst_gen();
             if (seqst_tag() == SEQST_TAG_SEQ) {
                 if (g == seqst_top[p]) seqst_loc_top[p] = seqst_loc((uint32_t)s, at);
@@ -266,50 +310,68 @@ static int seqst_compact(void)
         }
         off += size;
     }
-    if (seqst_fl_prog(SEQST_SECTOR_AT(s) + 15u, &z, 1u)) return -1;   /* complete: from here S is the copy */
+    if (seqst_prog_ok(SEQST_SECTOR_AT(s) + 15u, &z, 1u)) return -1;   /* complete: from here S is the copy */
     return seqst_erase((uint32_t)t);
 }
 
-/* room for size bytes at the head: a new sector while two are free, else compactions (the oldest first). 0 done;
- * -1 full (no flash touched); -2 the flash failed (RAM no longer matches it: seqst_init) */
+/* room for size bytes at the head: a new sector while two are free, else a compaction of the sector with the
+ * fewest live bytes (greedy: near full one erase makes the room, not one sector after another). Wear: a sector
+ * SEQST_AGE_MAX sector-opens old is compacted first (static data moves on, so every sector takes its share of
+ * erases); then at most one greedy compaction. 0 done; -1 full (no flash touched); -2 the flash failed (RAM no
+ * longer matches it: seqst_init) */
 static int seqst_room(uint32_t size)
 {
-    uint32_t order[SEQST_SECTORS], n = 0, i, j, k, ok = 0;
+    int32_t t;
     if (seqst_head >= 0 && 0x1000u - seqst_fill[seqst_head] >= size) return 0;
     if (seqst_nfree() >= 2u) return seqst_open((uint32_t)seqst_free_after((uint32_t)(seqst_head + 1)), SEQST_NONE) ? -2 : 0;
-    if (seqst_nfree() == 0u) return -1;
-    for (i = 0; i < SEQST_SECTORS; i++) if (seqst_state[i] == SEQST_USED) order[n++] = i;
-    for (i = 1; i < n; i++)                     /* oldest first: what the compactions take, in turn */
-        for (j = i; j > 0 && seqst_seq[order[j]] < seqst_seq[order[j - 1]]; j--) k = order[j], order[j] = order[j - 1], order[j - 1] = k;
-    for (i = 0; i < n && !ok; i++) ok = SEQST_ROOM - seqst_live[order[i]] >= size;
-    if (!ok) return -1;                         /* no compaction makes the room: full, nothing touched */
-    for (k = 0; k < n; k++) {
-        if (seqst_compact()) return -2;
+    if (seqst_nfree() == 0u || seqst_victim(size) < 0) return -1;   /* no compaction makes the room: full */
+    t = seqst_oldest();
+    if (t >= 0 && t != seqst_head && seqst_maxseq - seqst_seq[t] > SEQST_AGE_MAX) {
+        if (seqst_compact(t)) return -2;
         if (0x1000u - seqst_fill[seqst_head] >= size) return 0;
     }
-    return -1;
+    if (seqst_compact(seqst_victim(size))) return -2;
+    return 0x1000u - seqst_fill[seqst_head] >= size ? 0 : -2;
+}
+
+/* program the record in seqst_buf (n bytes) at the head's end and read it back: 0 there; 1 it did not read back
+ * (a weak cell: the head is closed, the caller tries once more elsewhere); -2 the flash failed */
+static int seqst_append(uint32_t n, uint32_t *at_out)
+{
+    uint32_t at = seqst_fill[seqst_head];
+    int r = seqst_prog_ok(SEQST_SECTOR_AT(seqst_head) + at, seqst_buf, n);
+    if (r) {
+        if (r == -2) return -2;
+        seqst_fill[seqst_head] = 0x1000u;       /* (the weak bytes stay where they are; never appended over) */
+        return 1;
+    }
+    seqst_fill[seqst_head] = (uint16_t)(at + seqst_size(n - SEQST_REC_HDR));
+    seqst_live[seqst_head] = (uint16_t)(seqst_live[seqst_head] + seqst_size(n - SEQST_REC_HDR));
+    *at_out = at;
+    return 0;
 }
 
 int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out)
 {
-    uint32_t len, size, at, c;
+    uint32_t len, size, at = 0, c, tries;
     uint16_t g;
-    int r;
-    if (!seqst_ready) (void)seqst_init();
-    if (prog >= SEQST_PROGS || !s || (len = seq_packed_size(s)) < 1u || len > SEQ_PACKED_MAX) return -1;
+    int r = 1;
+    if (!seqst_ready || prog >= SEQST_PROGS || !s || (len = seq_packed_size(s)) < 1u || len > SEQ_PACKED_MAX) return -1;
     size = seqst_size(len);
     if (seqst_used() + size > seqst_total() - (s->len ? SEQST_RESERVE : 0u)) return -1;   /* (the reserve: empties) */
-    if ((r = seqst_room(size)) != 0) { if (r < -1) (void)seqst_init(); return -1; }
     g = (uint16_t)(seqst_top[prog] + 1u);
     if (!g) g = 1u;
-    if (seq_pack(s, seqst_buf + SEQST_REC_HDR, SEQ_PACKED_MAX) != (int)len) return -1;
-    seqst_put16(seqst_buf, SEQST_TAG_SEQ), seqst_put16(seqst_buf + 2, prog), seqst_put16(seqst_buf + 4, g);
-    seqst_put16(seqst_buf + 6, len);
-    c = ~seqst_crc(seqst_crc(~0u, seqst_buf, 8u), seqst_buf + SEQST_REC_HDR, len);
-    seqst_put32(seqst_buf + 8, c);
-    at = seqst_fill[seqst_head];
-    if (seqst_fl_prog(SEQST_SECTOR_AT(seqst_head) + at, seqst_buf, SEQST_REC_HDR + len)) { (void)seqst_init(); return -1; }
-    seqst_fill[seqst_head] = (uint16_t)(at + size), seqst_live[seqst_head] = (uint16_t)(seqst_live[seqst_head] + size);
+    for (tries = 0; tries < 2u && r == 1; tries++) {   /* (a record that did not read back: once more, elsewhere,
+                                                 * the same bytes: should the weak one ever read whole it says the same) */
+        if ((r = seqst_room(size)) != 0) break;
+        if (seq_pack(s, seqst_buf + SEQST_REC_HDR, SEQ_PACKED_MAX) != (int)len) return -1;
+        seqst_put16(seqst_buf, SEQST_TAG_SEQ), seqst_put16(seqst_buf + 2, prog), seqst_put16(seqst_buf + 4, g);
+        seqst_put16(seqst_buf + 6, len);
+        c = ~seqst_crc(seqst_crc(~0u, seqst_buf, 8u), seqst_buf + SEQST_REC_HDR, len);
+        seqst_put32(seqst_buf + 8, c);
+        r = seqst_append(SEQST_REC_HDR + len, &at);
+    }
+    if (r != 0) { if (r != -1) (void)seqst_init(); return -1; }
     seqst_top[prog] = g, seqst_loc_top[prog] = seqst_loc((uint32_t)seqst_head, at);
     if (gen_out) *gen_out = g;
     return 0;
@@ -320,8 +382,8 @@ int seqst_get(uint16_t prog, uint16_t gen, seq_t *out)
     uint32_t i, off, size = 0;
     uint16_t loc;
     int r;
-    if (!seqst_ready) (void)seqst_init();
-    if (prog >= SEQST_PROGS || !gen || !out) return 0;
+    if (!seqst_ready || prog >= SEQST_PROGS || !gen || !out || !seqst_live_entry(prog, gen)) return 0;   /* (a released
+                                                 * generation is gone, whether reclaimed yet or not) */
     loc = gen == seqst_top[prog] ? seqst_loc_top[prog] : gen == seqst_rel[prog] ? seqst_loc_rel[prog] : SEQST_NOLOC;
     if (loc != SEQST_NOLOC) {
         r = seqst_rec(loc >> 10, (uint32_t)(loc & 0x3FFu) << 2, 1, &size);
@@ -341,10 +403,9 @@ int seqst_get(uint16_t prog, uint16_t gen, seq_t *out)
 
 void seqst_release(uint16_t prog, uint16_t keep_gen)
 {
-    uint32_t i, off, size = 0, c, old, was, at;
-    int r;
-    if (!seqst_ready) (void)seqst_init();
-    if (prog >= SEQST_PROGS || !keep_gen || !seqst_newer(keep_gen, seqst_rel[prog])) return;   /* (same or older:
+    uint32_t i, off, size = 0, c, old, was, at, tries;
+    int r = 1;
+    if (!seqst_ready || prog >= SEQST_PROGS || !keep_gen || !seqst_newer(keep_gen, seqst_rel[prog])) return;   /* (same or older:
                                                  * nothing to do) */
     old = seqst_rel[prog], seqst_loc_rel[prog] = SEQST_NOLOC;
     for (i = 0; i < SEQST_SECTORS; i++) {       /* what dies: prog's entries older than keep, its older release */
@@ -359,16 +420,39 @@ void seqst_release(uint16_t prog, uint16_t keep_gen)
     }
     seqst_rel[prog] = keep_gen;
     if (seqst_newer(keep_gen, seqst_top[prog])) seqst_top[prog] = keep_gen, seqst_loc_top[prog] = SEQST_NOLOC;
-    if ((r = seqst_room(SEQST_REC_HDR)) != 0) { if (r < -1) (void)seqst_init(); return; }   /* (not written: the older ones stay live after
-                                                 * a power cycle, which only costs room) */
-    seqst_put16(seqst_buf, SEQST_TAG_REL), seqst_put16(seqst_buf + 2, prog), seqst_put16(seqst_buf + 4, keep_gen);
-    seqst_put16(seqst_buf + 6, 0);
-    c = ~seqst_crc(~0u, seqst_buf, 8u);
-    seqst_put32(seqst_buf + 8, c);
-    at = seqst_fill[seqst_head];
-    if (seqst_fl_prog(SEQST_SECTOR_AT(seqst_head) + at, seqst_buf, SEQST_REC_HDR)) { (void)seqst_init(); return; }
-    seqst_fill[seqst_head] = (uint16_t)(at + SEQST_REC_HDR);
-    seqst_live[seqst_head] = (uint16_t)(seqst_live[seqst_head] + SEQST_REC_HDR);
+    for (tries = 0, r = 1; tries < 2u && r == 1; tries++) {   /* (not written: the older ones stay live after a power
+                                                 * cycle, which only costs room) */
+        if ((r = seqst_room(SEQST_REC_HDR)) != 0) break;
+        seqst_put16(seqst_buf, SEQST_TAG_REL), seqst_put16(seqst_buf + 2, prog), seqst_put16(seqst_buf + 4, keep_gen);
+        seqst_put16(seqst_buf + 6, 0);
+        c = ~seqst_crc(~0u, seqst_buf, 8u);
+        seqst_put32(seqst_buf + 8, c);
+        r = seqst_append(SEQST_REC_HDR, &at);
+    }
+    if (r < -1) (void)seqst_init();
+}
+
+void seqst_drop(uint16_t prog)
+{
+    uint16_t g;
+    if (!seqst_ready || prog >= SEQST_PROGS || !seqst_top[prog]) return;
+    if (seqst_top[prog] == seqst_rel[prog] && seqst_loc_rel[prog] == SEQST_NOLOC) return;   /* nothing live */
+    g = (uint16_t)(seqst_top[prog] + 1u);
+    if (!g) g = 1u;
+    seqst_release(prog, g);                     /* a release past the newest: every entry older, all of them dead */
+}
+
+int seqst_format(void)
+{
+    int32_t f;
+    uint32_t i;
+    (void)seqst_init();
+    f = seqst_free_after(0);
+    if (f >= 0 && seqst_open((uint32_t)f, SEQST_FORMAT)) { (void)seqst_init(); return -1; }   /* (cut before its
+                                                 * header: nothing changed) */
+    for (i = 0; i < SEQST_SECTORS; i++)         /* (from here the format holds: init kills what is older) */
+        if (seqst_state[i] == SEQST_USED && (int32_t)i != f) seqst_kill(i);
+    return seqst_init();
 }
 
 #else /* the FM-1: no room in its flash map for it; the store is compiled out */
@@ -377,6 +461,8 @@ int seqst_init(void) { return 0; }
 int seqst_get(uint16_t prog, uint16_t gen, seq_t *out) { (void)prog, (void)gen, (void)out; return 0; }
 int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out) { (void)prog, (void)s, (void)gen_out; return -1; }
 void seqst_release(uint16_t prog, uint16_t keep_gen) { (void)prog, (void)keep_gen; }
+void seqst_drop(uint16_t prog) { (void)prog; }
+int seqst_format(void) { return 0; }
 uint32_t seqst_used(void) { return 0; }
 uint32_t seqst_total(void) { return 0; }
 

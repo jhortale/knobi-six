@@ -17,7 +17,8 @@ static int fails;
 
 /* ---- the flash model */
 static uint8_t F[SEQST_SECTORS][0x1000u];
-static uint32_t f_erases[SEQST_SECTORS], f_ops, f_overwrite, f_guard_bad;
+static uint32_t f_erases[SEQST_SECTORS], f_ops, f_overwrite, f_guard_bad, f_reads;
+static int f_flip_next;                         /* the next program leaves one bit of its bytes 0 (a marginal cell) */
 static int32_t f_cut_at = -1;                   /* the operation (1..) the power goes at; -1 never */
 static int f_dead, f_cut_full;                  /* f_cut_full: the cut operation completes, then the power goes */
 static uint32_t frs = 0x2545F491u;
@@ -38,6 +39,7 @@ static int seqst_fl_read(uint32_t off, void *p, uint32_t n)
     const uint8_t *a = f_at(off, n);
     if (!a) return -1;
     memcpy(p, a, n);
+    f_reads++;
     return 0;
 }
 static int seqst_fl_erase(uint32_t off)
@@ -73,6 +75,10 @@ static int seqst_fl_prog(uint32_t off, const void *p, uint32_t n)
             a[i] &= s[i];
         }
         if (k < chunk) a[k] &= (uint8_t)(s[k] | frnd());   /* the byte it was on: half programmed */
+        if (f_flip_next && chunk > 13u) {       /* a weak cell reads 0 where 1 was meant (past the tag) */
+            for (i = 12; i < chunk && !(a[i] & 0x10u); i++) {}
+            if (i < chunk) a[i] &= (uint8_t)~0x10u, f_flip_next = 0;
+        }
         if (f_cut_now()) { f_dead = 1; return -1; }
         off += chunk, a += chunk, s += chunk, n -= chunk;
     }
@@ -484,6 +490,258 @@ static void store_powercut_every_write(void)
            f_overwrite);
 }
 
+
+/* near full, every WRITE must not erase sector after sector: at ~86 % (the reviewer's case) <= 2 erases a WRITE, ~1 on
+ * average; static data (programs written once) still gets erased in turn (no sector left out of the wear) */
+#define NF_P 230u
+static void store_wear_near_full(void)
+{
+    static seq_t s, want[NF_P];
+    static uint16_t gen[NF_P];
+    uint32_t i, p, e0, e1, worst = 0, sum = 0, base[SEQST_SECTORS], mn = 0xFFFFFFFFu, mx = 0, bad = 0, N = 3000, fill, nf, full = 0;
+    f_blank();
+    power_on();
+    for (p = 0; p < NF_P && seqst_used() < seqst_total() * 86u / 100u; p++) {
+        seq_of_len(&want[p], 40 + (int)(rnd() % 25u), 1 + (int)(rnd() % 6u));
+        CHECK(seqst_put((uint16_t)p, &want[p], &gen[p]) == 0);
+        seqst_release((uint16_t)p, gen[p]);
+    }
+    nf = p;
+    fill = seqst_used() * 100u / seqst_total();
+    for (i = 0; i < SEQST_SECTORS; i++) base[i] = f_erases[i];
+    for (i = 0; i < N; i++) {
+        p = rnd() % nf;
+        seq_of_len(&s, 40 + (int)(rnd() % 25u), 1 + (int)(rnd() % 6u));
+        for (e0 = 0, e1 = 0; e1 < SEQST_SECTORS; e1++) e0 += f_erases[e1];
+        if (seqst_put((uint16_t)p, &s, &gen[p]) == 0) { seqst_release((uint16_t)p, gen[p]); want[p] = s; } else full++;
+        for (e1 = 0, p = 0; p < SEQST_SECTORS; p++) e1 += f_erases[p];
+        sum += e1 - e0;
+        if (e1 - e0 > worst) worst = e1 - e0;
+    }
+    for (i = 0; i < SEQST_SECTORS; i++) {
+        uint32_t e = f_erases[i] - base[i];
+        if (e < mn) mn = e;
+        if (e > mx) mx = e;
+    }
+    for (p = 0; p < nf; p++) bad += !got_is((uint16_t)p, gen[p], &want[p]);
+    printf("store_wear_near_full: %u %% full, %u WRITEs: %u.%02u erases a WRITE, worst %u; %u..%u a sector; %u SEQ FULL, %u bad\n",
+           fill, N, sum / N, sum * 100u / N % 100u, worst, mn, mx, full, bad);
+    CHECK(fill >= 84u && bad == 0 && full <= N / 100u && worst <= 2u && sum <= N && mx <= 2u * mn + 4u);
+    /* static data: 150 programs written once, 30 rewritten: every sector still erased in turn */
+    f_blank();
+    power_on();
+    for (p = 0; p < 180u; p++) {
+        seq_of_len(&want[p], 40 + (int)(rnd() % 25u), 2);
+        CHECK(seqst_put((uint16_t)p, &want[p], &gen[p]) == 0);
+        seqst_release((uint16_t)p, gen[p]);
+    }
+    for (i = 0; i < SEQST_SECTORS; i++) base[i] = f_erases[i];
+    for (i = 0, worst = 0, sum = 0; i < N; i++) {
+        p = 150u + rnd() % 30u;
+        seq_of_len(&s, 40 + (int)(rnd() % 25u), 2);
+        for (e0 = 0, e1 = 0; e1 < SEQST_SECTORS; e1++) e0 += f_erases[e1];
+        CHECK(seqst_put((uint16_t)p, &s, &gen[p]) == 0);
+        seqst_release((uint16_t)p, gen[p]), want[p] = s;
+        for (e1 = 0, p = 0; p < SEQST_SECTORS; p++) e1 += f_erases[p];
+        sum += e1 - e0;
+        if (e1 - e0 > worst) worst = e1 - e0;
+    }
+    for (i = 0, mn = 0xFFFFFFFFu, mx = 0; i < SEQST_SECTORS; i++) {
+        uint32_t e = f_erases[i] - base[i];
+        if (e < mn) mn = e;
+        if (e > mx) mx = e;
+    }
+    for (p = 0, bad = 0; p < 180u; p++) bad += !got_is((uint16_t)p, gen[p], &want[p]);
+    printf("store_wear_near_full: static 150 + hot 30, %u WRITEs: %u.%02u erases a WRITE, worst %u; %u..%u a sector\n", N,
+           sum / N, sum * 100u / N % 100u, worst, mn, mx);
+    CHECK(bad == 0 && worst <= 2u && mn >= 1u && mx <= 4u * mn + 8u);
+}
+
+/* format (the owner tag cleared): everything gone, full capacity back, also after a power cycle */
+static void store_format(void)
+{
+    static seq_t big, s, out;
+    uint16_t g = 0;
+    uint32_t n0, n1;
+    f_blank();
+    power_on();
+    seq_of_len(&big, 64, 6);
+    for (n0 = 0; n0 < SEQST_PROGS; n0++) if (seqst_put((uint16_t)n0, &big, &g)) break;
+    seq_of_len(&s, 3, 1);
+    CHECK(seqst_format() == 0);
+    CHECK(seqst_used() == 0 && seqst_get(0, 1, &out) == 0 && seqst_get(5, 1, &out) == 0);
+    power_on();
+    CHECK(seqst_used() == 0 && seqst_get(0, 1, &out) == 0 && seqst_get(5, 1, &out) == 0);
+    for (n1 = 0; n1 < SEQST_PROGS; n1++) if (seqst_put((uint16_t)n1, &big, &g)) break;
+    CHECK(n1 == n0 && got_is(0, 1, &big));      /* the same capacity as a fresh store; generations start again */
+    power_on();
+    CHECK(got_is(0, 1, &big) && got_is((uint16_t)(n1 - 1u), 1, &big));
+    seqst_ready = 0;                            /* format before init (at boot, the owner tag just cleared) */
+    CHECK(seqst_format() == 0 && seqst_used() == 0);
+    CHECK(seqst_put(3, &s, &g) == 0 && g == 1u && got_is(3, 1, &s));
+    CHECK(f_overwrite == 0 && f_guard_bad == 0);
+    printf("store_format: %u full-size before, %u after; empty after a power cycle\n", n0, n1);
+}
+
+/* drop: every generation of a program reclaimable (RESTORE FACTORY written: the record names none) */
+static void store_drop(void)
+{
+    static seq_t a, b, c;
+    uint16_t g1 = 0, g2 = 0, g3 = 0, g4 = 0;
+    uint32_t used;
+    f_blank();
+    power_on();
+    seq_of_len(&a, 20, 3), seq_of_len(&b, 30, 2), seq_of_len(&c, 4, 1);
+    CHECK(seqst_put(11, &a, &g1) == 0 && seqst_put(11, &b, &g2) == 0 && seqst_put(12, &c, &g4) == 0);
+    seqst_release(11, g1);                      /* g1 named, g2 an orphan */
+    used = seqst_used();
+    seqst_drop(11);
+    CHECK(seqst_get(11, g1, &a) == 0 && seqst_get(11, g2, &a) == 0 && got_is(12, g4, &c));
+    CHECK(seqst_used() == used - rec_size(&a) - rec_size(&b) - SEQST_REC_HDR + SEQST_REC_HDR);
+    power_on();
+    CHECK(seqst_get(11, g1, &a) == 0 && seqst_get(11, g2, &a) == 0 && got_is(12, g4, &c));
+    CHECK(seqst_used() == rec_size(&c) + SEQST_REC_HDR);
+    seq_of_len(&a, 5, 5);
+    CHECK(seqst_put(11, &a, &g3) == 0 && (int16_t)(g3 - g2) > 0 && g3 != g1 && g3 != g2 && got_is(11, g3, &a));
+    seqst_drop(13);                             /* never written: nothing to drop, nothing written */
+    CHECK(seqst_used() == rec_size(&c) + SEQST_REC_HDR + rec_size(&a));
+    printf("store_drop: gens %u %u dropped, next %u\n", g1, g2, g3);
+}
+
+/* a cut put whose header made it (CRC fails) burns its generation: if the weak bytes later read whole, the
+ * generation still names only that sequence */
+static void store_cut_gen_burned(void)
+{
+    static uint8_t snap[sizeof F], rec[SEQST_REC_MAX];
+    static seq_t a, b, x;
+    uint16_t g = 0, g2 = 0;
+    uint32_t h, at, n;
+    f_blank();
+    power_on();
+    seq_of_len(&x, 2, 1);
+    CHECK(seqst_put(20, &x, &g) == 0);
+    seq_of_len(&a, 30, 4);
+    memcpy(snap, F, sizeof F);
+    h = (uint32_t)seqst_head, at = seqst_fill[h];
+    CHECK(seqst_put(21, &a, &g) == 0);
+    n = SEQST_REC_HDR + seq_packed_size(&a);
+    memcpy(rec, &F[h][at], n);                  /* the record as it should be */
+    memcpy(F, snap, sizeof F);
+    memcpy(&F[h][at], rec, SEQST_REC_HDR + 7u); /* the cut: the header and a few payload bytes */
+    power_on();
+    CHECK(seqst_get(21, g, &x) == 0);
+    seq_of_len(&b, 6, 2);
+    CHECK(seqst_put(21, &b, &g2) == 0 && g2 != g && got_is(21, g2, &b));
+    memcpy(&F[h][at], rec, n);                  /* the weak bytes read as meant after all */
+    power_on();
+    CHECK(got_is(21, g2, &b));
+    printf("store_cut_gen_burned: the cut put's gen %u not handed out again (%u)\n", g, g2);
+}
+
+/* a program that does not read back is not trusted: the put is redone; a sector read as blank after a boot is erased
+ * before its first use */
+static void store_readback(void)
+{
+    static seq_t a, b;
+    uint16_t g = 0, g2 = 0;
+    uint32_t i, e = 0;
+    f_blank();
+    power_on();
+    seq_of_len(&b, 3, 1);
+    CHECK(seqst_put(1, &b, &g) == 0);
+    for (i = 0; i < SEQST_SECTORS; i++) e += f_erases[i];
+    CHECK(e == 1u);                             /* blank by reading, still erased before use */
+    seq_of_len(&a, 20, 3);
+    f_flip_next = 1;
+    CHECK(seqst_put(2, &a, &g2) == 0 && f_flip_next == 0 && got_is(2, g2, &a));
+    power_on();
+    CHECK(got_is(2, g2, &a) && got_is(1, g, &b));
+    printf("store_readback: a weak program redone (gen %u)\n", g2);
+}
+
+/* before seqst_init nothing touches the flash: get finds none, put refuses */
+static void store_needs_init(void)
+{
+    static seq_t a;
+    uint16_t g = 0x1234;
+    uint32_t ops = f_ops, reads;
+    f_blank();
+    power_on();
+    seq_of_len(&a, 3, 1);
+    CHECK(seqst_put(1, &a, &g) == 0);
+    seqst_ready = 0;
+    ops = f_ops, reads = f_reads, g = 0x1234;
+    CHECK(seqst_get(1, 1, &a) == 0 && seqst_put(1, &a, &g) == -1 && g == 0x1234);
+    seqst_release(1, 1), seqst_drop(1);
+    CHECK(f_ops == ops && f_reads == reads);
+    power_on();
+    CHECK(got_is(1, 1, &a));
+    printf("store_needs_init: no flash before seqst_init\n");
+}
+
+/* a cut at every flash operation of a drop and of a format */
+static void store_powercut_drop_format(void)
+{
+    static uint8_t snap[sizeof F];
+    static mprog_t msnap[MP];
+    static seq_t s, t;
+    uint32_t op, cut, i, cuts = 0, bad = 0, done, formats = 0, drops = 0, f_yes = 0, f_no = 0;
+    f_blank();
+    m_reset();
+    power_on();
+    while (seqst_nfree() > 1u) { rand_seq(&s); CHECK(m_write(rnd() % MP, &s) == 0); }
+    for (op = 0; op < 60; op++) {
+        uint32_t pi = rnd() % MP, fmt = op % 15u == 14u;
+        uint16_t oldtop = M[pi].top;
+        memcpy(snap, F, sizeof F), memcpy(msnap, M, sizeof M);
+        for (cut = 2, done = 0; !done; cut++) {
+            int formatted = 0;
+            if (cut > 4000u) { bad++; break; }
+            memcpy(F, snap, sizeof F), memcpy(M, msnap, sizeof M);
+            power_on();
+            f_ops = 0, f_cut_at = (int32_t)(cut / 2u), f_cut_full = (int)(cut & 1u);
+            if (fmt) (void)seqst_format(); else seqst_drop(M[pi].prog);
+            if (!f_dead) {                      /* done: the model follows */
+                if (fmt) m_reset(), formats++;
+                else {                          /* (nothing live: nothing written) */
+                    if (M[pi].n) M[pi].n = 0, M[pi].top = M[pi].rel = (uint16_t)(oldtop + 1u ? oldtop + 1u : 1u);
+                    drops++;
+                }
+                break;
+            }
+            cuts++;
+            power_on();
+            if (fmt) {                          /* all, or nothing */
+                formatted = seqst_used() == 0;
+                if (formatted) m_reset();
+                f_yes += (uint32_t)formatted, f_no += (uint32_t)!formatted;
+                if (m_check("format cut") || seqst_used() != m_used()) { bad++; printf("  format op %u cut %u: half\n", op, cut); }
+            } else {
+                M[pi].n = 0;                    /* its entries: either way; the others: all there */
+                if (m_check("drop cut")) { bad++; printf("  drop op %u cut %u lost another\n", op, cut); }
+            }
+            seq_of_len(&t, 4, 2);
+            {
+                uint16_t g;
+                if (seqst_put(M[pi].prog, &t, &g) != 0) bad++;
+                else if (!formatted && oldtop && !m_newer(g, oldtop)) { bad++; printf("  op %u cut %u: gen %u reused\n", op, cut, g); }
+                seqst_release(M[pi].prog, g);
+                M[pi].top = g, M[pi].n = 0;
+                m_put(pi, g, &t), m_release(pi, g);
+            }
+            power_on();
+            if (m_check("after") || seqst_used() != m_used()) { bad++; printf("  op %u cut %u: used %u want %u\n", op, cut, seqst_used(), m_used()); }
+        }
+        f_cut_at = -1;
+        for (i = 0; i < 3u; i++) { rand_seq(&s); CHECK(m_write(rnd() % MP, &s) == 0); }   /* (busy again) */
+        CHECK(m_check("drop/format, then WRITEs") == 0 && seqst_used() == m_used());
+        if (bad > 10) break;
+    }
+    CHECK(bad == 0 && formats == 4u && drops == 56u && f_guard_bad == 0 && f_yes > 0 && f_no > 0);
+    printf("store_powercut_drop_format: %u drops, %u formats, %u cuts (a cut format: %u done, %u not); %u bad\n", drops,
+           formats, cuts, f_yes, f_no, bad);
+}
+
 int main(void)
 {
     (void)smk_owner_tag;                        /* (store.h's, for platform.c) */
@@ -496,6 +754,13 @@ int main(void)
     store_crc_rejects();
     f_overwrite = 0;
     store_powercut_every_write();
+    store_wear_near_full();
+    store_format();
+    store_drop();
+    store_cut_gen_burned();
+    store_readback();
+    store_needs_init();
+    store_powercut_drop_format();
     CHECK(f_overwrite == 0);
     printf("%s\n", fails ? "SEQ STORE TESTS FAILED" : "seq store tests passed");
     return fails != 0;
