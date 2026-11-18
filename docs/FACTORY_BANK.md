@@ -47,7 +47,7 @@ report (`build/factory_bank_report.txt`) lists them for whoever runs it on their
   `tests/unit/factory_test_bank.h`, three made-up programs). `FACTORY=1 tests/run_host.sh SCRIPT` runs the host app
   with the local bank.
 - Size: 500 records x 201 B = 100,500 B of flash (record version 2, `program_pack`'s format), plus the sequences
-  (61,291 B for v1.01); no compression needed: the image stays below its 619,520 B limit (CI measures it with a
+  (about 61 KB for v1.01); no compression needed: the image stays below its 619,520 B limit (CI measures it with a
   500-program synthetic bank with sequences of the same size).
 
 ## The record
@@ -129,29 +129,29 @@ unison, band-pass programs), the envelopes' interleaved order with the OB-6's in
 
 The manual's NRPN table gives the per-step notes (12..108) and velocities (0..127) but not how the program dump marks
 a step, a rest or a tie, nor the length. The rules below were found on the v1.01 file and are what `decode_seq`
-implements; the numbers are counts over its 500 programs (no data from it is reproduced here).
+implements; they describe the format, and no data from the file is reproduced here (only coarse statements, no counts).
 
 - **Layout, lane-major:** lane L (0..5) of step s (0..63): note byte `128 + 128 L + s`, velocity byte `+ 64`.
 - **Velocity byte bit 7 = the lane holds a note at this step**; its low 7 bits are the velocity. A lane that holds
   nothing has note 60 and velocity 0 (a filler: 60 is by far the commonest note byte for that reason). In lanes 0..3
   a velocity byte is always either 0 or has bit 7 set.
 - **Length:** a step exists while lane 0 holds a note; the sequence is the run of such steps from step 1. In the file
-  the steps are always contiguous (no lane-0 note after the first step without one, in any program), so no separate
-  length is needed; there is none elsewhere either: bytes 93..96 ("seq on / record / mode / play mode") are 0 in all 500
-  programs. Every program has a sequence; lengths 2..64, median 26.
-- **Tie: lane 0's note byte with bit 7 set** (2,738 steps). Its other bits are the filler (note 60 | 0x80, velocity
-  0 | 0x80) and the other lanes are empty: the step holds the previous one on. Why a tie and not a rest: it never
-  occurs at step 1 nor after a rest (0 of 2,738, which is the OB-6's own rule: a tie extends held notes), and after
-  chords it makes runs of 8, 16 or 32 steps (a chord held for a bar or more), long rests after a chord would not be.
-  6 tie steps (in 2 programs) have all low bits set (note 0xFF, velocity 0xFF) instead of the filler: read by the same
-  bit-7 rule as ties (they too follow a note or a tie); these 2 programs are counted as ambiguous.
-- **Rest: lane 0 holds a "note" of velocity 0 and no other lane holds one** (1,234 steps). Every such step has the
-  filler note 60 (0 exceptions), and a played note never has velocity 0 (that is a note-off), so it is the rest
-  marker. A consequence: a real note of velocity 0 alone in a step cannot be told from a rest in this format; the importer
+  the steps are contiguous (no lane-0 note after the first step without one), so no separate length is needed; there is
+  none elsewhere either: bytes 93..96 ("seq on / record / mode / play mode") are 0 in every program. All 500 programs
+  carry a sequence, of very different lengths (up to the 64 steps).
+- **Tie: lane 0's note byte with bit 7 set.** Its other bits are the filler (note 60 | 0x80, velocity 0 | 0x80) and
+  the other lanes are empty: the step holds the previous one on. Why a tie and not a rest: it never occurs at step 1
+  nor after a rest (the OB-6's own rule: a tie extends held notes), and after chords it makes long even runs (a chord
+  held for a bar or more), which long rests after a chord would not be. A few steps have all low bits set (note 0xFF,
+  velocity 0xFF) instead of the filler: read by the same bit-7 rule as ties (they too follow a note or a tie); the
+  importer counts those programs as ambiguous.
+  **This decoding is inferred from the data, not documented: confirm it by ear on the device** ([SMOKE_TEST.md](SMOKE_TEST.md) §6).
+- **Rest: lane 0 holds a "note" of velocity 0 and no other lane holds one.** Every such step has the filler note 60,
+  and a played note never has velocity 0 (that is a note-off), so it is the rest marker. A consequence: a real note of velocity 0 alone in a step cannot be told from a rest in this format; the importer
   reads it as a rest.
-- **A note step:** the lanes that hold a note, from lane 0 up (the OB-6 fills them in order); 10,135 steps: 1 note
-  7,346, 2 notes 1,413, 3: 659, 4: 382, 5: 263, 6: 72.
-- **Bytes 896..1023** hold 12 different 128-byte patterns over the 500 programs, unrelated to the steps: not the
+- **A note step:** the lanes that hold a note, from lane 0 up (the OB-6 fills them in order); most steps have one
+  note, chords go up to six.
+- **Bytes 896..1023** are a block of fixed patterns that repeat across programs, unrelated to the steps: not the
   sequence, not carried.
 
 Into KNOBI-SIX's format (`synth/seq.h`; never anything `seq_unpack` refuses, checked against the firmware's own
@@ -160,15 +160,14 @@ ties keeps copying); a note outside 12..108 is dropped (as `seq_rec_step` does w
 note is a rest, a tie at step 1 or after a rest becomes a rest; a lane past an empty lane is ignored (the OB-6 does not
 leave gaps). Bytes in a lane without its bit 7, and anything past the length, are ignored.
 
-Oddities in the v1.01 file (the report counts them per program): 3 programs. 1 has lanes 4 and 5 holding bits past
-empty lanes (47 lane entries, most with notes outside 12..108 or the filler, velocity 60: ignored) and stray velocity
-bytes without bit 7; 2 have the 0xFF tie marker above (one of them also stray velocity bytes). No note outside 12..108
-is left in a kept lane, so nothing is dropped from the 497 others.
-
-Result for v1.01: 500 sequences, 14,107 steps (10,135 with notes, 1,234 rests, 2,738 ties), 61,291 B.
+A few programs of the v1.01 file have oddities (stray bits in lanes past an empty lane, stray velocity bytes without
+bit 7, the 0xFF tie marker above): they are ignored as said, and the importer's report names them per program. No note
+outside 12..108 is left in a kept lane, so nothing else is dropped. Result: all 500 programs carry a sequence, about
+61 KB of flash in all.
 
 The importer clamps (with a warning) any value outside its range; on the v1.01 file there are none. Its report
-(`build/factory_bank_report.txt`) lists every byte's range and distribution, the unmapped bytes, the warnings and the
-"OB" names, and the sequences (how many, their bytes, steps, rests, ties, lengths, the oddities per program).
+(`build/factory_bank_report.txt`, local, never committed) lists every byte's range and distribution, the unmapped bytes,
+the warnings and the "OB" names, and the sequences (how many, their bytes, steps, rests, ties, lengths, the oddities
+per program).
 `tests/ob6_import_test.py` checks the packing, the layout, every conversion and the sequence decoding on made-up dumps
 (and on the real file, structure and counts only, when `OB6_SYX` points at it).

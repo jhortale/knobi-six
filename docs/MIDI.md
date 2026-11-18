@@ -15,10 +15,10 @@ CLOCK** (Arp + Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN a
 | CC 64 | sustain: ≥ 64 = HOLD on (with the HOLD pad: either); the global SUSTAIN = N.C. reads it upside down (< 64 = on) |
 | CC 32 | bank select 0..4: the next program change's bank (kept until another CC 32; before any, the current program's bank). 5 and up: the program change is ignored |
 | CC 0 | ignored: CC 32 alone picks the bank (as the OB-6 receives it; 5 banks need no second byte) |
-| program change | 0..99: that program of the bank, loaded (notes sounding release, no click); ignored in MANUAL and while a WRITE is armed or committing (the edit buffer is what WRITE stores) |
+| program change | 0..99: that program of the bank, loaded (notes sounding release, no click) with its sequence (a playing sequence stops, its transpose goes back to none; a recording ends); ignored in MANUAL and while a WRITE is armed or committing (the edit buffer is what WRITE stores) |
 | CC 7 | volume: times PROGRAM VOLUME (the master volume, K1, after both); glides like PROGRAM VOLUME (no zipper); kept across program changes; 127 at power-on |
-| CC 120 | all sound off: PANIC (every voice silent at once, HOLD off) |
-| CC 123 | all notes off: every note released (the envelopes run their release), the notes HOLD has latched too; HOLD itself (pad or sustain) stays on, latching the notes played after it |
+| CC 120 | all sound off: PANIC (every voice silent at once, HOLD off; a playing arpeggiator or sequence stops) |
+| CC 123 | all notes off: every note released (the envelopes run their release), the notes HOLD has latched too; HOLD itself (pad or sustain) stays on, latching the notes played after it. A playing sequence has its notes released and **plays on** from its next step (only CC 120 stops it) |
 | CC 121 | reset controllers: MIDI wheel, bend, pressure and sustain to rest (not volume, as MIDI's RP-015) |
 | CC 4 | foot controller: ignored in phase 1 (the reference lists it as received but not what it does) |
 | the CCs below | with PARAM RX = CC: sets the parameter (0..127 over its range; bipolar: 64 = 0). Not sent back |
@@ -43,6 +43,24 @@ No 0xF8 for 0.25 s (more than three ticks at 30 BPM, the slowest tempo) and the 
 with the clock set to follow and none present, the arpeggiator does not run. Ticks again: it runs on (unless stopped).
 Steps fall on the ticks received (the audio takes the queue at each 5.8 ms block: within one block). THRU sends every
 clock byte received straight on. The program's BPM is kept (and TAP still sets it) but not used while following.
+
+### The sequencer and MIDI (Phase 3)
+
+There is no CC or NRPN for SEQ PLAY, SEQ REC or the sequence itself (no SysEx dump yet), and no footswitch message
+beyond CC 64, which is the sustain (HOLD): it latches the keys played live, never the sequence's notes. What MIDI does
+reach, all described above:
+- **Notes in** are recorded while a sequence is being recorded (SEQ REC), on the MIDI CH heard, with the keys: one chord
+  between them, velocity as received (0 = a note-off); under LOCAL OFF too (the keys then are not recorded, so a DAW
+  that echoes them back records each note once). They never transpose a playing sequence: only the keys do (SEQ REC
+  held, or UNISON on).
+- **Clock in** (IN, THRU): SEQ PLAY arms the sequence and it plays only while the clock runs: 0xFA from
+  step 1, 0xFB on from the step it stopped at, 0xFC pauses it (notes released, the step kept), the clock going away
+  silences it (its notes released, its step kept); a Start while it plays restarts it at step 1. IN NO S/S ignores
+  start, continue and stop: the sequence follows the ticks alone. With **OUT** SEQ PLAY starts the sequence on the next step of the division and
+  sends no 0xFA (the slaves are not restarted).
+- **Notes out**: a playing sequence's notes go out as the arpeggiator's do (Sent, below).
+- A DAW that sends CC 123 and 0xFC at its stop leaves a sequence that follows its clock armed (CC 123 only releases
+  notes); one that must be stopped from MIDI needs CC 120.
 
 ### The autosave and MIDI notes
 

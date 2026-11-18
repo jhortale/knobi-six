@@ -157,15 +157,18 @@ buffer: recording only edits it, **WRITE** stores it with the program (a program
 without WRITE loses it, as any edit).
 - **SEQ REC** arms: the Sequencer screen shows, ARP ON goes off (the arp and the sequencer are exclusive; turning ARP ON
   while recording ends the recording), and the sequence is **replaced** from step 1 (no overdub) at the first entry (a
-  step, `>`, `<`): until then the screen shows it empty, and a recording ended with no entry leaves the sequence as it
-  was (not edited: a later WRITE keeps the stored one). SEQ REC again, SEQ
+  step, `>`, `<`; **a `<` as the very first entry also wipes the old sequence**, there being nothing yet to erase):
+  until then the screen shows it empty, and a recording ended with no entry leaves the sequence as it was (not
+  edited: a later WRITE keeps the stored one; but a WRITE made *during* a fresh recording that has recorded nothing
+  stores the old sequence while the screen shows it empty). SEQ REC again, SEQ
   PLAY (which then plays it), WRITE, a program change or RESTORE FACTORY end it. Recording also ends by itself at **64
   steps** (the 64th entry makes it the last).
 - **A step**: press a key (or a MIDI note in) and let it go: one step of that note, at its velocity. **A chord**: keep
   at least one key held while adding notes; the step is recorded when every note is up, each note at its own velocity,
   up to 6 (more are not kept; a note twice is kept once). Keys and MIDI notes in make one chord together.
 - The note stored is the key's note **after the octave buttons' shift** (OCTAVE +2 and the C4 key: C6 is stored); the
-  global TRANSPOSE (a master tune) is not in it. UNISON and chord memory are not recorded: they apply at playback, as
+  global TRANSPOSE (a master tune) is not in it. The velocity stored is the one the synth gets: after the global VEL
+  CURVE (a key's velocity 0 is stored as 1; MIDI notes in are stored as received). UNISON and chord memory are not recorded: they apply at playback, as
   when playing live. Notes outside 12..108 are not recorded (a step of only such notes is no step).
 - **`>` = INC**: with nothing held, a **rest**. With notes held: they are recorded now and a **tie** follows (the step
   held on, extended); each further `>` while they stay held adds one more tie; their release then adds nothing. A new
@@ -231,7 +234,9 @@ since version 3 the generation of its sequence in the sequence store: WRITE stor
 sequence together, and a full sequence store refuses the whole WRITE, `SEQ FULL: NOTHING STORED`). One that was never stored loads as its **factory
 program** when the build has a factory bank, else as the init program. One whose stored record is broken (or of a
 version this firmware does not know) loads as the init program and says so: `Err` in the header, STORED PROGRAM
-BROKEN: INIT LOADED on Program.
+BROKEN: INIT LOADED on Program. One whose record names a sequence the store cannot read loads with an empty sequence
+and says STORED SEQUENCE MISSING: EMPTY LOADED (the name is kept: a WRITE that does not touch the sequence releases
+nothing, so it may read again after a restart). A board without the sequence store (the FM-1) writes programs only.
 
 The **factory bank** is optional and read only, like the OB-6's banks 5..9: it exists only in a build made with a
 locally generated `firmware/gen/factory_bank.h` ([FACTORY_BANK.md](FACTORY_BANK.md); the default build and CI have
@@ -249,8 +254,14 @@ would be lost) brings factory program N back into the edit buffer, to keep with 
   one in play. WRITE again cancels. While WRITE is armed or storing, a MIDI program change is ignored: the edit
   stays what WRITE stores (`tests/scripts/write_prog_change.txt`). Storing rewrites the program's 16 KB slot, whose erase stops the chip for some
   200 ms: the sound fades out (10 ms), goes silent while the flash works, and fades back in (10 ms). A deliberate
-  dropout, never a click (`tests/scripts/write_held.txt`, `tests/wav_check.py`). The status line under the pads says
-  WRITE TO b-tt?, STORED or WRITE FAILED. A power loss during a store loses nothing already stored: the 7 slots of 74
+  dropout, never a click (`tests/scripts/write_held.txt`, `tests/wav_check.py`). **With a sequence (Phase 3)** the
+  same WRITE also puts the sequence into the sequence store, in the same silent gap: a sector or two more of erases,
+  so the gap is longer: ~0.26 s in the host's model of the flash, ~0.31 s when the store has to compact first, the
+  worst case ~0.4 s (`write_held`, `write_compact`); the real flash's timing is for the device to say
+  ([SMOKE_TEST.md](SMOKE_TEST.md) §6). The status line under the pads says
+  WRITE TO b-tt?, STORED, WRITE FAILED: NOTHING CHANGED or, when the sequence store has no room for the sequence,
+  SEQ FULL: NOTHING STORED (nothing at all was written, the old program and sequence still hold; the line under it
+  says how to make room: clear sequences, or RESTORE FACTORY on programs and WRITE them). A power loss during a store loses nothing already stored: the 7 slots of 74
   programs live in 8 flash slots, a store goes to the spare one and only then replaces the old copy.
 - **MANUAL** (pad 4): the live panel. The sound is what the panel says: the four faders' Play parameters (FILTER FREQ,
   RESONANCE, MODE, ENV AMOUNT) jump to where the faders stand; the program number shows as dashes and MIDI program
