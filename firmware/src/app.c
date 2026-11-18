@@ -42,6 +42,9 @@ static void app_idle(void);
 /* ---- the sound: the synth, through the event queue (engine.c); app_audio runs in the audio ISR */
 #include "params/params.c"
 #include "params/store_prog.c"                  /* programs in the flash slots */
+#include "synth/seq.c"                          /* the step sequencer model (Phase 3) */
+#include "params/seq_store.c"                   /* the sequences in FL_DATA (Phase 3) */
+#include "params/prog_seq.c"                    /* a program and its sequence paired: load, RESTORE FACTORY, WRITE */
 #include "params/globals.c"                     /* the globals in blobs 0 and 1, in turn */
 #include "synth/osc.c"
 #include "synth/filter.c"
@@ -55,8 +58,6 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #define SYNTH_VOICE_ALIGN __attribute__((aligned(32)))   /* each voice on cache lines of its own (engine.c) */
 #endif
 #include "synth/voices.c"
-#include "synth/seq.c"                      /* the step sequencer model (Phase 3) */
-#include "params/seq_store.c"               /* the sequences in FL_DATA (Phase 3; wired to WRITE by Task 3) */
 #include "engine.c"
 #if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
 #include "cpu1_probe.c"
@@ -186,6 +187,7 @@ static void app_main(void)
     clock_out_init(&clk_out);
     controls_init();                            /* the pads are the app's (events), the faders' positions now */
     globals_load(&set);                         /* (nothing saved or broken: the defaults) */
+    prog_seq_boot();                            /* the sequence store read (before the first program load) */
     for (k = 0; k < G_COUNT; k++) ctl_glob[k] = set.v[k];
     ctl_prog_select(set.last_prog);             /* the program last loaded (nothing stored there: init) */
     saved = last = set;

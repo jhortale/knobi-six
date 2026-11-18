@@ -146,7 +146,9 @@ shows the wheels' and faders' raw readings (for checking a unit's travel). The h
 set by the flash: the base's 8 slots of 16 KB hold 74 records each at 221 B a record (the largest a program may become
 in later phases), 592 in all, so 5 whole banks of 100 (`firmware/src/params/store_prog.h`). A program is its 66 values,
 its 20-character name and its chord memory, with a CRC (since record version 2 also 20 reserved phase-2/3 values:
-distortion, effects, clock, arpeggiator; the distortion's, the clock's and the arpeggiator's are in use, the effects' stored for later). One that was never stored loads as its **factory
+distortion, effects, clock, arpeggiator; the distortion's, the clock's and the arpeggiator's are in use, the effects' stored for later;
+since version 3 the generation of its sequence in the sequence store: WRITE stores the program and the edit buffer's
+sequence together, and a full sequence store refuses the whole WRITE, `SEQ FULL: NOTHING STORED`). One that was never stored loads as its **factory
 program** when the build has a factory bank, else as the init program. One whose stored record is broken (or of a
 version this firmware does not know) loads as the init program and says so: `Err` in the header, STORED PROGRAM
 BROKEN: INIT LOADED on Program.

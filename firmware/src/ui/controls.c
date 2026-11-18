@@ -228,7 +228,8 @@ static uint8_t ctl_notice;
 static int32_t ctl_restore_ask = -1;                   /* the program a first GLOBE + BT asked to restore, -1 none */
 static uint32_t ctl_restore_t;
 #define CTL_RESTORE_MS 2000u
-static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, 0 none yet */
+static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, -2 SEQ FULL (nothing
+                                                        * stored: the sequence store is full), 0 none yet */
 static uint32_t ctl_wr_t, ctl_writes;
 #define CTL_FADE_WAIT_MS 100u                          /* the fade-out not confirmed (no audio running): save anyway */
 static uint16_t ctl_last_id = B_NONE;                  /* the last edit (screen) */
@@ -286,10 +287,14 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
     if (ctl_wr != 0) { ctl_prog_want = n; return; }   /* (not under a WRITE, armed or committing: it stores the edit as
                                                        * it is; MIDI program change is ignored then, midi_map.c) */
+    int rc;
     ctl_prog = n, ctl_manual = 0, ctl_want_factory = 0, ctl_restore_ask = -1;
-    ctl_notice = prog_load((uint32_t)n, &p) == -2 ? NT_BROKEN : NT_NONE;   /* (never written: the factory program,
-                                                        * else init; broken: init, and the notice says so) */
+    rc = prog_load((uint32_t)n, &p);
+    ctl_notice = rc == -2 ? NT_BROKEN : NT_NONE;       /* (never written: the factory program, else init; broken: init,
+                                                        * and the notice says so) */
     ctl_prog_want = eng_program(&p) ? n : -1;
+    if (ctl_prog_want < 0) (void)prog_seq_open((uint16_t)n, rc, &p);   /* its sequence into the edit buffer (the
+                                                        * stored one, else the factory one; params/prog_seq.h) */
     if (ctl_notice) ctl_last_id = B_NOTICE, ctl_last_v = ctl_notice, ctl_edits++;
 }
 /* restore factory (hold GLOBE, press WRITE / BT): factory program n into the edit buffer (no factory bank: the init
@@ -301,6 +306,7 @@ static void ctl_restore_factory(int32_t n)
     ctl_prog = n, ctl_manual = 0;
     prog_factory((uint32_t)n, &p);
     if (eng_program(&p)) { ctl_prog_want = n, ctl_want_factory = 1; return; }   /* busy: again next pass */
+    prog_seq_factory((uint16_t)n);                     /* the factory sequence too */
     ctl_prog_want = -1, ctl_want_factory = 0;
     ctl_restores++;
     ctl_notice = NT_RESTORED, ctl_last_id = B_NOTICE, ctl_last_v = NT_RESTORED, ctl_edits++;
@@ -350,7 +356,12 @@ static void ctl_write_poll(const program_t *edit)      /* faded out (or waited l
 #else
     if (ctl_wr != 2 || (!eng_faded() && fm1_ms - ctl_wr_t < CTL_FADE_WAIT_MS)) return;
 #endif
-    ctl_wr_rc = prog_save((uint32_t)ctl_wr_dest, edit) ? -1 : 1;   /* (blocks: the slot's erase; the sound is silent) */
+    {                                                  /* the program and the edit buffer's sequence, paired (blocks:
+                                                        * the sequence store's put, worst ~3 erases, the slot's 4 and
+                                                        * the release; the sound is silent; params/prog_seq.h) */
+        int rc = prog_write((uint16_t)ctl_wr_dest, edit);
+        ctl_wr_rc = (int8_t)(rc == 0 ? 1 : rc == PROG_ERR_SEQ_FULL ? -2 : -1);
+    }
     store_sliced = 0;
     eng_fade(0);
     if (ctl_wr_rc > 0) ctl_prog = ctl_wr_dest, ctl_manual = 0, ctl_writes++;

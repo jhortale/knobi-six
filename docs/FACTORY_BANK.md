@@ -53,8 +53,32 @@ report (`build/factory_bank_report.txt`) lists them for whoever runs it on their
 
 The bank's records are `program_pack` records (`params.c`), version 2: version, name[20], 86 values as little-endian
 int16 (the 66 phase-1 parameters, then the 20 reserved phase-2/3 ids of `params.h`: P_DISTORTION .. P_ARP_HOLD),
-chord[6], CRC-16/CCITT-FALSE. Record version 2 is also what WRITE now stores (version-1 records still load: the
-reserved values take their defaults). A firmware older than this one reads version-2 records as empty (init).
+chord[6], CRC-16/CCITT-FALSE. Version-1 records still load (the reserved values take their defaults). Since Phase 3,
+WRITE stores **version 3**: the same plus one more value, P_SEQ_GEN, the generation of the program's sequence in the
+sequence store (0 = none: the factory sequence). A version-2 record (the bank's, or a Phase 2 WRITE) loads with
+generation 0. A firmware older than one record version reads the newer records as broken (init).
+
+## Sequences (Phase 3)
+
+The factory sequences stay in the factory bank, read only, like the programs (`firmware/src/params/prog_seq.h`). The
+header may define, beside `factory_bank[][]`:
+
+```c
+#define FACTORY_SEQ_COUNT N                             /* programs 0..N-1 have an entry (need not be FACTORY_COUNT) */
+static const uint32_t factory_seq_at[N + 1];            /* program p: factory_seq_data[at[p] .. at[p + 1]) */
+static const uint8_t factory_seq_data[];                /* the sequences, back to back */
+```
+
+Each sequence is `seq_pack`'s format exactly (`synth/seq.h`: length, then per step a header byte count | tie << 3 and
+the (note, velocity) pairs; an empty sequence is the one byte `00`). An empty span means "no factory sequence"; a span
+that does not unpack to exactly its own length reads as none. Without `FACTORY_SEQ_COUNT` (no bank, or a bank of
+programs only, as every bank before Phase 3's importer) every factory sequence is empty. `factory_seq(prog, seq_t *)`
+reads them. The importer (Task 6) emits these symbols; `tests/unit/factory_test_seq.h` is a hand-written example.
+
+How a program's sequence is chosen: its record names a generation -> that stored entry (an empty one too); it names
+none (a version-1/2 record, a never-written program, or a program written with its factory sequence unedited) -> the
+factory sequence; a broken record -> empty. RESTORE FACTORY puts the factory sequence into the edit buffer with the
+factory program; WRITE after it names no entry and frees the program's stored ones.
 
 ## The OB-6 dump and the conversion (tools/ob6_import.py)
 

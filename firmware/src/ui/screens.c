@@ -395,7 +395,7 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_PROG: return scr_prog_shown();
     case W_WSTAT:
         return (int32_t)((uint32_t)ctl_wr | (uint32_t)ctl_wr_dest << 2 | (uint32_t)ctl_manual << 12 |
-                         (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
+                         (uint32_t)(ctl_wr_rc + 2) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
@@ -622,7 +622,8 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         } else if (ctl_manual) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "MANUAL: THE SOUND IS THE PANEL", PC_WHITE);
         } else if (ctl_wr_rc) {
-            pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : "WRITE FAILED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+            pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : ctl_wr_rc == -2 ? "SEQ FULL: NOTHING STORED" :
+                      "WRITE FAILED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
         } else pg_text_c(cx, w->y + 1, &FONT_XS, "WRITE (OR BT) TO STORE THE SOUND", PC_DIM);
         break;
     }

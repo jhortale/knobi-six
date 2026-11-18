@@ -172,11 +172,14 @@ uint16_t program_crc16(const uint8_t *d, uint32_t n)
  * ONE entry here (e.g. { P_COUNT_PHASE2 }) and bumps PROGRAM_VERSION; older records then load with the defaults for the
  * ids they lack. Tests may predefine PROGRAM_VERSION_TABLE. */
 #ifndef PROGRAM_VERSION_TABLE
-#define PROGRAM_VERSION_TABLE { P_COUNT_PHASE1, P_COUNT_RESERVED }
+#define PROGRAM_VERSION_TABLE { P_COUNT_PHASE1, P_COUNT_RESERVED, P_COUNT_STORED }
 #endif
 static const uint16_t program_nparams[PROGRAM_VERSION] = PROGRAM_VERSION_TABLE;
 #define PROGRAM_NCOUNT P_COUNT_RESERVED /* ids with a range in this build (PARAMS, PARAMS_RESERVED): all clamped on load */
 _Static_assert(P_COUNT_RESERVED <= PROGRAM_VALUES, "the reserved ids fit program_t");
+_Static_assert(P_COUNT_STORED <= PROGRAM_VALUES, "the stored values fit program_t");
+_Static_assert(1 + PROGRAM_NAME_LEN + 2 * P_COUNT_STORED + 6 + 2 <= PROGRAM_PACKED_MAX,
+               "a version-3 record fits the stride (store_prog.h PROG_STRIDE = PROGRAM_PACKED_MAX)");
 
 uint32_t program_packed_size(unsigned version)
 {
