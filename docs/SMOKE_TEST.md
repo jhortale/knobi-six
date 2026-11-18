@@ -150,7 +150,7 @@ Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer scr
 64-step six-note sequences, the largest there are; a sequence of 16 single-note steps takes 64 B, so every one of the
 500 programs could have one), which normal use does not reach; it is tested on
 the host only (the host test fills the store with 76 full-size sequences, then checks that the next WRITE is refused
-whole, with nothing changed).
+whole, with nothing changed). It can appear while the meter still shows a little room (a full-size sequence needs one sector with about 850 B free; short ones still fit).
 
 ### What only the device can confirm
 

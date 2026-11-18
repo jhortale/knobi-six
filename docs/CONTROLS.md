@@ -260,7 +260,7 @@ would be lost) brings factory program N back into the edit buffer, to keep with 
   ([SMOKE_TEST.md](SMOKE_TEST.md) §6). The status line under the pads says
   WRITE TO b-tt?, STORED, WRITE FAILED: NOTHING CHANGED or, when the sequence store has no room for the sequence,
   SEQ FULL: NOTHING STORED (nothing at all was written, the old program and sequence still hold; the line under it
-  says how to make room: clear sequences, or RESTORE FACTORY on programs and WRITE them). A power loss during a store loses nothing already stored: the 7 slots of 74
+  says how to make room: clear sequences, or RESTORE FACTORY on programs and WRITE them). It can come a little before the Sequencer screen's store meter reads full: a full-size sequence needs one flash sector with about 850 B free, and once every sector holds close to 80 % live data none has; a short sequence still fits then). A power loss during a store loses nothing already stored: the 7 slots of 74
   programs live in 8 flash slots, a store goes to the spare one and only then replaces the old copy.
 - **MANUAL** (pad 4): the live panel. The sound is what the panel says: the four faders' Play parameters (FILTER FREQ,
   RESONANCE, MODE, ENV AMOUNT) jump to where the faders stand; the program number shows as dashes and MIDI program
