@@ -103,7 +103,7 @@ a firmware built with it (`firmware/gen/factory_bank.h` is in `.gitignore`).
    the header is there.
 
 Program names are kept as they are, including the ones that contain "OB". The programs' sequences are now included
-too (each program's factory sequence, about 61 KB more; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)); effects settings are kept for a later phase but do nothing yet
+too (each program's factory sequence, about 60 KB more; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)); effects settings are kept for a later phase but do nothing yet
 (the arpeggiator, clock and distortion settings are used since Phase 2). Delete `firmware/gen/factory_bank.h` to build without the bank again.
 
 ## Credits

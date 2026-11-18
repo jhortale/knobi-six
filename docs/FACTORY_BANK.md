@@ -47,7 +47,7 @@ report (`build/factory_bank_report.txt`) lists them for whoever runs it on their
   `tests/unit/factory_test_bank.h`, three made-up programs). `FACTORY=1 tests/run_host.sh SCRIPT` runs the host app
   with the local bank.
 - Size: 500 records x 201 B = 100,500 B of flash (record version 2, `program_pack`'s format), plus the sequences
-  (about 61 KB for v1.01); no compression needed: the image stays below its 619,520 B limit (CI measures it with a
+  (about 60 KB for v1.01); no compression needed: the image stays below its 619,520 B limit (CI measures it with a
   500-program synthetic bank with sequences of the same size).
 
 ## The record
@@ -78,7 +78,7 @@ reads them. `tools/ob6_import.py` emits these symbols (when at least one program
 stays a bank of programs only), `FACTORY_SEQ_COUNT` = the last program + 1, an empty sequence or a missing program as
 an empty span; `tests/unit/factory_test_seq.h` is a hand-written example, `tests/unit/factory_test_import.h` the
 importer's own output for made-up dumps (`tests/unit/test_factory_import.c` loads every span with `seq_unpack`). With
-the v1.01 file every program carries one: about 61 KB of flash beside the 100.5 KB of programs.
+the v1.01 file every program carries one: about 60 KB of flash beside the 100.5 KB of programs.
 
 How a program's sequence is chosen: its record names a generation -> that stored entry (an empty one too); it names
 none (a version-1/2 record, a never-written program, or a program written with its factory sequence unedited) -> the
@@ -163,7 +163,7 @@ leave gaps). Bytes in a lane without its bit 7, and anything past the length, ar
 A few programs of the v1.01 file have oddities (stray bits in lanes past an empty lane, stray velocity bytes without
 bit 7, the 0xFF tie marker above): they are ignored as said, and the importer's report names them per program. No note
 outside 12..108 is left in a kept lane, so nothing else is dropped. Result: all 500 programs carry a sequence, about
-61 KB of flash in all.
+60 KB of flash in all.
 
 The importer clamps (with a warning) any value outside its range; on the v1.01 file there are none. Its report
 (`build/factory_bank_report.txt`, local, never committed) lists every byte's range and distribution, the unmapped bytes,
