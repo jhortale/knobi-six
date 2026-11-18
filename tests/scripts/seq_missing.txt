@@ -30,13 +30,14 @@
 1310 pad 3 0
 1700 expect 2 writes
 1700 expect 1 seqgen 0
-# an edit (a 3-step sequence), WRITE: stored as a new entry (the store's generations started again: 1)
+# an edit (a 3-step sequence), WRITE: stored as a new entry, its generation newer than the one the record names (2,
+# though the store's own count started again at 1: a missing generation is never handed out again)
 1800 expect 0 seqtest 3
 1850 btn 11
 1900 pad 3 100
 1910 pad 3 0
 2300 expect 3 writes
-2300 expect 1 seqgen 0
+2300 expect 2 seqgen 0
 2300 enc 3 1
 2400 enc 3 -1
 2500 expect 0 notice

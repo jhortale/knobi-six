@@ -58,10 +58,11 @@ static int slot_load(uint32_t i, void *p, uint32_t n)
     memcpy(p, a + 12, n);
     return f_crc32(p, n) == f_get32(a + 8) ? 0 : -1;
 }
+static int f_slot_refuse;                       /* the program slots' saves are refused (nothing written) */
 static int slot_save(uint32_t i, const void *p, uint32_t n)
 {
     uint8_t *a = f_slot[i];
-    if (i >= NSLOT || n > SLOT_MAX || f_dead) return -1;
+    if (i >= NSLOT || n > SLOT_MAX || f_dead || f_slot_refuse) return -1;
     f_ops++;                                    /* 1: erase, the bytes */
     memset(a, 0xFF, SLOT_MAX + 12u);
     if (f_cut_now() && !f_cut_full) { memcpy(a + 12, p, frnd() % (n + 1u)); f_dead = 1; return -1; }
@@ -578,6 +579,72 @@ static void seq_missing_kept(void)
     CHECK(ok);
 }
 
+/* a generation the record names but the store lost (after seqst_format; a record naming an entry the store never had,
+ * as flash damage would leave it) is never handed out again: an edited WRITE gets a newer one, and a failed record
+ * save or a cut anywhere in that WRITE reloads the old program with its (missing: empty, -3) sequence, never the new
+ * entry under the old name */
+static void missing_gen_never_reused(void)
+{
+    int ok = 1, bad = 0;
+    uint32_t ops0, nops, olds = 0, news = 0;
+    uint8_t rec[PROGRAM_PACKED_MAX];
+    uint32_t size;
+    static program_t p, q, oldp;
+    static seq_t b;
+    /* after a format */
+    fresh(); power_cycle();
+    (void)prog_open(8, &p);
+    rand_seq(edit_seq_mut());
+    ok &= prog_write(8, &p) == 0 && gen_of(8) == 1u;
+    ok &= seqst_format() == 0;
+    power_cycle();
+    ok &= prog_open(8, &p) == 0 && prog_seq_open(8, 0, &p) == -3;
+    rand_seq(edit_seq_mut());
+    b = *edit_seq();
+    ok &= prog_write(8, &p) == 0 && gen_of(8) == 2u;
+    power_cycle();
+    ok &= prog_open(8, &q) == 0 && seq_eq(edit_seq(), &b);
+    /* a lost entry (the record names gen 1, the store has nothing of program 9): the record save fails */
+    fresh(); power_cycle();
+    program_init(&oldp), memcpy(oldp.name, "OLD", 3), program_set_seq_gen(&oldp, 1);
+    size = (uint32_t)program_pack(&oldp, rec, sizeof rec), inject(9, rec, size);
+    ok &= prog_open(9, &p) == 0 && prog_seq_open(9, 0, &p) == -3;
+    memcpy(p.name, "NEW", 3);
+    rand_seq(edit_seq_mut());
+    b = *edit_seq();
+    f_slot_refuse = 1;
+    ok &= prog_write(9, &p) == PROG_ERR_FLASH;
+    f_slot_refuse = 0;
+    power_cycle();
+    ok &= prog_open(9, &q) == 0 && prog_eq(&q, &oldp) && gen_of(9) == 1u && prog_seq_open(9, 0, &q) == -3 &&
+          edit_seq()->len == 0;
+    /* ... and a cut at every operation of that WRITE: old program + missing, or new + new */
+    fresh(); power_cycle();
+    inject(9, rec, size);
+    snap();
+    ops0 = f_ops;
+    (void)prog_open(9, &p), memcpy(p.name, "NEW", 3), *edit_seq_mut() = b;
+    ok &= prog_write(9, &p) == 0 && gen_of(9) == 2u;
+    nops = f_ops - ops0;
+    for (uint32_t c = 1; c <= nops; c++)
+        for (int full = 0; full < 2; full++) {
+            unsnap(); power_cycle();
+            (void)prog_open(9, &p), memcpy(p.name, "NEW", 3), *edit_seq_mut() = b;
+            f_cut_at = (int32_t)(f_ops + c), f_cut_full = full;
+            (void)prog_write(9, &p);
+            power_cycle();
+            (void)prog_open(9, &q);
+            if (prog_eq(&q, &oldp) && prog_seq_open(9, 0, &q) == -3 && edit_seq()->len == 0) olds++;
+            else if (prog_eq(&q, &p) && seq_eq(edit_seq(), &b)) news++;
+            else bad++;
+        }
+    ok &= !bad && olds && news;
+    printf("missing_gen_never_reused: after a format the next gen is 2; a lost gen 1 with the record save failing -> the "
+           "old program, missing; %u cuts: old+missing %u, new+new %u, mixed %d: %d\n", (unsigned)(2u * nops),
+           (unsigned)olds, (unsigned)news, bad, ok);
+    CHECK(ok);
+}
+
 /* the flash refuses the sequence's put: WRITE FAILED (not SEQ FULL), nothing changed */
 static void write_flash_error(void)
 {
@@ -675,6 +742,7 @@ int main(void)
     edit_lost_without_write();
     seq_missing_kept();
     write_flash_error();
+    missing_gen_never_reused();
     edit_bypass_caught();
     write_pairs();
     write_full_refuses_whole();

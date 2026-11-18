@@ -29,6 +29,9 @@
  *   2. the program record, with that generation in P_SEQ_GEN (prog_save: the slot store's own power-safe save).
  *   3. seqst_release(n, generation): the older entries become reclaimable; with generation 0, seqst_drop(n): all of
  *      them (RESTORE FACTORY then WRITE frees its room). Not when the record keeps naming a missing entry.
+ *   A new entry's generation is always newer than the one n's current record names (seqst_put_above): if the store
+ *   lost that one (a format, damage) it would otherwise hand the same number out again, and a cut (or a failed record
+ *   save) between 1 and 2 would leave the old record naming the new entry.
  *   A power cut in 1 leaves the old record naming the old entry (the new one, if complete, is an orphan the next WRITE
  *   of n releases); in 2 the slot store gives the old record or the new one; in 3 the new pair holds and the old entries
  *   only cost room until the next WRITE of n. So a reload always gives old program + old sequence or new + new.

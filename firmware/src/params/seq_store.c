@@ -358,7 +358,9 @@ static int seqst_append(uint32_t n, uint32_t *at_out)
     return 0;
 }
 
-int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out)
+int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out) { return seqst_put_above(prog, s, 0, gen_out); }
+
+int seqst_put_above(uint16_t prog, const seq_t *s, uint16_t floor, uint16_t *gen_out)
 {
     uint32_t len, size, at = 0, c, tries;
     uint16_t g;
@@ -368,6 +370,11 @@ int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out)
     if (seqst_used() + size > seqst_total() - (s->len ? SEQST_RESERVE : 0u)) return -1;   /* (the reserve: empties) */
     g = (uint16_t)(seqst_top[prog] + 1u);
     if (!g) g = 1u;
+    if (floor && !seqst_newer(g, floor)) {      /* a generation a record still names, which the store no longer
+                                                 * knows (formatted, damaged): never handed out again for prog */
+        g = (uint16_t)(floor + 1u);
+        if (!g) g = 1u;
+    }
     for (tries = 0; tries < 2u && r == 1; tries++) {   /* (a record that did not read back: once more, elsewhere,
                                                  * the same bytes: should the weak one ever read whole it says the same) */
         if ((r = seqst_room(size)) != 0) break;
@@ -473,6 +480,7 @@ int seqst_format(void)
 int seqst_init(void) { return 0; }
 int seqst_get(uint16_t prog, uint16_t gen, seq_t *out) { (void)prog, (void)gen, (void)out; return 0; }
 int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out) { (void)prog, (void)s, (void)gen_out; return -1; }
+int seqst_put_above(uint16_t prog, const seq_t *s, uint16_t floor, uint16_t *gen_out) { (void)floor; return seqst_put(prog, s, gen_out); }
 void seqst_release(uint16_t prog, uint16_t keep_gen) { (void)prog, (void)keep_gen; }
 void seqst_drop(uint16_t prog) { (void)prog; }
 int seqst_format(void) { return 0; }

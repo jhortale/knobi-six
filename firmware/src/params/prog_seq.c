@@ -106,9 +106,14 @@ int prog_write(uint16_t n, const program_t *p)
     if (!seqst_total()) g = 0;                  /* (no sequence store on this board: the program only) */
     else if (own && es_gen) g = es_gen, miss = es_miss;   /* the entry it already is (or names: missing, kept) */
     else if (own && es_fb) g = 0;               /* the factory sequence, unedited: no entry */
-    else if ((r = seqst_put(n, &es_seq, &g)) != 0)   /* nothing written: full (refused before any flash operation), or a
-                                                 * flash error that leaves the store as it was */
-        return r == -1 ? PROG_ERR_SEQ_FULL : PROG_ERR_FLASH;
+    else {                                      /* a new entry, its generation newer than the one n's record names
+                                                 * now (the store may have lost that one): until the record is
+                                                 * written, that name must never resolve to this entry */
+        uint16_t floor = prog_load(n, &prog_wr) == 0 ? program_seq_gen(&prog_wr) : 0;
+        if ((r = seqst_put_above(n, &es_seq, floor, &g)) != 0)   /* nothing written: full (refused before any flash
+                                                 * operation), or a flash error that leaves the store as it was */
+            return r == -1 ? PROG_ERR_SEQ_FULL : PROG_ERR_FLASH;
+    }
     prog_wr = *p;
     program_set_seq_gen(&prog_wr, g);
     if (prog_save(n, &prog_wr)) return PROG_ERR_FLASH;   /* the old record still holds (and names the old entry) */

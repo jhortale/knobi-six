@@ -635,6 +635,22 @@ static void store_put_flash_error(void)
     printf("store_put_flash_error: a refused put -> -2 (full stays -1)\n");
 }
 
+/* a floor: the generation is newer than it (a record naming a lost one), and stays so after a reboot */
+static void store_put_floor(void)
+{
+    static seq_t a;
+    uint16_t g = 0;
+    f_blank();
+    power_on();
+    seq_of_len(&a, 3, 1);
+    CHECK(seqst_put_above(11, &a, 5, &g) == 0 && g == 6u && got_is(11, 6, &a));
+    CHECK(seqst_put_above(11, &a, 2, &g) == 0 && g == 7u);          /* (a floor below the newest: ignored) */
+    power_on();
+    CHECK(seqst_put(11, &a, &g) == 0 && g == 8u);
+    CHECK(seqst_put_above(12, &a, 65535u, &g) == 0 && g == 1u);     /* (serially: past 65535 is 1, 0 skipped) */
+    printf("store_put_floor: floor 5 -> 6, below the newest ignored, kept after a reboot, 65535 -> 1\n");
+}
+
 /* drop: every generation of a program reclaimable (RESTORE FACTORY written: the record names none) */
 static void store_drop(void)
 {
@@ -810,6 +826,7 @@ int main(void)
     store_format();
     store_format_verifies();
     store_put_flash_error();
+    store_put_floor();
     store_drop();
     store_cut_gen_burned();
     store_readback();

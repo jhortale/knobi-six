@@ -80,6 +80,12 @@ int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out);   /* 0 written,
                                                           * (or not ready / a bad argument): nothing written, no flash
                                                           * touched; -2 the flash failed (refused, or a record that
                                                           * twice did not read back): nothing that counts written */
+int seqst_put_above(uint16_t prog, const seq_t *s, uint16_t floor, uint16_t *gen_out);   /* the same, the generation
+                                                          * also newer than floor (serially; 0 none): the generation
+                                                          * prog's record names, which the store may have lost (a
+                                                          * format, flash damage) and so would otherwise hand out again.
+                                                          * The entry written carries it, so the store's newest for prog
+                                                          * is past floor from then on (after a reboot too) */
 void seqst_release(uint16_t prog, uint16_t keep_gen);    /* entries of prog older than keep_gen reclaimable; call it
                                                           * after the program record naming keep_gen is committed */
 void seqst_drop(uint16_t prog);                          /* every generation of prog reclaimable (its record names
