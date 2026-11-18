@@ -103,8 +103,9 @@ int seqrec_dec(seqrec_t *r)
     seq_t *s;
     int rc;
     if (!r->on) return 0;
-    s = seqrec_seq(r);                           /* (fresh: the first op replaces the sequence; DEC then finds it
-                                                  * empty: refused, but the old sequence is gone, as recording began) */
+    if (r->fresh) return 0;                      /* nothing recorded yet: nothing to erase, and the old sequence stays
+                                                  * (the first step, rest or tie replaces it, not a DEC) */
+    s = seqrec_seq(r);
     rc = seq_rec_back(s);
     if (r->in && s->len < r->at) r->in = 0, r->n = r->kept;   /* the tied-in chord's own step erased: it is being
                                                   * entered again (still held: its release, or INC, records it anew) */

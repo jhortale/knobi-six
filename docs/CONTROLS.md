@@ -157,10 +157,9 @@ buffer: recording only edits it, **WRITE** stores it with the program (a program
 without WRITE loses it, as any edit).
 - **SEQ REC** arms: the Sequencer screen shows, ARP ON goes off (the arp and the sequencer are exclusive; turning ARP ON
   while recording ends the recording), and the sequence is **replaced** from step 1 (no overdub) at the first entry (a
-  step, `>`, `<`; **a `<` as the very first entry also wipes the old sequence**, there being nothing yet to erase):
+  step, `>`; **a `<` as the very first entry does nothing**: there is nothing yet to erase, and the old sequence stays):
   until then the screen shows it empty, and a recording ended with no entry leaves the sequence as it was (not
-  edited: a later WRITE keeps the stored one; but a WRITE made *during* a fresh recording that has recorded nothing
-  stores the old sequence while the screen shows it empty). SEQ REC again, SEQ
+  edited: a later WRITE keeps the stored one). SEQ REC again, SEQ
   PLAY (which then plays it), WRITE, a program change or RESTORE FACTORY end it. Recording also ends by itself at **64
   steps** (the 64th entry makes it the last).
 - **A step**: press a key (or a MIDI note in) and let it go: one step of that note, at its velocity. **A chord**: keep

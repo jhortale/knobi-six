@@ -49,7 +49,11 @@ static void rec_lazy_clear(void)
     CHECK(seqrec_inc(&r) == 1 && s.len == 1 && s.step[0].count == 0);   /* INC first: a rest, from step 1 */
     seqrec_abort(&r);
     seqrec_start(&r, mut);
-    CHECK(seqrec_dec(&r) == -1 && s.len == 0);             /* DEC first: replaced (empty), nothing to erase */
+    {
+        int m0 = muts;
+        CHECK(seqrec_dec(&r) == 0 && s.len == 1 && seqrec_fresh(&r) && muts == m0);   /* DEC first: nothing happens,
+                                                            * the old sequence stays (not edited) */
+    }
     seqrec_abort(&r);
     seq_rec_step(&s, n, v, 1);
     seqrec_start(&r, mut);

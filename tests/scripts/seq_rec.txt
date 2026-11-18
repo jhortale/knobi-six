@@ -224,12 +224,18 @@
 5900 btn 16
 5950 expect 0 seqplaying
 # fix round 1, minor 4: UNISON on with an empty sequence playing: the keys play, nothing transposes. (SEQ REC, then
-# DEC on the Sequencer screen: the first entry replaces the sequence: empty)
+# DEC on the Sequencer screen first: nothing happens, the old sequence stays; a step, then DEC: back to empty, recorded)
 6000 btn 17
 6020 expect 1 recfresh
 6050 btn 2
-6100 expect 0 seqlen
-6100 expect 0 recfresh
+6070 expect 1 seqlen
+6070 expect 1 recfresh
+6080 keys 0x80
+6090 keys 0
+6095 expect 1 seqlen
+6095 expect 0 recfresh
+6100 btn 2
+6110 expect 0 seqlen
 6120 btn 17
 6150 expect 0 recon
 6200 btn 12
