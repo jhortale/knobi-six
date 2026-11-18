@@ -430,6 +430,7 @@ __attribute__((unused)) static void eng_rest(void)
 {
     (void)eng_bend, (void)eng_wheel, (void)eng_pressure, (void)eng_volume, (void)eng_tune, (void)eng_fade, (void)eng_faded;
     (void)eng_chord, (void)eng_flush;
+    (void)eng_seq_play, (void)eng_seq_playing, (void)eng_seq_transpose, (void)eng_seq_load;
 }
 
 int main(void)

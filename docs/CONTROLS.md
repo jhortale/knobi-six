@@ -111,6 +111,29 @@ keys: UNISON stacks each one, portamento glides between them, chord memory plays
 - MIDI out: with PARAM TX = CC the arp's notes go out (and the keys' own notes do not). LOCAL OFF: the keys go out as
   played and do not reach the arp ([MIDI.md](MIDI.md)).
 
+**Sequencer playback** (Phase 3 Task 4; OB-6 reference 5; the player: `firmware/src/synth/seq.h` "The player"). The
+buttons (SEQ PLAY, SEQ REC, SEQ) and the recording come with Task 5; the engine's behaviour is here already:
+- **SEQ PLAY** plays the edit buffer's sequence (the program's, as loaded or recorded) from step 1, one step per clock
+  step (BPM and DIVISION), looping its recorded length. Each step's notes play for half the step at their stored
+  velocities; a rest plays nothing; a tie keeps the notes before it on (no retrigger) to half of the last tied step.
+  SEQ PLAY again stops it (its notes released) and the next start is from step 1.
+- **Start**: as the arp's. ARP BEAT SYNC OFF, at once (the clock restarts); ON, on the clock's next step; under MIDI
+  CLOCK OUT always on the next step (no restart, no 0xFA to the slaves). Following a MIDI clock (IN, THRU), SEQ PLAY
+  arms it: it plays only while that clock runs: 0xFA from step 1, 0xFB on from the step it stopped at, 0xFC pauses
+  (notes released, the step kept); no clock, silent. IN NO S/S: the ticks alone.
+- **Transpose**: while it plays, hold SEQ REC and press a key: the sequence plays that many semitones from middle C
+  (C4, 60 = none) from its next note; with UNISON on, a key alone transposes. (Task 5 routes the keys.) A transposed
+  note outside MIDI 0..127 is dropped. Not stored; a program change puts it back to none.
+- **Arp and sequencer are exclusive**: SEQ PLAY turns ARP ON off; ARP ON stops the sequence (its notes released).
+- A program change (and RESTORE FACTORY) stops it and loads that program's sequence; PANIC (CC 120) stops it; ALL NOTES
+  OFF (CC 123) releases its notes and it plays on. Keys played live compete with it for the six voices.
+- MIDI out: its notes go out as the arp's do (PARAM TX = CC and LOCAL ON; every note-on gets its note-off, on its
+  channel; [MIDI.md](MIDI.md)).
+- **Footswitch start / stop: not available on the SMK-37.** The OB-6's footswitch-sequence jack has no counterpart: the
+  platform has no footswitch input distinct from the sustain message (MIDI CC 64; the SMK-37 has no pedal jack: the
+  input board's mux C "pedal" channel, `hal/smk_input.h` `fm1_in.pedal`, is a raw ADC value with nothing documented
+  behind it). External start / stop is MIDI's (0xFA / 0xFB / 0xFC above).
+
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to
 16 cycles a beat (254). With no tempo known (a MIDI clock followed but not there yet) it runs free.
@@ -213,7 +236,7 @@ four lines of its own above these, `C1 PING n  ERR n  MISREAD n`, `FPU OK  DUAL=
 and `PROBE 8%  C1 IDLE  DUAL OFF` (the probe's own time, the second core's state and the DUAL CORE global, which moves there from the wheels'
 line), and drops the version line: [SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe".
 
-The OB-6 globals not here: the clock port (USB only), the sequencer jack, alternative tunings, the SysEx and MIDI-out
+The OB-6 globals not here: the clock port (USB only), the sequencer jack (no footswitch input on the SMK-37), alternative tunings, the SysEx and MIDI-out
 ports and program dumps (later, with SysEx). MIDI CLOCK and ARP BEAT SYNC are on the Arp + Clock screen (pads 3 and 4); they
 are globals all the same. The record grew with them (version 2): a version-1 record (Phase 1's) still loads, the two at
 OFF; a firmware from before them reads the new record as none (its defaults).

@@ -63,6 +63,9 @@ const seq_t *edit_seq(void);                     /* the edit buffer's sequence, 
                                                   * edit_seq_mut (a change through a cast of this pointer is caught at
                                                   * WRITE by a hash and stored as an edit, but do not rely on it) */
 seq_t *edit_seq_mut(void);                       /* the same, to change: marks it edited (a WRITE then stores it) */
+uint32_t edit_seq_ver(void);                     /* changes whenever the edit buffer's sequence may have: edit_seq_mut,
+                                                  * a load, RESTORE FACTORY, WRITE (app.c hands it to the player then:
+                                                  * engine.c eng_seq_load) */
 int prog_seq_open(uint16_t n, int load_rc, const program_t *p);   /* program n was loaded (prog_load gave load_rc and
                                                   * *p): its sequence into the edit buffer. 0 from the store; 1 the factory
                                                   * sequence (maybe empty); -2 empty: a broken record; -3 empty: the

@@ -31,9 +31,9 @@ IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
 | Byte | IN / THRU | IN NO S/S |
 | --- | --- | --- |
 | 0xF8 clock (24 a quarter note) | moves the clock one tick; the tempo is measured over the last beat (24 ticks), so it locks within a beat or two | the same; the first tick after a silence starts from the downbeat |
-| 0xFA start | the next 0xF8 is the downbeat: step 0 there | ignored |
-| 0xFB continue | runs on from where it stopped | ignored |
-| 0xFC stop | stopped: no steps (the arpeggiator waits) | ignored |
+| 0xFA start | the next 0xF8 is the downbeat: step 0 there (a sequence playing or armed: from its step 1) | ignored |
+| 0xFB continue | runs on from where it stopped (a sequence: on from the step it stopped at) | ignored |
+| 0xFC stop | stopped: no steps (the arpeggiator waits; the sequencer pauses, its step kept) | ignored |
 
 Under IN and THRU the clock **waits for a start**: ticks alone give the tempo but no steps until a 0xFA (the next 0xF8
 is the downbeat) or a 0xFB arrives, so the arpeggiator stays silent until the sender's transport starts (the screen
@@ -70,6 +70,11 @@ reach the synth or its arp: they go out as played, as ever (a DAW controller), w
 then plays what MIDI in feeds it, here only: its notes are not sent under LOCAL OFF, so a DAW that echoes our notes
 back (its MIDI thru, as a DAW controller needs) never feeds the arp its own notes (with a latch on, a loop that would
 sustain itself).
+Sequencer (Phase 3): the notes a playing sequence plays go out under the arp's rules, through the same path: with
+PARAM TX = CC and LOCAL ON, note on with the step's velocity, note off at the end of its gate (a tie sends nothing: the
+note stays on), each note-off on its note-on's channel and sent whatever PARAM TX, LOCAL or MIDI CH became meanwhile;
+stopping it, a program change, ARP ON, PANIC, ALL NOTES OFF, a MIDI stop or the clock going away send the offs of what
+is on. The keys played with it go out as played (they are not the sequence's).
 Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
 note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
 on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off

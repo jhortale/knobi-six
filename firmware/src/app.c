@@ -181,6 +181,7 @@ static void app_main(void)
     uint8_t key_out[FM1_NKEY] = {0};            /* its note-on went out as MIDI (the arp's notes may go instead) */
     uint8_t key_vel[FM1_NKEY] = {0};            /* its velocity (a note-on sent late, keys_tx_sync) */
     uint32_t prev = 0, k, t_change = 0, dirty = 0, t_saved = 0;
+    uint32_t seq_sent = edit_seq_ver() - 1u;    /* the sequence version the player has (none yet) */
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
     eng_init();                                 /* the synth with the init program; app_audio renders from now on */
@@ -204,6 +205,10 @@ static void app_main(void)
         dual_test_main(&screen);
 #endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
+        if (edit_seq_ver() != seq_sent && eng_seq_load(edit_seq()) == 0) seq_sent = edit_seq_ver();   /* the edit
+                                                 * buffer's sequence changed (a load, RESTORE FACTORY, a recording): to
+                                                 * the player (after the program load it came with: a load stops it).
+                                                 * Busy: again next pass */
         ch = controls_tx_ch();
         ctl_arp_out();                          /* the arp's notes out (PARAM TX on, LOCAL ON). Before the keys' sync
                                                  * below (final review 4): an arp note-on still in the ring goes out
@@ -417,6 +422,25 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
         for (uint32_t k = 0; k < a0 && k < SEQ_MAX_STEPS; k++) (void)seq_rec_step(s, nt, vl, 6);
         *got = 0;
     }
+    else if (!strcmp(name, "seqdemo")) {                               /* host hook: the edit sequence = C4 | rest | E4 |
+                                                                          tie | G4 + B4 (velocities 100, 90) */
+        static const uint8_t c4 = 60, e4 = 64, gb[2] = {67, 71}, v1 = 100, v2[2] = {100, 90};
+        seq_t *s = edit_seq_mut();
+        seq_clear(s);
+        (void)seq_rec_step(s, &c4, &v1, 1), (void)seq_rec_rest(s), (void)seq_rec_step(s, &e4, &v1, 1);
+        (void)seq_rec_tie(s), (void)seq_rec_step(s, gb, v2, 2);
+        *got = s->len;
+    }
+    else if (!strcmp(name, "seqplay")) *got = eng_seq_play((int)a0);   /* host hook: SEQ PLAY on / off (0 = queued) as
+                                                                          Task 5's button will */
+    else if (!strcmp(name, "seqxp") && n >= 1) *got = eng_seq_transpose(a[0]);   /* host hook: transpose (semitones) */
+    else if (!strcmp(name, "seqplaying")) *got = eng_seq_playing();    /* SEQ PLAY as the main loop sent it */
+    else if (!strcmp(name, "seqstate")) *got = eng_seq_state;          /* the player: 0 stopped, 1 playing, 2 armed */
+    else if (!strcmp(name, "seqcur")) *got = eng_seq_cur == SEQ_NO_STEP ? -1 : eng_seq_cur;   /* the step played last
+                                                                          (0 = step 1), -1 none since PLAY */
+    else if (!strcmp(name, "seqn")) *got = eng_seqp.n;                 /* the sequence's notes sounding */
+    else if (!strcmp(name, "seqnote")) *got = a0 < eng_seqp.n ? eng_seqp.note[a0] : -1;   /* seqnote I: its note I */
+    else if (!strcmp(name, "seqsteps")) *got = (int)eng_seqp.steps;    /* steps played so far */
     else if (!strcmp(name, "seqformat")) *got = seqst_format();        /* every stored sequence gone (records keep
                                                                           naming theirs: "missing") */
     else if (!strcmp(name, "seqchurn")) {                              /* full-size puts and releases on program 499

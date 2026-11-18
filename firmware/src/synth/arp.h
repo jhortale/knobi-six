@@ -38,7 +38,9 @@
  * While ARP is on the synth's own HOLD is off (the arp latches instead; a held synth would latch the arp's note-offs).
  *
  * MIDI out: every arp note-on / off goes into out[] (note, velocity; 0 = off), a ring with a free-running write index
- * out_w (written last); the main loop reads it (ui/midi_map.c ctl_arp_out) and sends the notes when PARAM TX is on. */
+ * out_w (written last); the main loop reads it (ui/midi_map.c ctl_arp_out) and sends the notes when PARAM TX is on.
+ * The sequencer's player (synth/seq.h) writes its notes into this same ring (arp_out; same producer: the audio
+ * interrupt), so they share one reader and one pairing. */
 #ifndef KNOBI_ARP_H
 #define KNOBI_ARP_H
 #include <stdint.h>
@@ -46,7 +48,7 @@
 
 #define ARP_KEYS 16u                     /* keys in a pattern at most (more: the oldest goes) */
 #define ARP_SEQ (ARP_KEYS * 3u * 2u)     /* the longest cycle: 16 keys x 3 octaves, up and down */
-#define ARP_OUT_N 64u                    /* the MIDI out ring (a power of two) */
+#define ARP_OUT_N 128u                   /* the MIDI out ring (a power of two; the sequencer shares it: 12 a step) */
 #define ARP_NONE 0xFFFFFFFFu             /* arp_until: no gate running */
 
 enum { ARP_UP, ARP_DOWN, ARP_UPDOWN, ARP_RANDOM, ARP_ASSIGN, ARP_MODES };

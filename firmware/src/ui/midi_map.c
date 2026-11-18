@@ -21,7 +21,11 @@
  * ON: the keys feed the arp) the keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
  * note-off goes out only if its note-on did; a change of ARP ON, PARAM TX or LOCAL with keys held
  * sends their note-offs, or late note-ons, so the receiver's picture stays right: app.c). A note-off
- * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver). */
+ * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver).
+ * Sequence notes out: the sequencer's player (synth/seq.h) writes the same ring (the arp and the sequencer never play
+ * together), so its notes go out here under the same rules and pairing (PARAM TX and LOCAL ON for a note-on; every
+ * note-off sent on its note-on's channel). The keys played with a sequence go out as played (ctl_keys_out: only ARP ON
+ * keeps them home). */
 #include "controls.h"
 
 #define MIDI_CC_NONE 0xFFu

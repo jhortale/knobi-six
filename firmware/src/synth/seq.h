@@ -58,4 +58,73 @@ uint32_t seq_packed_size(const seq_t *s);                                    /* 
 int  seq_pack(const seq_t *s, uint8_t *buf, uint32_t max);                   /* bytes written, -1: no room / invalid */
 int  seq_unpack(seq_t *s, const uint8_t *buf, uint32_t n);                   /* 0 / -1 (see above) */
 
+/* ---- The player (synth/seqplay.c; Phase 3 Task 4). It plays through synth_note, so it lives with the engine: engine.c
+ * includes seqplay.c after arp.c (this model, seq.c, stays pure: test_seq.c builds it alone). Where it runs: engine.c
+ * owns one seqp_t (eng_seqp) on CPU0, in the audio interrupt, like the arp (synth/arp.h): never on CPU1. It plays the
+ * engine's own copy of the edit buffer's sequence (eng_seqd: the main loop hands every change over through the event
+ * queue, engine.c eng_seq_load; the interrupt never reads the main loop's edit_seq()), so a sequence changing under it
+ * is never read half written.
+ *
+ * Steps: the clock's step events (clk_t .n / .at[] / .step[]) call seq_step at their frame in the block (engine.c
+ * splits the render there, as for the arp: the notes start sample-accurately), and seq_run counts the gate down between
+ * them (the render is split at the gate's end too: the note-offs are sample-accurate as well). One clock step = one
+ * sequence step; it loops the recorded length (after the last step, step 1).
+ *   a step       the notes sounding off, the step's notes on (velocity 0, a legal stored value, plays as 1: a note-on
+ *                of velocity 0 would be a note-off); a note twice in a step plays once.
+ *   rest         the notes sounding off, nothing on.
+ *   tie          the notes sounding stay on (no retrigger, no MIDI out); the step's own notes are ignored. With nothing
+ *                sounding (a Continue that lands on a tie, its notes released at the pause) the tie step plays its
+ *                notes (it carries a copy of them).
+ *   gate         50 % of the step (step_len, frames, set by the caller before seq_step: engine.c from the clock's tempo
+ *                and the division's step, as the arp's; 0 = unknown: until the next step). A step followed by a tie
+ *                keeps its notes on until the next step (gate 0), so a tied chain is one note from its first step to
+ *                50 % of its last tie step.
+ * The position (pos, the next step) never indexes past the sequence's length: a sequence that got shorter under the
+ * player (a new one handed over while it plays) is followed, the position wrapping to step 1 when it is past the end;
+ * an empty sequence plays nothing (its notes released at the next step). The notes sounding are the player's own list
+ * (note[], n), so every note-on gets its note-off, locally and in the MIDI ring, whatever the sequence became.
+ *
+ * Transpose (seq_transpose): semitones added to every note from the next non-tie step (notes sounding keep their pitch
+ * and their note-offs; a tied chain keeps its pitch to its end). Clamped to -127..+127. A transposed note outside the
+ * MIDI range 0..127 is dropped (the step's other notes still play); notes in range are played as they are, even below
+ * 12 or above 108 (the recording range, not the synth's: the synth plays 0..127). The UI's mapping: transpose = the
+ * key pressed - SEQ_XP_CENTER (middle C, 60 = none). Not stored; engine.c resets it on a program load.
+ *
+ * Play (seq_play): on arms (from step 1: it returns 1 = a start, the caller applies the arp's start rules: engine.c
+ * eng_arp_start); off stops and puts the position back to step 1 (the caller releases the notes first: seq_silence).
+ * seq_silence releases the notes sounding now and keeps the position (the clock paused or gone: a Continue goes on from
+ * the held step). seq_ext takes an external clock's realtime bytes: 0xFA = from step 1, 0xFB = on from the held step,
+ * 0xFC = pause (the clock stops, engine.c silences; the position kept).
+ *
+ * MIDI out: every note-on / off the player makes goes into the arpeggiator's ring (out: arp.c arp_out; one ring, one
+ * reader, ui/midi_map.c ctl_arp_out, one pairing: PARAM TX and LOCAL ON, each note-off on its note-on's channel). The
+ * arp and the sequencer never play together (engine.c: turning one on turns the other off). out may be NULL (no MIDI). */
+#define SEQ_XP_CENTER 60                 /* middle C: the transpose key that adds nothing */
+#define SEQ_NONE 0xFFFFFFFFu             /* seq_until: no gate running */
+#define SEQ_NO_STEP 0xFFu                /* seqp_t.cur: no step played since the start */
+struct synth;
+struct arp;
+typedef struct seqp {
+    const seq_t *seq;                    /* the sequence played (the engine's copy) */
+    struct arp *out;                     /* the MIDI out ring (the arp's), NULL none */
+    uint8_t on;                          /* PLAY on (armed: it steps whenever the clock does) */
+    uint8_t pos;                         /* the next step to play, < seq->len (wrapped at seq_step) */
+    uint8_t cur;                         /* the step played last (the screen's), SEQ_NO_STEP none since the start */
+    int8_t xp;                           /* transpose, semitones */
+    uint8_t n;                           /* notes sounding */
+    uint8_t note[SEQ_MAX_NOTES];         /* their notes (transposed: as sent) */
+    uint32_t gate;                       /* frames left of them (0: until the next step) */
+    uint32_t step_len;                   /* frames of the step about to start (the caller's; 0 unknown) */
+    uint32_t steps;                      /* steps played (tests, probes) */
+} seqp_t;
+
+void seqp_init(seqp_t *p, const seq_t *seq, struct arp *out);   /* stopped, step 1, no transpose */
+int  seq_play(seqp_t *p, int on);                    /* PLAY on / off; 1 = a start (it was off) */
+void seq_step(seqp_t *p, struct synth *s);           /* a clock step: the step's notes (see above) */
+void seq_run(seqp_t *p, struct synth *s, uint32_t frames);   /* time passes: the gate's end releases the notes */
+uint32_t seq_until(const seqp_t *p);                 /* frames until the gate ends (SEQ_NONE: none running) */
+void seq_silence(seqp_t *p, struct synth *s);        /* the notes off now; the position kept */
+void seq_transpose(seqp_t *p, int semis);            /* from the next step; -127..127 */
+void seq_ext(seqp_t *p, uint8_t status);             /* 0xFA from step 1, 0xFB on, 0xFC pause */
+
 #endif

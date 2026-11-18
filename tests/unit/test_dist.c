@@ -265,7 +265,7 @@ static void dist_max_chord(void)
 }
 
 /* the stage is memoryless and its coefficients follow the control ticks: any split of the render calls gives the same
- * output (engine.c eng_render_arp cuts a block at arp steps and gates) */
+ * output (engine.c eng_render_steps cuts a block at arp and sequence steps and gates) */
 static void dist_subblocks(void)
 {
     static const uint32_t steps[4] = {256, 1, 7, 100};

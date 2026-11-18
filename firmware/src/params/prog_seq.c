@@ -27,6 +27,7 @@ static int32_t es_prog = -1;
 static uint16_t es_gen;
 static uint8_t es_fb, es_dirty, es_miss;
 static uint32_t es_sum;
+static uint32_t es_ver;                         /* edit_seq_ver: bumped by every change (or a pointer that may make one) */
 static program_t prog_wr;                       /* the record WRITE stores: the program, its generation */
 
 static uint32_t es_hash(void)                   /* FNV-1a over the whole buffer */
@@ -40,6 +41,7 @@ static void es_set(int32_t n, uint16_t g, int fb, int miss)   /* the source, une
 {
     es_prog = n, es_gen = g, es_fb = (uint8_t)fb, es_miss = (uint8_t)miss, es_dirty = 0;
     es_sum = es_hash();
+    es_ver++;
 }
 
 void prog_seq_boot(void)
@@ -64,7 +66,8 @@ int factory_seq(uint16_t prog, seq_t *out)
 }
 
 const seq_t *edit_seq(void) { return &es_seq; }
-seq_t *edit_seq_mut(void) { es_dirty = 1; return &es_seq; }
+seq_t *edit_seq_mut(void) { es_dirty = 1, es_ver++; return &es_seq; }
+uint32_t edit_seq_ver(void) { return es_ver; }
 
 int prog_seq_open(uint16_t n, int load_rc, const program_t *p)
 {
