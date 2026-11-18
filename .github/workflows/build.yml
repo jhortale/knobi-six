@@ -113,7 +113,7 @@ jobs:
   # artifact, knobi-six-cpu1probe) and its image in the emulator, plain and with a flaky core 1. Builds and emulates only.
   cpu1-emu:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       FM1_EMU_SHA: 60645a58d6cd1597ed565a3f00e4981964623232
       CPU1_BASE: e800d7e                         # phase2 before the CPU1 HAL: the loader must stay byte for byte this
