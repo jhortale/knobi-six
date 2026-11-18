@@ -150,6 +150,43 @@ static int blobs_load(uint32_t i, uint32_t k, void *p, uint32_t max, uint32_t *n
     return 0;
 }
 static int blobs_save(uint32_t i, uint32_t k, const void *p, uint32_t n) { return k && i < NBLOB && k <= NBLOB - i ? host_save(host_blobs[i], k * 0x1000u - 12u, p, n, "blobs", i) : -1; }
+#if BOARD_SMK37
+/* the sequence store's sectors (params/seq_store.c, store.h SEQST_*) as raw NOR flash: erased at start, an erase sets
+ * 0xFF (the chip's 50 ms stall unless sliced), a program clears bits */
+static uint8_t host_seqst[SEQST_SECTORS][0x1000u], host_seqst_on;
+static uint8_t *host_seqst_at(uint32_t off, uint32_t n)
+{
+    uint32_t i;
+    if (!host_seqst_on) memset(host_seqst, 0xFF, sizeof host_seqst), host_seqst_on = 1;
+    for (i = 0; i < SEQST_SECTORS; i++)
+        if (FL_GUARD(off, n) && off >= SEQST_SECTOR_AT(i) && off + n <= SEQST_SECTOR_AT(i) + 0x1000u) return &host_seqst[i][off - SEQST_SECTOR_AT(i)];
+    return NULL;
+}
+static int seqst_fl_read(uint32_t off, void *p, uint32_t n)
+{
+    const uint8_t *a = host_seqst_at(off, n);
+    if (!a) return -1;
+    memcpy(p, a, n);
+    return 0;
+}
+static int seqst_fl_erase(uint32_t off)
+{
+    uint8_t *a = host_seqst_at(off, 0x1000u);
+    if (!a || (off & 0xFFFu)) return -1;
+    memset(a, 0xFF, 0x1000u);
+    printf("%6u ms  sequence store: sector %05X erased%s\n", fm1_ms, off, store_sliced ? ", sliced" : "");
+    if (!store_sliced) host_stall(HOST_ERASE_MS);
+    return 0;
+}
+static int seqst_fl_prog(uint32_t off, const void *p, uint32_t n)
+{
+    uint8_t *a = host_seqst_at(off, n);
+    const uint8_t *b = p;
+    if (!a) return -1;
+    while (n--) *a++ &= *b++;
+    return 0;
+}
+#endif
 
 static uint8_t mq[64][4];                       /* status, data 1, data 2, source (1 USB, 2 TRS) */
 static uint32_t mq_w, mq_r;

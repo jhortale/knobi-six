@@ -56,6 +56,7 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #endif
 #include "synth/voices.c"
 #include "synth/seq.c"                      /* the step sequencer model (Phase 3) */
+#include "params/seq_store.c"               /* the sequences in FL_DATA (Phase 3; wired to WRITE by Task 3) */
 #include "engine.c"
 #if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
 #include "cpu1_probe.c"
