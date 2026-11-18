@@ -74,7 +74,9 @@ Sequencer (Phase 3): the notes a playing sequence plays go out under the arp's r
 PARAM TX = CC and LOCAL ON, note on with the step's velocity, note off at the end of its gate (a tie sends nothing: the
 note stays on), each note-off on its note-on's channel and sent whatever PARAM TX, LOCAL or MIDI CH became meanwhile;
 stopping it, a program change, ARP ON, PANIC, ALL NOTES OFF, a MIDI stop or the clock going away send the offs of what
-is on. The keys played with it go out as played (they are not the sequence's).
+is on. PANIC (CC 120) stops the sequence; ALL NOTES OFF (CC 123) only releases its notes and it plays on at its next
+step (a DAW sending CC 123 at its stop does not disarm a sequence that follows its clock). Should the main loop stall
+long enough for the shared out ring to overrun, every note still on at the receiver gets its note-off at once. The keys played with it go out as played (they are not the sequence's).
 Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
 note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
 on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off

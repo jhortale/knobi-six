@@ -162,4 +162,15 @@
 # every note-on sent has had its note-off
 12000 expect 15 arpout
 12000 expect 15 arpoff
+# the MIDI out ring overrun (a main-loop stall while 12 events a step go in): note 100 on at the receiver, then its off
+# lost under 141 events (host hooks "ringon" / "ringflood"): the reader sends 100's off itself, then what the ring
+# still holds (64 on / off pairs of 101); nothing left on at the receiver ("arphang")
+12010 expect 0 ringon 100
+12020 expect 16 arpout
+12020 expect 1 arphang
+12030 expect 0 ringflood 100
+12040 expect 1 arpoverrun
+12040 expect 0 arphang
+12040 expect 80 arpout
+12040 expect 80 arpoff
 12100 end

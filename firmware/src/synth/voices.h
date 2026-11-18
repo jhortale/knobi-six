@@ -109,6 +109,7 @@ void synth_init(synth_t *s);
 void synth_program(synth_t *s, const program_t *p); /* load all values, snap smoothing */
 void synth_param(synth_t *s, uint16_t id, int16_t v); /* live edit, smoothed */
 void synth_note(synth_t *s, int note, int vel);     /* vel 0 = off */
+void synth_note_release(synth_t *s, int note);      /* off, never latched by HOLD (the sequencer's notes) */
 void synth_hold(synth_t *s, int on);
 void synth_bend(synth_t *s, int bend14);            /* 0..16383, 8192 = centre */
 void synth_wheel(synth_t *s, int v);                /* 0..127 */

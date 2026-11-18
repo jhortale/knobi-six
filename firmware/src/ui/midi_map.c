@@ -92,6 +92,7 @@ static uint8_t ctl_arp_ch[128];            /* the channel each one's note-on wen
 static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
 static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
 static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
+static uint32_t ctl_arp_overruns;          /* ring overruns (host probe "arpoverrun") */
 /* the arp's note-ons go out with PARAM TX on and LOCAL ON only (final review 2): under LOCAL OFF the arp is fed by MIDI
  * in alone, and a DAW echoing our notes back would feed the arp its own notes (with a latch on, a loop that sustains
  * itself). Every note-on sent gets its note-off, whatever PARAM TX or LOCAL have become since (ctl_arp_sent) */
@@ -99,7 +100,18 @@ static void ctl_arp_out(void)
 {
     uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
     __asm__ volatile("" ::: "memory");     /* (the entries before the index: arp.c writes them first) */
-    if (w - ctl_arp_r > ARP_OUT_N) ctl_arp_r = w - ARP_OUT_N;   /* (a long stall: the oldest are gone) */
+    if (w - ctl_arp_r > ARP_OUT_N) {       /* a long stall: the oldest are gone, note-offs maybe among them: every note on
+                                            * at the receiver gets its note-off now (on its channel), then the ring goes on
+                                            * from what it still holds (an off there for a note already off: not sent) */
+        for (uint32_t n = 0; n < 128u; n++)
+            if (ctl_arp_sent[n >> 5] >> (n & 31u) & 1u) {
+                midi_send(0x80u | ctl_arp_ch[n], n, 0);
+                ctl_arp_offs++, ctl_arp_offch = ctl_arp_ch[n];
+            }
+        for (uint32_t i = 0; i < 4u; i++) ctl_arp_sent[i] = 0;
+        ctl_arp_r = w - ARP_OUT_N;
+        ctl_arp_overruns++;
+    }
     for (; ctl_arp_r != w; ctl_arp_r++) {
         uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
         uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];

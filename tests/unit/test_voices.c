@@ -386,6 +386,33 @@ static void pan_spread_alternates(void)
     CHECK(S.voice[1].gl == S.voice[1].gr);
 }
 
+/* synth_note_release (the sequencer's note-offs): never latched by HOLD; a live key under HOLD still latches; in
+ * unison the line follows the keys left and stops when none is */
+static void release_ignores_hold(void)
+{
+    int poly, uni;
+    fresh();
+    synth_hold(&S, 1);
+    synth_note(&S, 60, 100);                    /* (a sequence note) */
+    synth_note(&S, 64, 100), synth_note(&S, 64, 0);   /* a live key, let go: latched */
+    synth_note_release(&S, 60);
+    poly = voice_of(60) < 0 || (!S.voice[voice_of(60)].key && !S.voice[voice_of(60)].latched);
+    poly &= voice_of(64) >= 0 && S.voice[voice_of(64)].latched;
+    for (unsigned i = 0; i < S.nstack; i++) poly &= S.stack[i] != 60;
+    fresh();
+    set(P_UNISON_ON, 1);
+    synth_hold(&S, 1);
+    synth_note(&S, 60, 100), synth_note(&S, 62, 100);
+    synth_note_release(&S, 62);
+    uni = S.mono == 60;                         /* (follows back to the key left) */
+    synth_note_release(&S, 60);
+    uni &= S.mono == -1 && S.nstack == 0;
+    synth_hold(&S, 0);
+    printf("release_ignores_hold: poly: released under HOLD, a live key still latched %d; unison: follows, then off %d\n",
+           poly, uni);
+    CHECK(poly && uni);
+}
+
 static void hold_latches_and_releases(void)
 {
     fresh();
@@ -777,6 +804,7 @@ int main(void)
     bend_range_program();
     pan_spread_alternates();
     hold_latches_and_releases();
+    release_ignores_hold();
     panic_silences();
     amp_mod_fades();
     min_gate();

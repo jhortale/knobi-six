@@ -27,7 +27,7 @@ static void seq_out(seqp_t *p, int note, int vel) { if (p->out) arp_out(p->out, 
 static void seq_notes_off(seqp_t *p, struct synth *s)
 {
     for (unsigned i = 0; i < p->n; i++) {
-        synth_note(s, p->note[i], 0);
+        synth_note_release(s, p->note[i]);   /* (HOLD latches live keys only, never the sequence's notes) */
         seq_out(p, p->note[i], 0);
     }
     p->n = 0, p->gate = 0;

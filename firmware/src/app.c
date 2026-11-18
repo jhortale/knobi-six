@@ -440,6 +440,21 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
                                                                           (0 = step 1), -1 none since PLAY */
     else if (!strcmp(name, "seqn")) *got = eng_seqp.n;                 /* the sequence's notes sounding */
     else if (!strcmp(name, "seqnote")) *got = a0 < eng_seqp.n ? eng_seqp.note[a0] : -1;   /* seqnote I: its note I */
+    else if (!strcmp(name, "arphang")) {                               /* notes on at the MIDI receiver (arp / sequence) */
+        *got = 0;
+        for (uint32_t i = 0; i < 128u; i++) *got += (int)(ctl_arp_sent[i >> 5] >> (i & 31u) & 1u);
+    }
+    else if (!strcmp(name, "arpoverrun")) *got = (int)ctl_arp_overruns;   /* MIDI out ring overruns so far */
+    else if (!strcmp(name, "ringon")) { arp_out(&eng_arp, (int)a0, 100); *got = 0; }   /* host hook: a note-on into the
+                                                                          ring, as the player writes it (the host's
+                                                                          audio does not run meanwhile) */
+    else if (!strcmp(name, "ringflood")) {                             /* host hook: NOTE's off, then 70 on / off pairs of
+                                                                          NOTE + 1 (141 events: more than the ring
+                                                                          holds before the main loop reads it) */
+        arp_out(&eng_arp, (int)a0, 0);
+        for (int k = 0; k < 70; k++) arp_out(&eng_arp, (int)a0 + 1, 100), arp_out(&eng_arp, (int)a0 + 1, 0);
+        *got = 0;
+    }
     else if (!strcmp(name, "seqsteps")) *got = (int)eng_seqp.steps;    /* steps played so far */
     else if (!strcmp(name, "seqformat")) *got = seqst_format();        /* every stored sequence gone (records keep
                                                                           naming theirs: "missing") */

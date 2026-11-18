@@ -412,6 +412,20 @@ void synth_note(synth_t *s, int note, int vel)
     else synth_mono_follow(s);
 }
 
+/* a note let go that HOLD never latches (the sequencer's notes, seq.h: HOLD latches the live keys only): out of the
+ * key stack and released now, whatever HOLD says; in unison the line follows the keys left (a latched live key
+ * included) */
+void synth_note_release(synth_t *s, int note)
+{
+    if (note < 0 || note > 127) return;
+    synth_stack_remove(s, note);
+    if (s->prog.v[P_UNISON_ON]) { synth_mono_follow(s); return; }
+    for (int i = 0; i < NVOICE; i++) {
+        voice_t *v = &s->voice[i];
+        if (v->busy && v->note == note && v->key) synth_voice_off(s, v);
+    }
+}
+
 void synth_hold(synth_t *s, int on)
 {
     if (on) { s->hold = 1; return; }

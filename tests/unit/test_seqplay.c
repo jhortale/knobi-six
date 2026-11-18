@@ -514,6 +514,8 @@ static void seq_change_under(void)
     seq_clear(&q2);
     step_of(&q2, 1, 40, 0, 0), step_of(&q2, 1, 41, 0, 0);
     CHECK(eng_seq_load(&q2) == 0);
+    render(BLK);                                                          /* (drained: the step shown is not past 2) */
+    CHECK(eng_seq_cur == SEQ_NO_STEP || eng_seq_cur < 2u);
     { uint32_t s = eng_seqp.steps; for (int k = 0; k < 400 && eng_seqp.steps == s; k++) render(BLK); }
     shorter = eng_seqp.cur == 0 && eng_seqp.note[0] == 40 && eng_seqp.pos == 1;
     render(40u * BLK);
@@ -529,11 +531,152 @@ static void seq_change_under(void)
     CHECK(shorter && empty && ring_hanging() == 0);
 }
 
+
+/* ties at the loop point: a tie on the last step holds across the wrap into step 1 only when step 1 is itself a tie (a
+ * hand-made sequence: the recorder never makes one); a last-step tie releases at its gate and step 1 retriggers */
+static void seq_ties_wrap(void)
+{
+    int last, wrap;
+    uint32_t w;
+    seq_clear(&Q);                                                        /* C4 | E4 | tie */
+    step_of(&Q, 1, 60, 0, 0), step_of(&Q, 1, 64, 0, 0);
+    (void)seq_rec_tie(&Q);
+    fresh();
+    seq_play(&P, 1);
+    P.step_len = STEP;
+    seq_step(&P, &S), seq_run(&P, &S, STEP);
+    seq_step(&P, &S);                                                     /* E4, held (a tie next) */
+    last = seq_until(&P) == SEQ_NONE;
+    seq_run(&P, &S, STEP);
+    w = A.out_w;
+    seq_step(&P, &S);                                                     /* the last step, a tie: no retrigger */
+    last &= A.out_w == w && keyed_note(&S, 64) && seq_until(&P) == 500u;   /* (step 1 is no tie: the gate) */
+    seq_run(&P, &S, 500);
+    last &= keyed(&S) == 0;
+    seq_run(&P, &S, 500);
+    seq_step(&P, &S);                                                     /* the wrap: step 1, C4 */
+    last &= P.cur == 0 && keyed_note(&S, 60) && keyed(&S) == 1;
+    seq_silence(&P, &S);
+
+    seq_clear(&Q);                                                        /* hand-made: step 1 a tie (of C4), D4 */
+    step_of(&Q, 1, 60, 0, 0), step_of(&Q, 1, 62, 0, 0);
+    Q.step[0].tie = 1;
+    fresh();
+    seq_play(&P, 1);
+    P.step_len = STEP;
+    seq_step(&P, &S);                                                     /* step 1, nothing sounding: its copy plays */
+    wrap = keyed_note(&S, 60) && seq_until(&P) == 500u;
+    seq_run(&P, &S, STEP);
+    seq_step(&P, &S);                                                     /* D4, held: step 1 (next) is a tie */
+    wrap &= keyed_note(&S, 62) && seq_until(&P) == SEQ_NONE;
+    seq_run(&P, &S, STEP);
+    w = A.out_w;
+    seq_step(&P, &S);                                                     /* the wrap onto the tie: D4 held on */
+    wrap &= A.out_w == w && keyed_note(&S, 62) && keyed(&S) == 1 && P.cur == 0 && seq_until(&P) == 500u;
+    seq_run(&P, &S, 500);
+    wrap &= keyed(&S) == 0 && P.n == 0;
+    printf("seq_ties_wrap: a last-step tie: held, released at its gate, step 1 retriggers %d; a wrap onto a tie (step 1): "
+           "the last notes held on, no retrigger %d\n", last, wrap);
+    CHECK(last && wrap);
+}
+
+/* an external Continue landing on a tie: the pause released the notes, so the tie plays its carried copy */
+static void seq_continue_on_tie(void)
+{
+    int ok;
+    seq_clear(&Q);                                                        /* C4 | E4 | tie | G4 */
+    step_of(&Q, 1, 60, 0, 0), step_of(&Q, 1, 64, 0, 0);
+    (void)seq_rec_tie(&Q);
+    step_of(&Q, 1, 67, 0, 0);
+    eng_fresh(&Q);
+    eng_clock_mode(CLK_MIDI_IN);
+    eng_param(P_CLK_DIV, CLK_DIV_16TH);
+    eng_seq_play(1);
+    tick_t = tick_next = 0;
+    eng_midi_rt(0xFA);
+    for (int k = 0; k < 400 && eng_seqp.cur != 1; k++) ticks_render(1, 1);   /* E4 sounding, held */
+    ok = eng_seqp.cur == 1 && keyed_note(&eng_synth, 64);
+    eng_midi_rt(0xFC);
+    ticks_render(4, 1);
+    ok &= eng_keyed() == 0 && eng_seqp.pos == 2;                          /* paused on the tie */
+    eng_midi_rt(0xFB);
+    ok &= until_step(1) && eng_seqp.cur == 2 && keyed_note(&eng_synth, 64) && eng_seqp.n == 1;
+    eng_seq_play(0);
+    render(BLK);
+    ok &= eng_keyed() == 0 && ring_hanging() == 0 && r_dup == 0u;
+    printf("seq_continue_on_tie: 0xFB onto the tie: its notes play (E4), paired on MIDI out %d\n", ok);
+    CHECK(ok);
+}
+
+/* HOLD latches the live keys only: the sequence's notes never pile up latched, nothing of theirs sounds on after a
+ * stop or ALL NOTES OFF, a live key let go under HOLD stays latched beside it; with Unison the line follows the steps */
+static int seq_latched(int except)               /* voices of the sequence latched, or still keyed (except a note) */
+{
+    int n = 0;
+    for (int i = 0; i < NVOICE; i++)
+        n += eng_synth.voice[i].busy && eng_synth.voice[i].latched && eng_synth.voice[i].note != except;
+    return n;
+}
+static void seq_hold_never_latches(void)
+{
+    static const uint8_t a[3] = {48, 52, 55}, b[3] = {50, 53, 57}, v[3] = {100, 100, 100};
+    int piled = 0, stop, live, alloff, uni = 1, cnt = 0;
+    seq_clear(&Q);
+    (void)seq_rec_step(&Q, a, v, 3), (void)seq_rec_tie(&Q), (void)seq_rec_step(&Q, b, v, 3), (void)seq_rec_rest(&Q);
+    eng_fresh(&Q);
+    eng_arp_sync(0);
+    eng_param(P_BPM, 250);
+    eng_param(P_CLK_DIV, CLK_DIV_16TH);
+    eng_hold(1);
+    eng_note(40, 100), eng_note(40, 0);                                   /* a live key under HOLD: latched */
+    render(BLK);
+    eng_seq_play(1);
+    for (int k = 0; k < 300; k++) { render(BLK); piled |= seq_latched(40) != 0; }   /* ~25 steps */
+    live = keyed_note(&eng_synth, 40);
+    eng_seq_play(0);
+    render(2u * BLK);
+    stop = seq_latched(40) == 0 && eng_keyed() == 1 && keyed_note(&eng_synth, 40);
+    eng_seq_play(1);
+    render(30u * BLK);
+    eng_all_notes_off();                                                  /* (releases the live latch too: CC 123) */
+    render(BLK);
+    alloff = eng_seqp.n == 0 || eng_seqp.steps > 0u;
+    eng_seq_play(0);
+    render(2u * BLK);
+    alloff &= eng_keyed() == 0;
+    eng_hold(0);
+    render(BLK);
+    printf("seq_hold_never_latches: HOLD on: no sequence note latched over 25 steps %d; the live key stays latched %d; "
+           "SEQ PLAY off: only the live key left %d; all notes off: nothing %d\n", !piled, live, stop, alloff);
+    CHECK(!piled && live && stop && alloff && ring_hanging() == 0);
+
+    seq_clear(&Q);                                                        /* Unison + HOLD: the line follows */
+    for (int i = 0; i < 4; i++) step_of(&Q, 1, 60 + 2 * i, 0, 0);
+    eng_fresh(&Q);
+    eng_arp_sync(0);
+    eng_param(P_UNISON_ON, 1);
+    eng_param(P_BPM, 250);
+    eng_param(P_CLK_DIV, CLK_DIV_16TH);
+    eng_hold(1);
+    eng_seq_play(1);
+    for (int k = 0; k < 300; k++) {
+        render(BLK);
+        if (eng_seqp.n) { uni &= eng_synth.mono == eng_seqp.note[0]; cnt++; }
+        else uni &= eng_synth.mono == -1;
+    }
+    eng_seq_play(0);
+    render(2u * BLK);
+    uni &= eng_synth.mono == -1 && eng_keyed() == 0 && cnt > 50;
+    eng_hold(0);
+    printf("seq_hold_never_latches: Unison + HOLD: the unison line follows every step and stops with it %d\n", uni);
+    CHECK(uni);
+}
+
 /* (the engine's producer calls this test does not make: referenced, so -Werror's unused-function stays quiet) */
 __attribute__((unused)) static void eng_rest(void)
 {
     (void)eng_bend, (void)eng_wheel, (void)eng_pressure, (void)eng_volume, (void)eng_tune, (void)eng_fade, (void)eng_faded;
-    (void)eng_chord, (void)eng_flush, (void)eng_hold, (void)eng_active;
+    (void)eng_chord, (void)eng_flush, (void)eng_active;
 }
 
 int main(void)
@@ -547,6 +690,9 @@ int main(void)
     seq_no_stuck_notes();
     seq_midi_out_paired();
     seq_change_under();
+    seq_ties_wrap();
+    seq_continue_on_tie();
+    seq_hold_never_latches();
     if (fails) { printf("test_seqplay: %d FAILED\n", fails); return 1; }
     printf("test_seqplay: all passed\n");
     return 0;

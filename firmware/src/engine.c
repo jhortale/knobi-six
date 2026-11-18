@@ -314,10 +314,12 @@ static int eng_active(void) { return eng_voices; }   /* voices sounding after th
 static int eng_seq_play(int on)
 {
     on = on != 0;
-    if (on && eng_edit.v[P_ARP_ON]) eng_param(P_ARP_ON, 0);   /* (the consumer turns the arp off too, whatever this does) */
-    if (on == eng_last_seqplay) return 0;
-    if (eng_push(EV_SEQPLAY, 0, on, on ? ENG_RESERVE : 0)) { eng_drops = eng_drops + 1u; return -1; }
-    eng_last_seqplay = on;
+    if (on != eng_last_seqplay) {
+        if (eng_push(EV_SEQPLAY, 0, on, on ? ENG_RESERVE : 0)) { eng_drops = eng_drops + 1u; return -1; }
+        eng_last_seqplay = on;
+    }
+    if (on && eng_edit.v[P_ARP_ON]) eng_param(P_ARP_ON, 0);   /* (only once PLAY is queued: a refused one leaves the
+                                                 * arp as it was. The consumer turns the arp off as it drains anyway) */
     return 0;
 }
 static int eng_seq_playing(void) { return eng_last_seqplay; }   /* SEQ PLAY as sent (producer's view) */
@@ -399,6 +401,9 @@ static void eng_drain(void)
         case EV_SEQXP: seq_transpose(&eng_seqp, e->b); break;
         case EV_SEQ:                      /* a new sequence: the player follows it (its notes sounding are its own) */
             eng_seqd = eng_sbuf;
+            if (eng_seqp.cur != SEQ_NO_STEP && eng_seqp.cur >= eng_seqd.len) eng_seqp.cur = SEQ_NO_STEP;   /* (the step
+                                                 * shown never past the new length) */
+            eng_seq_cur = eng_seqp.cur;
             ENG_BARRIER();
             eng_sr = eng_sr + 1u;         /* the buffer is the producer's again */
             break;

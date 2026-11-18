@@ -72,6 +72,9 @@ int  seq_unpack(seq_t *s, const uint8_t *buf, uint32_t n);                   /* 
  *   a step       the notes sounding off, the step's notes on (velocity 0, a legal stored value, plays as 1: a note-on
  *                of velocity 0 would be a note-off); a note twice in a step plays once.
  *   rest         the notes sounding off, nothing on.
+ *   note-offs    synth_note_release, never synth_note(.., 0): HOLD (the pad, sustain) latches the live keys only, never
+ *                the sequence's notes (controller ruling, Task 4 fix 1), so they neither pile up latched nor sound on
+ *                after a stop; in unison the line follows the steps.
  *   tie          the notes sounding stay on (no retrigger, no MIDI out); the step's own notes are ignored. With nothing
  *                sounding (a Continue that lands on a tie, its notes released at the pause) the tie step plays its
  *                notes (it carries a copy of them).

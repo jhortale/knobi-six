@@ -127,6 +127,8 @@ buttons (SEQ PLAY, SEQ REC, SEQ) and the recording come with Task 5; the engine'
 - **Arp and sequencer are exclusive**: SEQ PLAY turns ARP ON off; ARP ON stops the sequence (its notes released).
 - A program change (and RESTORE FACTORY) stops it and loads that program's sequence; PANIC (CC 120) stops it; ALL NOTES
   OFF (CC 123) releases its notes and it plays on. Keys played live compete with it for the six voices.
+- HOLD (the pad, the sustain message) latches the keys played live only, never the sequence's notes: they end at
+  their gate as ever, and with UNISON on the line follows the steps.
 - MIDI out: its notes go out as the arp's do (PARAM TX = CC and LOCAL ON; every note-on gets its note-off, on its
   channel; [MIDI.md](MIDI.md)).
 - **Footswitch start / stop: not available on the SMK-37.** The OB-6's footswitch-sequence jack has no counterpart: the
