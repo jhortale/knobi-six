@@ -5,7 +5,7 @@ name: build
 
 on:
   push:
-    branches: [phase1, phase2]
+    branches: [phase1, phase2, phase3]
   workflow_dispatch:
 
 jobs:
