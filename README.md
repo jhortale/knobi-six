@@ -67,13 +67,13 @@ a firmware built with it (`firmware/gen/factory_bank.h` is in `.gitignore`).
    ```
    It writes `firmware/gen/factory_bank.h` and a report of every conversion and warning in
    `build/factory_bank_report.txt`.
-4. Build as usual (`./build.sh`) and install as usual. The bank adds about 100 KB to the image. With the header
+4. Build as usual (`./build.sh`) and install as usual. The bank adds about 160 KB to the image (programs and sequences). With the header
    there, the package is `build/knobi-six-local.fwsc` (`-local-elite`, `-local-mke`) and the build warns that it holds
    your imported bank: install it on your own keyboard, **never share it**. A `--release` build refuses to run while
    the header is there.
 
-Program names are kept as they are, including the ones that contain "OB". The sequencer data of the
-programs is not imported (a program has no room for it); effects settings are kept for a later phase but do nothing yet
+Program names are kept as they are, including the ones that contain "OB". The programs' sequences are now included
+too (each program's factory sequence, about 61 KB more; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)); effects settings are kept for a later phase but do nothing yet
 (the arpeggiator, clock and distortion settings are used since Phase 2). Delete `firmware/gen/factory_bank.h` to build without the bank again.
 
 ## Credits

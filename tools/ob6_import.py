@@ -19,7 +19,9 @@ Prophet-6's high-pass slots reused by the OB-6. Each byte was checked against th
 distributions, names; the report lists them): see LAYOUT below and docs/FACTORY_BANK.md.
 
 Output: program n = bank * 100 + program, packed with program_pack's format (params.c: version, name[20], v[] as LE
-int16, chord[6], CRC-16/CCITT-FALSE), FACTORY_COUNT records of FACTORY_SIZE bytes.
+int16, chord[6], CRC-16/CCITT-FALSE), FACTORY_COUNT records of FACTORY_SIZE bytes; and the programs' sequences
+(offset 128, decode_seq) in seq_pack's format as FACTORY_SEQ_COUNT / factory_seq_at / factory_seq_data
+(params/prog_seq.h), when any program has one.
 """
 import argparse
 import re
@@ -167,7 +169,10 @@ UNMAPPED = {  # bytes read but not mapped (the report checks what they hold)
 NAME_AT = 107
 CHORD_AT = 97                     # 6 offsets from the root in semitones, 127 = empty
 CHORD_ROOT = 60                   # KNOBI-SIX's chord is absolute notes; only their intervals count (voices.c)
-SEQ_AT = 128                      # 6 lanes x (64 notes, 64 velocities): not carried (no room in a program record)
+SEQ_AT = 128                      # the sequence: 6 lanes x (64 notes, 64 velocities), decode_seq
+SEQ_LANES, SEQ_STEPS = 6, 64
+SEQ_NOTE_MIN, SEQ_NOTE_MAX = 12, 108                 # synth/seq.h: what seq_unpack takes
+SEQ_FILLER = 60                   # the note byte of a lane that holds nothing (and of a rest / tie step)
 
 
 def unpack_ms(packed):
@@ -262,6 +267,69 @@ def convert(data):
     return name, v, chord, warns
 
 
+def decode_seq(data):
+    """One unpacked OB-6 program -> (steps, issues). The decoding (docs/FACTORY_BANK.md "The OB-6 sequence"): lane L
+    (0..5) of step s (0..63) is note byte SEQ_AT + 128 L + s and velocity byte that + 64. A velocity byte's bit 7 = the
+    lane holds a note (its velocity the low 7 bits). A step exists while lane 0 holds one: the length is the run of
+    such steps from step 1 (the first step without it ends the sequence). Lane 0's note byte with bit 7 set = a tie (the
+    previous step held on); else lane 0's velocity 0 with no other lane = a rest; else the lanes that hold a note, from
+    lane 0 up to the first that holds none (a lane past it is ignored).
+    steps: [(tie, [(note, vel), ...])], a rest = (0, []), a tie carries a copy of the previous step's notes (seq.h).
+    Never what seq_unpack refuses: notes outside 12..108 are dropped (as seq_rec_step does), a step left with none is a
+    rest, a tie at step 1 or after a rest is a rest. issues: Counter of what was odd (each counted, nothing kept)."""
+    issues = Counter()
+    nb = lambda lane, s: data[SEQ_AT + 128 * lane + s]          # noqa: E731
+    vb = lambda lane, s: data[SEQ_AT + 128 * lane + 64 + s]     # noqa: E731
+    steps = []
+    for s in range(SEQ_STEPS):
+        if not vb(0, s) & 0x80:
+            break
+        on = [lane for lane in range(SEQ_LANES) if vb(lane, s) & 0x80]
+        run = next((k for k in range(SEQ_LANES) if k not in on), SEQ_LANES)
+        if len(on) > run:                                       # the OB-6 fills lanes from lane 1 up: a lane past an
+            issues["lane_gap"] += len(on) - run                 # empty one is not a note
+            on = on[:run]
+        issues["stray_lane"] += sum(1 for lane in range(SEQ_LANES) if 0 < vb(lane, s) < 0x80)
+        if nb(0, s) & 0x80:                                     # a tie
+            if nb(0, s) != 0x80 | SEQ_FILLER or vb(0, s) != 0x80 or len(on) > 1:
+                issues["tie_bits"] += 1
+            if not steps or not steps[-1][1]:
+                issues["orphan_tie"] += 1
+                steps.append((0, []))
+            else:
+                steps.append((1, list(steps[-1][1])))
+            continue
+        if vb(0, s) == 0x80 and len(on) == 1:                   # a rest
+            if nb(0, s) != SEQ_FILLER:
+                issues["rest_bits"] += 1
+            steps.append((0, []))
+            continue
+        notes = []
+        for lane in on:
+            n = nb(lane, s)
+            if not SEQ_NOTE_MIN <= n <= SEQ_NOTE_MAX:
+                issues["note_range"] += 1
+                continue
+            notes.append((n, vb(lane, s) & 0x7F))
+        if not notes:
+            issues["empty_step"] += 1
+        steps.append((0, notes))
+    for s in range(len(steps) + 1, SEQ_STEPS):                  # past the end: nothing should be on
+        if vb(0, s) & 0x80:
+            issues["after_end"] += 1
+    return steps, issues
+
+
+def seq_pack(steps):
+    """synth/seq.c seq_pack: length, then per step count | tie << 3 and the (note, velocity) pairs. Empty: 00."""
+    out = bytearray([len(steps)])
+    for tie, notes in steps:
+        out.append(len(notes) | (tie << 3))
+        for n, v in notes:
+            out += bytes([n, v])
+    return bytes(out)
+
+
 def crc16(d):
     c = 0xFFFF
     for b in d:
@@ -284,9 +352,11 @@ def program_pack(name, v, chord):
     return bytes(out)
 
 
-def write_header(path, records, source):
-    """records: {n: packed bytes}"""
+def write_header(path, records, source, seqs=None):
+    """records: {n: packed bytes}; seqs: {n: seq_pack bytes} (the factory sequences: emitted when any is not empty;
+    an empty sequence and a gap are empty spans, "none")"""
     count = max(records) + 1 if records else 0
+    seqs = {n: b for n, b in (seqs or {}).items() if b != b"\x00"}
     lines = [
         "/* firmware/gen/factory_bank.h: generated by tools/ob6_import.py from " + source + ".",
         " * DO NOT COMMIT OR REDISTRIBUTE: the programs are Sequential's (docs/FACTORY_BANK.md); for your own build only.",
@@ -304,7 +374,26 @@ def write_header(path, records, source):
         for k in range(0, len(r), 24):
             lines.append("    " + ("{" if k == 0 else " ") + ",".join(str(b) for b in r[k:k + 24]) +
                          ("}," if k + 24 >= len(r) else ","))
-    lines += ["};", "#endif", ""]
+    lines.append("};")
+    if seqs:
+        sc = max(seqs) + 1
+        at, data = [0], bytearray()
+        for n in range(sc):
+            data += seqs.get(n, b"")
+            at.append(len(data))
+        lines += [
+            f"/* the factory sequences (params/prog_seq.h): {len(seqs)} programs carry one, {len(data)} B, seq_pack's"
+            " format; an empty span = none */",
+            f"#define FACTORY_SEQ_COUNT {sc}u",
+            "static const uint32_t factory_seq_at[FACTORY_SEQ_COUNT + 1u] = {" + ",".join(f"{x}u" for x in at) + "};",
+            f"static const uint8_t factory_seq_data[{len(data)}] = {{",
+        ]
+        for n in range(sc):
+            b = seqs.get(n)
+            if b:
+                lines.append(f"    /* {n:03d} */ " + ",".join(str(x) for x in b) + ",")
+        lines.append("};")
+    lines += ["#endif", ""]
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(lines))
     return count
@@ -350,6 +439,23 @@ def synthetic(n, seed=1):
             d[byte] = blo + s % (bhi - blo + 1)
         d[97:103] = bytes([0, 4, 7, 127, 127, 127]) if k % 2 else bytes([127] * 6)
         d[NAME_AT:NAME_AT + NAME_LEN] = f"SYNTH {k:03d}".ljust(NAME_LEN).encode()
+        for lane in range(SEQ_LANES):                   # a made-up sequence in the OB-6's layout (decode_seq)
+            d[SEQ_AT + 128 * lane:SEQ_AT + 128 * lane + 64] = bytes([SEQ_FILLER] * 64)
+        length = 64 if k % 5 == 4 else 2 + (k * 7) % 40
+        prev = 0
+        for st in range(length):
+            s = (s * 1103515245 + 12345) & 0x7FFFFFFF
+            r = s >> 8
+            if r % 8 == 0:                              # a rest
+                d[SEQ_AT + 64 + st], prev = 0x80, 0
+            elif r % 8 < 3 and prev:                    # a tie
+                d[SEQ_AT + st], d[SEQ_AT + 64 + st] = 0x80 | SEQ_FILLER, 0x80
+            else:                                       # 1..6 notes
+                cnt = 1 + (r >> 4) % 6 if r % 3 == 0 else 1
+                for lane in range(cnt):
+                    d[SEQ_AT + 128 * lane + st] = 24 + (r >> (lane + 3)) % 72
+                    d[SEQ_AT + 128 * lane + 64 + st] = 0x80 | 1 + (r >> lane) % 127
+                prev = 1
         out += bytes([0xF0, 0x01, 0x2E, 0x02, k // 100, k % 100]) + pack_ms(bytes(d)) + b"\xf7"
     return bytes(out)
 
@@ -370,18 +476,35 @@ def main(argv=None):
     progs, warns = parse_syx(blob)
     if not progs:
         sys.exit("ob6_import: no OB-6 program dump in the input")
-    records, rep, conv_warn, names = {}, [], 0, []
+    records, rep, conv_warn, names, seqs, seq_iss = {}, [], 0, [], {}, {}
     for bank, prog, data in progs:
         n = bank * 100 + prog
         name, v, chord, w = convert(data)
         if n in records:
             warns.append(f"program {n:03d} twice: the last one kept")
         records[n] = program_pack(name, v, chord)
+        steps, iss = decode_seq(data)
+        seqs[n], seq_iss[n] = (seq_pack(steps), steps), +iss
         names.append((n, name))
         for x in w:
             warns.append(f"program {n:03d} {name!r}: {x}")
             conv_warn += 1
-    count = write_header(a.out, records, source)
+    count = write_header(a.out, records, source, {n: b for n, (b, _st) in seqs.items()})
+    carried = {n: st for n, (b, st) in seqs.items() if st}
+    allst = [x for st in carried.values() for x in st]
+    lens = sorted(len(st) for st in carried.values())
+    amb = {n: i for n, i in seq_iss.items() if i}
+    seq_rep = [f"Sequences: {len(carried)} of {len(progs)} programs carry one,"
+               f" {sum(len(seqs[n][0]) for n in carried)} B; steps {len(allst)}"
+               f" (notes {sum(1 for t, nt in allst if nt and not t)}, rests {sum(1 for _t, nt in allst if not nt)},"
+               f" ties {sum(1 for t, _nt in allst if t)});"
+               f" lengths {lens[0] if lens else 0}..{lens[-1] if lens else 0}"
+               f" (median {lens[len(lens) // 2] if lens else 0}); ambiguous programs: {len(amb)}",
+               "  notes per note step: " + ", ".join(f"{k}: {c}" for k, c in sorted(Counter(
+                   len(nt) for t, nt in allst if nt and not t).items())),
+               "  oddities (decode_seq; counts): " + (", ".join(f"{k} {c}" for k, c in sorted(
+                   sum(amb.values(), Counter()).items())) or "none")]
+    seq_rep += [f"  program {n:03d}: " + ", ".join(f"{k} {c}" for k, c in sorted(i.items())) for n, i in amb.items()]
     vl, anomalies = verify(progs)
     ob = [(n, nm) for n, nm in names if re.search(r"OB|[Oo]ber", nm)]
     rep += [f"ob6_import: {source}: {len(progs)} programs -> {a.out} ({count} records x {RECORD_SIZE} B ="
@@ -390,12 +513,14 @@ def main(argv=None):
     rep += ["Anomalies: " + ("none" if not anomalies else "")] + ["  " + x for x in anomalies] + [""]
     rep += [f"Warnings ({len(warns)}):"] + ["  " + w for w in warns] + [""]
     rep += [f"Names with 'OB' / 'Ober' ({len(ob)}):"] + [f"  {n:03d} {nm}" for n, nm in ob] + [""]
-    rep += ["Not carried: the sequencer (64 steps x 6 notes + velocities; no room in a program record), the LFO retrigger"
-            " byte, the editor / version bytes."]
+    rep += seq_rep + [""]
+    rep += ["Not carried: the LFO retrigger byte, the editor / version bytes, the sequencer state bytes 93..96, the"
+            " bytes 896..1023 (not the sequence)."]
     Path(a.report).parent.mkdir(parents=True, exist_ok=True)
     Path(a.report).write_text("\n".join(rep) + "\n")
     print(rep[0])
     print(f"  {len(LAYOUT)} bytes mapped; anomalies: {len(anomalies)}; warnings: {len(warns)}; report: {a.report}")
+    print("  " + seq_rep[0])
     return 0
 
 
