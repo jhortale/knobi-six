@@ -1,10 +1,11 @@
-# KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) on every push to phase1 and on demand; uploads the package, map and
-# disassembly. (release.yml publishes tagged releases.) Toolchain and SDK as in release.yml.
+# KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) + the second core in fm1-emu (cpu1-emu job, KNOBI_CPU1=1,
+# never the default) on every push to phase1 or phase2 and on demand; uploads the package, map and disassembly. (release.yml
+# publishes tagged releases.) Toolchain and SDK as in release.yml.
 name: build
 
 on:
   push:
-    branches: [phase1]
+    branches: [phase1, phase2]
   workflow_dispatch:
 
 jobs:
@@ -69,7 +70,8 @@ jobs:
 
   # The CPU gate (Task 11, docs/MEASUREMENTS.md): cycles per 256-frame block of the synth, built with the JieLi clang
   # at the app's flags, run in joakimeriksson/fm1-emu (MIT, pinned) patched to count per-pc costs in two cycle models
-  # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale). Builds and emulates only.
+  # (tests/cpu_emu/, after jhortale/smk37-analog spike/device-link spike/cpu by João Hortale), and the dual-core split
+  # per core (harness DUAL=1, Phase 2 Task 3). Builds and emulates only.
   fm1-emu:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -102,4 +104,102 @@ jobs:
             build/emu/*.cost
             build/emu/*.log
             build/emu/*.nm
+          if-no-files-found: warn
+
+  # The second core (Phase 2 Task 2, docs/MEASUREMENTS.md "Dual core"): the default build has no CPU1 code (build.py
+  # says so); the KNOBI_CPU1=1 build (hal/fm1_cpu1.h, from felucca-bsp) and its test hooks booted in fm1-emu (MIT,
+  # pinned, dual core): start + ping, nostart, hang, flaky core 1; Task 3: the voices on two cores bit-exact with one,
+  # a hung voice job, WRITE + autosave with DUAL CORE on (tests/cpu1_emu/); Task 4: the CPU1 probe package (its own
+  # artifact, knobi-six-cpu1probe) and its image in the emulator, plain and with a flaky core 1. Builds and emulates only.
+  cpu1-emu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FM1_EMU_SHA: 60645a58d6cd1597ed565a3f00e4981964623232
+      CPU1_BASE: e800d7e                         # phase2 before the CPU1 HAL: the loader must stay byte for byte this
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python packages
+        run: python3 -m pip install --break-system-packages Pillow || sudo apt-get install -y python3-pil
+
+      - name: JieLi toolchain (pkgman.jieliapp.com)
+        run: sh tools/get_toolchain.sh
+
+      - name: JieLi AC79 SDK
+        run: |
+          for i in 1 2 3; do
+            git clone --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
+                https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK && break
+            rm -rf ~/fw-AC79_AIoT_SDK
+            sleep 20
+          done
+          test -d ~/fw-AC79_AIoT_SDK
+
+      - name: fm1-emu (pinned)
+        run: |
+          git clone --filter=blob:none https://github.com/joakimeriksson/fm1-emu.git ~/fm1-emu
+          cd ~/fm1-emu && git checkout -q "$FM1_EMU_SHA"
+          CARGO_PROFILE_RELEASE_LTO=false cargo build --release -p fm1-emu 2>&1 | tail -3
+
+      # The default build carries no CPU1 code, and the loader (which holds CPU1 only when KNOBI_CPU1=1) is byte for
+      # byte the one from before the CPU1 HAL. The app and package are not compared: every later feature changes them.
+      - name: Default build (no CPU1) has no CPU1 code; loader = the loader before the HAL, byte for byte
+        run: |
+          ./build.sh | tee build-default.log
+          grep -q 'ok    CPU1: absent' build-default.log
+          git worktree add -q /tmp/cpu1-base "$CPU1_BASE"
+          (cd /tmp/cpu1-base && ./build.sh > /tmp/cpu1-base.log)
+          cmp build/loader/ota.bin /tmp/cpu1-base/build/loader/ota.bin
+          {
+            echo '### Default build: CPU1 absent; loader vs the loader before the CPU1 HAL ('"$CPU1_BASE"')'; echo '```'
+            grep -E 'ok   |app  ' build-default.log
+            sha256sum build/loader/ota.bin /tmp/cpu1-base/build/loader/ota.bin
+            echo 'CPU1: absent; loader/ota.bin: identical'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Task 4: the CPU1 probe for the first device run (docs/SMOKE_TEST.md "CPU1 probe"): its own artifact, never the
+      # default package (the firmware job's knobi-six-pro) and never a release (build.py refuses --release with it)
+      - name: CPU1 probe package (--probe-cpu1, knobi-six-cpu1probe.fwsc)
+        run: |
+          if ./build.sh --probe-cpu1 --release 9.9 > refuse.log 2>&1; then echo "--release --probe-cpu1 was accepted"; exit 1; fi
+          grep -q 'a probe is never a release' refuse.log || { cat refuse.log; echo "refused, but not for being a probe"; exit 1; }
+          ./build.sh --probe-cpu1 | tee build-probe.log
+          mkdir -p build/probe
+          cp build/knobi-six-cpu1probe.fwsc build/app.map build/app.dis build/probe/
+          {
+            echo '### CPU1 probe package (separate artifact knobi-six-cpu1probe; never the default or a release)'; echo '```'
+            grep -E 'ok   |app  |package' build-probe.log
+            ls -l build/probe/knobi-six-cpu1probe.fwsc; sha256sum build/probe/knobi-six-cpu1probe.fwsc
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knobi-six-cpu1probe
+          path: |
+            build/probe/knobi-six-cpu1probe.fwsc
+            build/probe/app.map
+            build/probe/app.dis
+          if-no-files-found: error
+
+      - name: KNOBI_CPU1=1 in fm1-emu (plain, start, nostart, hang, flaky, reset, dual, dualfail, dualmid, write, probe, probeflaky, probemis)
+        run: |
+          bash tests/cpu1_emu/run.sh ~/fm1-emu/target/release/fm1-emu build/cpu1emu
+          { cat build/cpu1emu/summary.md; echo; echo '```'; cat build/cpu1emu/plain.checks; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: knobi-six-cpu1-emu
+          path: |
+            build/cpu1emu/summary.md
+            build/cpu1emu/*.log
+            build/cpu1emu/*.checks
+            build/cpu1emu/*.map
+            build/cpu1emu/probe_screen.png
+            build/cpu1emu/probemis_screen.png
           if-no-files-found: warn

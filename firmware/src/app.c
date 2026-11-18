@@ -3,8 +3,9 @@
  * below does the rest: updates, the USB rescue, MIDI, USB audio, the keys, pads, knobs, faders, wheels, LEDs, the
  * screen, flash).
  *
- *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global; the notes go out
- *              over USB-MIDI (MIDI CH); LOCAL OFF: MIDI only
+ *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global (ARP ON: the
+ *              arpeggiator, synth/arp.h); the notes go out over USB-MIDI (MIDI CH; ARP ON with PARAM TX: the arp's
+ *              notes instead, ui/midi_map.c); LOCAL OFF: MIDI only
  *   OCTAVE-/+  the octave, -2..+2 (kept in flash with the globals)
  *   K1         the volume (platform.c)
  *   K2..K8, faders, pads, the other buttons: ui/controls.c (the map: docs/CONTROLS.md): the screen's knobs, the
@@ -12,7 +13,8 @@
  *   pitch      the wheel bends +-BEND RANGE (the program's) at its ends (plus MIDI pitch bend)
  *   mod wheel  0..127: adds LFO depth (the higher of it and MIDI CC 1)
  *   buttons    lit while held
- *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change
+ *   MIDI in    ui/midi_map.c (docs/MIDI.md): notes, pressure, bend, CCs (own map), bank select (CC 32), program change,
+ *              MIDI clock (the global MIDI CLOCK; synth/clock.h); clock out: clock_out below
  *   programs   params/store_prog.c: 500 in the flash slots (bank / tens / ones), WRITE (fade out, save, fade in),
  *              MANUAL; the globals (params/globals.c) and the last program in blobs 0 / 1 (A/B), saved after
  *              3 s with nothing played
@@ -46,17 +48,36 @@ static void app_idle(void);
 #include "synth/env.c"
 #include "synth/mod.c"
 #include "synth/voice.c"
+#if KNOBI_CPU1                                  /* the second core (engine.c eng_split; DUAL CORE global, default off) */
+struct synth;
+static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
+#define SYNTH_SPLIT(s, bus, n) eng_split((s), (bus), (n))
+#define SYNTH_VOICE_ALIGN __attribute__((aligned(32)))   /* each voice on cache lines of its own (engine.c) */
+#endif
 #include "synth/voices.c"
 #include "engine.c"
+#if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
+#include "cpu1_probe.c"
+#endif
 #include "ui/controls.c"                        /* the panel: screens' bindings, pot modes, pads (after engine.c) */
 #include "ui/midi_map.c"                        /* MIDI in and the CC map */
 #include "ui/panel_gfx.c"                       /* the panel's drawing parts: knobs, 7-segment digits, wood... */
 #include "ui/screens.c"                         /* the screens (after controls.c: they show its bindings) */
 
 static volatile uint8_t app_mono;               /* the STEREO global = MONO: both sides the sum (main loop sets it) */
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+static void dual_test_audio(int32_t *out, uint32_t n);   /* (fm1-emu cases, tests/cpu1_emu/dual_hook.c) */
+#endif
 static void app_audio(int32_t *out, uint32_t n)
 {
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+    dual_test_audio(out, n);
+#else
     eng_render(out, n);                         /* the queued events, then n frames added into out (WRITE's fade) */
+#if KNOBI_CPU1_PROBE
+    c1probe_audio();                            /* the probe's checks on CPU1 (nothing into out) */
+#endif
+#endif
     if (app_mono)
         for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
 }
@@ -119,15 +140,48 @@ static void app_idle(void)
     if (idle_ok) midi_in();
 }
 
+/* MIDI clock out (global MIDI CLOCK = OUT; synth/clock.h clock_out_poll): 0xFA with tick 0's 0xF8 when OUT is chosen
+ * (the clock starts on step 0 then) and again on every restart, one 0xF8 for each tick the clock enters, 0xFC when OUT
+ * is left. From the main loop: within a pass of the tick (a few ms); the engine's words read as one consistent set */
+static clk_out_t clk_out;
+static uint32_t clk_out_fa, clk_out_f8, clk_out_fc;   /* (sent so far: host probes) */
+static void clock_out(void)
+{
+    uint8_t b[3u + CLOCK_OUT_OWED];
+    uint32_t st, st0, tk, sc, n, k;
+    int ap;
+    do {
+        st = eng_clk_starts;
+        __asm__ volatile("" ::: "memory");
+        st0 = eng_clk_start_ticks, tk = eng_clk_ticks, ap = eng_clk_mode;
+        __asm__ volatile("" ::: "memory");
+        sc = eng_clk_starts;
+    } while (sc != st);
+    n = clock_out_poll(&clk_out, ctl_glob[G_MIDI_CLOCK], ap, st, st0, tk, b, sizeof b);
+    for (k = 0; k < n; k++) {
+        midi_send(b[k], 0, 0);
+        clk_out_fa += b[k] == 0xFAu, clk_out_f8 += b[k] == 0xF8u, clk_out_fc += b[k] == 0xFCu;
+    }
+}
+
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+#include "../../tests/cpu1_emu/dual_hook.c"     /* (fm1-emu cases 6..8; never in a real build) */
+#endif
+
+static uint32_t keys_tx_on, keys_tx_off;       /* the keys' own note-ons / offs sent as MIDI (host probes) */
+
 /* ---- the main loop */
 #define KEY0 53u                                /* the note of F3, key 5 of the keybed, at octave 0 */
 static void app_main(void)
 {
     uint8_t key_note[FM1_NKEY] = {0};           /* the note each key started (0: none) */
+    uint8_t key_out[FM1_NKEY] = {0};            /* its note-on went out as MIDI (the arp's notes may go instead) */
+    uint8_t key_vel[FM1_NKEY] = {0};            /* its velocity (a note-on sent late, keys_tx_sync) */
     uint32_t prev = 0, k, t_change = 0, dirty = 0, t_saved = 0;
     globals_t saved, now, last;
     smk_pw_t wheel = {0};
     eng_init();                                 /* the synth with the init program; app_audio renders from now on */
+    clock_out_init(&clk_out);
     controls_init();                            /* the pads are the app's (events), the faders' positions now */
     globals_load(&set);                         /* (nothing saved or broken: the defaults) */
     for (k = 0; k < G_COUNT; k++) ctl_glob[k] = set.v[k];
@@ -142,8 +196,30 @@ static void app_main(void)
         uint32_t keys, down, up, b, base = (uint32_t)((int32_t)KEY0 + 12 * set.oct), ch, vc = (uint32_t)ctl_glob[G_VEL_CURVE];
         int32_t e;
         platform_poll();
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST >= 6
+        dual_test_main(&screen);
+#endif
         controls_poll(0, &eng_edit, &screen);   /* encoders K2..K8, faders, pads, buttons: through the queue */
         ch = controls_tx_ch();
+        ctl_arp_out();                          /* the arp's notes out (PARAM TX on, LOCAL ON). Before the keys' sync
+                                                 * below (final review 4): an arp note-on still in the ring goes out
+                                                 * first, so a key that now goes out raw takes it over (ctl_arp_take)
+                                                 * instead of sending its own on, the arp's on after it and the arp's
+                                                 * off later cutting the held key on the receiver */
+        {                                       /* the keys held, as the receiver sees them: whether their notes go out
+                                                 * changed (ARP ON / PARAM TX / LOCAL, ui/midi_map.c ctl_keys_out)?
+                                                 * now feeding the local arp: their note-offs; no more: their note-ons,
+                                                 * so a receiver never keeps a chord under the arp nor misses a note
+                                                 * the synth plays */
+            uint8_t ko = (uint8_t)ctl_keys_out();
+            for (k = 0; k < FM1_NKEY; k++)
+                if (key_note[k] && key_out[k] != ko) {
+                    if (ko && ctl_arp_take(key_note[k], ch)) {}   /* (the arp's note on there: the key's now) */
+                    else if (ko) midi_send(0x90u | ch, key_note[k], key_vel[k]), keys_tx_on++;
+                    else midi_send(0x80u | ch, key_note[k], 0), keys_tx_off++;
+                    key_out[k] = ko;
+                }
+        }
 
         keys = fm1_in.notes;                    /* bit n: keybed key F3 + n (n = 0..26), the middle of the keybed */
         down = keys & ~prev;
@@ -155,9 +231,14 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + k);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);    /* (chord memory capture while CHORD is held) */
-                midi_send(0x90u | ch, key_note[key], vel);
+                key_vel[key] = (uint8_t)vel;
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
             }
-            if (up >> k & 1u && key_note[key]) { stop(key_note[key]); midi_send(0x80u | ch, key_note[key], 0); key_note[key] = 0; }
+            if (up >> k & 1u && key_note[key]) {
+                stop(key_note[key]);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
+                key_note[key] = 0, key_out[key] = 0;
+            }
         }
         while ((e = smk_extkey_take()) >= 0) {  /* the keys left and right of those 27: key << 8 | velocity (0 = up) */
             uint32_t key = (uint32_t)e >> 8, vel = (uint32_t)glob_vel_curve((int)vc, (int)((uint32_t)e & 0x7Fu));
@@ -166,8 +247,13 @@ static void app_main(void)
                 key_note[key] = (uint8_t)(base + key - SMK_KEY_F3);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);
-                midi_send(0x90u | ch, key_note[key], vel);
-            } else if (key_note[key]) { stop(key_note[key]); midi_send(0x80u | ch, key_note[key], 0); key_note[key] = 0; }
+                key_vel[key] = (uint8_t)vel;
+                if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
+            } else if (key_note[key]) {
+                stop(key_note[key]);
+                if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
+                key_note[key] = 0, key_out[key] = 0;
+            }
         }
         {                                       /* the wheels: queued only when the value changes */
             int32_t bd = smk_pw_bend(&wheel, fm1_in.wheel[0], fm1_ms), mw = mod_wheel(fm1_in.wheel[1]);   /* 1/4096 semitone, +-2 at the ends */
@@ -179,11 +265,15 @@ static void app_main(void)
         if (b & (1u << BTN_OCT_DOWN) && set.oct > -2) set.oct--;
         if (b & (1u << BTN_OCT_UP) && set.oct < 2) set.oct++;
         app_mono = (uint8_t)(ctl_glob[G_STEREO] != 0);
+#if KNOBI_CPU1
+        eng_dual = (uint8_t)(ctl_glob[G_DUAL] != 0);
+#endif
 #ifdef DINGHY_HOST
         if ((e = fm1_enc_take(0)) != 0) enc_pos[0] += e;   /* (K1: no MASTER on the host) */
 #endif
 
         midi_in();
+        clock_out();
 
         for (k = 0; k < 18u; k++)               /* a button lit while it is held */
             fm1_led_key(k, fm1_in.buttons >> k & 1u);
@@ -234,7 +324,33 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
     }
     else if (!strcmp(name, "voices")) *got = eng_active();             /* voices sounding (releases included) */
     else if (!strcmp(name, "enc")) *got = (int)enc_pos[a0 & 7u];       /* enc K: encoder K's position (0 = K1) */
-    else if (!strcmp(name, "param")) *got = a0 < P_COUNT_PHASE1 ? eng_edit.v[a0] : -1;   /* param ID: its value */
+    else if (!strcmp(name, "param")) *got = P_IS_LIVE(a0) ? eng_edit.v[a0] : -1;   /* param ID: its value (a live id) */
+    else if (!strcmp(name, "bpm10")) *got = eng_clk_bpm10;             /* the clock's tempo followed, BPM x 10 */
+    else if (!strcmp(name, "clkrun")) *got = eng_clk_run;              /* the clock runs (an external one: arriving) */
+    else if (!strcmp(name, "clkticks")) *got = (int)eng_clk_ticks;     /* ticks counted (24 a quarter) */
+    else if (!strcmp(name, "clksteps")) *got = (int)eng_clk.steps;     /* steps since the clock's start */
+    else if (!strcmp(name, "clkbpm")) *got = eng_clk.bpm;              /* the clock's internal BPM (the program's) */
+    else if (!strcmp(name, "clkdiv")) *got = eng_clk.div;              /* its division */
+    else if (!strcmp(name, "clkmode")) *got = eng_clk.mode;            /* its mode (the MIDI CLOCK global, applied) */
+    else if (!strcmp(name, "lfoinc")) *got = (int)eng_synth.lfo.inc;   /* the LFO's increment, Q32 cycles a frame */
+    else if (!strcmp(name, "clkfa")) *got = (int)clk_out_fa;           /* MIDI clock out: 0xFA sent so far */
+    else if (!strcmp(name, "clkf8")) *got = (int)clk_out_f8;           /* 0xF8 sent so far */
+    else if (!strcmp(name, "clkfc")) *got = (int)clk_out_fc;           /* 0xFC sent so far */
+    else if (!strcmp(name, "arpnote")) *got = eng_arp.note;            /* the arp's note sounding (its gate), -1 none */
+    else if (!strcmp(name, "arpn")) *got = eng_arp.n;                  /* keys in the arp's pattern (held, latched) */
+    else if (!strcmp(name, "arpkey")) *got = a0 < eng_arp.n ? eng_arp.key[a0] : -1;   /* arpkey I: its key I (played
+                                                                          order) */
+    else if (!strcmp(name, "arpsteps")) *got = (int)eng_arp.steps;     /* arp notes played so far */
+    else if (!strcmp(name, "arpout")) *got = (int)ctl_arp_outs;        /* arp notes sent as MIDI so far */
+    else if (!strcmp(name, "arpoff")) *got = (int)ctl_arp_offs;        /* arp note-offs sent so far */
+    else if (!strcmp(name, "arpoffch")) *got = ctl_arp_offch;          /* the channel of the last one, 0..15 */
+    else if (!strcmp(name, "keyon")) *got = (int)keys_tx_on;           /* the keys' own note-ons sent as MIDI so far */
+    else if (!strcmp(name, "keyoff")) *got = (int)keys_tx_off;         /* their note-offs sent so far */
+    else if (!strcmp(name, "keyed")) {                                 /* voices with a key down or latched */
+        uint32_t v;
+        *got = 0;
+        for (v = 0; v < NVOICE; v++) *got += eng_synth.voice[v].busy && (eng_synth.voice[v].key || eng_synth.voice[v].latched);
+    }
     else if (!strcmp(name, "bend")) *got = eng_last_bend;              /* the bend sent, 0..16383 */
     else if (!strcmp(name, "wheel")) *got = eng_last_wheel;            /* the mod wheel sent, 0..127 */
     else if (!strcmp(name, "screen")) *got = screen;                   /* the screen, enum screen_id (ui/controls.h) */

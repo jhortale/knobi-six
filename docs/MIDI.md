@@ -1,14 +1,14 @@
 # KNOBI-SIX MIDI
 
 USB MIDI. The code: `firmware/src/ui/midi_map.c`. Globals (GLOBE screen, see [CONTROLS.md](CONTROLS.md)):
-**MIDI CH** ALL (default) or 1..16, **PARAM TX** OFF / CC (default CC), **PARAM RX** OFF / CC (default CC). NRPN and
-SysEx come later.
+**MIDI CH** ALL (default) or 1..16, **PARAM TX** OFF / CC (default CC), **PARAM RX** OFF / CC (default CC); **MIDI
+CLOCK** (Arp + Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN and SysEx come later.
 
 ## Received (on MIDI CH; ALL = every channel)
 
 | Message | Does |
 | --- | --- |
-| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured |
+| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed |
 | channel pressure | aftertouch; the synth gets the higher of it and the bottom pads' pressure |
 | pitch bend | added to the pitch wheel's bend (±BEND RANGE at the ends) |
 | CC 1 | mod wheel (the higher of it and the panel's wheel); only adds LFO depth |
@@ -23,6 +23,27 @@ SysEx come later.
 | CC 4 | foot controller: ignored in phase 1 (the reference lists it as received but not what it does) |
 | the CCs below | with PARAM RX = CC: sets the parameter (0..127 over its range; bipolar: 64 = 0). Not sent back |
 
+### MIDI clock in (any channel setting; the global MIDI CLOCK)
+
+The global **MIDI CLOCK** (Arp + Clock screen, pad 3; [CONTROLS.md](CONTROLS.md)) decides. OFF and OUT ignore incoming clock.
+IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
+
+| Byte | IN / THRU | IN NO S/S |
+| --- | --- | --- |
+| 0xF8 clock (24 a quarter note) | moves the clock one tick; the tempo is measured over the last beat (24 ticks), so it locks within a beat or two | the same; the first tick after a silence starts from the downbeat |
+| 0xFA start | the next 0xF8 is the downbeat: step 0 there | ignored |
+| 0xFB continue | runs on from where it stopped | ignored |
+| 0xFC stop | stopped: no steps (the arpeggiator waits) | ignored |
+
+Under IN and THRU the clock **waits for a start**: ticks alone give the tempo but no steps until a 0xFA (the next 0xF8
+is the downbeat) or a 0xFB arrives, so the arpeggiator stays silent until the sender's transport starts (the screen
+says MIDI CLOCK STOPPED). IN NO S/S has no such wait: it runs from the first tick after a silence.
+
+No 0xF8 for 0.25 s (more than three ticks at 30 BPM, the slowest tempo) and the clock is not running: per the OB-6,
+with the clock set to follow and none present, the arpeggiator does not run. Ticks again: it runs on (unless stopped).
+Steps fall on the ticks received (the audio takes the queue at each 5.8 ms block: within one block). THRU sends every
+clock byte received straight on. The program's BPM is kept (and TAP still sets it) but not used while following.
+
 ### The autosave and MIDI notes
 
 The globals, the octave and the program last loaded are saved once nothing has been played for 3 s (an erase stalls
@@ -30,11 +51,38 @@ the sound; [CONTROLS.md](CONTROLS.md)). A MIDI note on or off counts as playing 
 says: a sequencer or keyboard sending notes without a 3 s pause (on a channel this unit ignores, too) postpones the
 save indefinitely; it happens at the first 3 s of quiet. Nothing is lost meanwhile, short of a power cut.
 
+With **MIDI CLOCK = OUT** running, the autosave still happens at the first 3 s of quiet (the clock running is not
+playing). Its flash erase holds the interrupts off for about 50 ms (docs/RULES.md), so the 0xF8 stream pauses that
+long: ~2.4 ticks at 120 BPM. The clock itself runs in the audio interrupt, so it stops for the same time and goes on
+from where it was (no 0xFA, no burst of ticks): a slave stays in step with us, but both fall ~50 ms behind the wall
+clock, and the slave's tempo estimate sees one long tick gap (a hiccup; a DAW recording against our clock would show
+it). No code change for this; to avoid it, let the save happen before a take (3 s of quiet after changing a global,
+the octave or the program).
+
 ## Sent
 
-Keys: note on / off on MIDI CH (ALL = channel 1). With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
+Keys: note on / off on MIDI CH (ALL = channel 1). Arpeggiator: with LOCAL ON, ARP ON and PARAM TX = CC, the keys feed
+the arp and the notes it plays go out instead (note on with the key's velocity, note off at the end of its gate); the
+keys' own notes do not (a receiver would play the chord under the arp). Every arp note-on sent gets its note-off, even
+if PARAM TX or LOCAL is turned off meanwhile, and on the channel its note-on went out on, even if MIDI CH changed
+meanwhile. With PARAM TX = OFF the keys go out as played, the arp's notes stay home. With **LOCAL OFF** the keys never
+reach the synth or its arp: they go out as played, as ever (a DAW controller), whatever ARP ON and PARAM TX say. The arp
+then plays what MIDI in feeds it, here only: its notes are not sent under LOCAL OFF, so a DAW that echoes our notes
+back (its MIDI thru, as a DAW controller needs) never feeds the arp its own notes (with a latch on, a loop that would
+sustain itself).
+Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
+note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
+on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off
+goes out when it is let go. A key's note-off goes out only if its note-on did. With PARAM TX = CC, an edit made on the panel (encoder, fader, pad)
 goes out as its CC on the same channel, only when the 7-bit value changes (a 0..255 parameter moving one step may stay
 on the same CC value). Edits received over MIDI are not echoed.
+
+MIDI clock, with the global MIDI CLOCK = OUT: when OUT is chosen the clock restarts on step 0 and 0xFA goes out with
+that downbeat's 0xF8 right after it (a receiver takes the first 0xF8 after 0xFA as its downbeat: its steps fall with
+ours, not a tick late); then 24 0xF8 a quarter note at the clock's BPM (sent from the main loop: within a few ms of
+their time); 0xFC when another setting is chosen. A new arp pattern never restarts the clock under OUT (whatever ARP
+BEAT SYNC says, it starts on the next step of the division), so no 0xFA goes out mid-song: a slaved DAW or drum
+machine never jumps back to its bar start on a chord. THRU: the clock bytes received, as they come. BPM and DIVISION have no CC (NRPN later).
 
 ## The CC map
 

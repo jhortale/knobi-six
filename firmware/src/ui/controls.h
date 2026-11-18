@@ -10,10 +10,10 @@
 #include "../synth/voices.h"
 #include "../params/globals.h"
 
-enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_XMOD, SCR_AT_MISC, SCR_PROGRAM, SCR_GLOBALS,
-                 SCR_COUNT };
+enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_XMOD, SCR_AT_MISC, SCR_CLOCK, SCR_PROGRAM,
+                 SCR_GLOBALS, SCR_COUNT };
 
-/* a binding: a param id (< P_COUNT_PHASE1), a global (B_GLOBAL, params/globals.h G_*), a program digit (B_PROG,
+/* a binding: a live param id (params.h P_IS_LIVE), a global (B_GLOBAL, params/globals.h G_*), a program digit (B_PROG,
  * encoders only), an action (B_ACT, top pads only) or B_NONE */
 #define B_NONE 0xFFFFu
 #define B_PROG(d) (0x2000u | (d))
@@ -22,9 +22,9 @@ enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_X
 #define B_IS_PROG(x) (((x) & 0xFF00u) == 0x2000u)
 #define B_IS_GLOBAL(x) (((x) & 0xFF00u) == 0x4000u)
 #define B_IS_ACT(x) (((x) & 0xFF00u) == 0x8000u)
-enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_ARP, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_COUNT };
-/* section back / on, the other row, HOLD, ARP (phase 2: does nothing yet), WRITE (arm / cancel), ENTER (commit the
- * armed WRITE), MANUAL (the live panel) */
+enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_TAP, ACT_COUNT };
+/* section back / on, the other row, HOLD, WRITE (arm / cancel), ENTER (commit the armed WRITE), MANUAL (the live
+ * panel), TAP (tap tempo: the program's BPM from the 4th tap; synth/clock.h). ARP ON is a param pad (P_ARP_ON) */
 enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
 /* a notice in the header (ctl_last_id = B_NOTICE, the value one of these): none, a broken stored program loaded as
  * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC") */
@@ -44,6 +44,7 @@ int32_t ctl_from7(uint16_t id, uint32_t x);         /* 0..127 -> the param's ran
 uint32_t ctl_to7(uint16_t id, int32_t v);           /* the inverse, 0..127 */
 int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast);   /* a param or global after det detents */
 int32_t ctl_pad_value(uint16_t id, int32_t cur);    /* a top pad pressed: a switch toggles, a select (or global) cycles */
+uint16_t ctl_enc_target(uint16_t bound, int fx_held);   /* what an encoder edits: FX held, DISTORTION; else bound */
 int32_t ctl_prog_digit(int32_t n, uint32_t d, int32_t det);   /* program n with digit d (PRG_*) turned det, clamped */
 int ctl_pad_at(const uint8_t *press);               /* the highest pressure of pads 8..15 */
 typedef struct { uint16_t id; int16_t last_v, anchor_v; uint8_t anchor_p, caught, mode; } ctl_fader_t;

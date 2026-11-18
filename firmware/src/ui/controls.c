@@ -8,18 +8,24 @@
  * anticlockwise one; a select steps one choice a detent. Nothing wraps. Faders are absolute: their move goes through
  * the global pot mode (ctl_fader_move). Top pads (0..7) act once per press (a switch toggles, a select cycles, an
  * action runs; a release, a held pad's pressure, do nothing); bottom pads (8..15) never switch: their highest pressure
- * is the aftertouch (with MIDI channel pressure: the higher of the two). */
+ * is the aftertouch (with MIDI channel pressure: the higher of the two). FX held: K2..K8 edit DISTORTION
+ * (ctl_enc_target). */
 #include "controls.h"
 #include "../params/store_prog.h"
 
 #define N B_NONE
 #define A(x) B_ACT(ACT_##x)
 #define G(x) B_GLOBAL(G_##x)
+#if KNOBI_CPU1
+#define CTL_PAD_DUAL G(DUAL)                    /* a KNOBI_CPU1 build: Globals pad 7 = DUAL CORE (engine.c) */
+#else
+#define CTL_PAD_DUAL N
+#endif
 const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_BOOT] = {{N, N, N, N, N, N, N}, {N, N, N, N}, {N, N, N, N, N, N, N, N}},
-    [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, N, N, N},
+    [SCR_PLAY] = {{P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT, P_DISTORTION, N, N},   /* K6: DISTORTION */
                   {P_FLT_FREQ, P_FLT_RESO, P_FLT_MODE, P_FLT_ENV_AMT},
-                  {P_VCO1_SYNC, P_UNISON_ON, A(ARP), A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
+                  {P_VCO1_SYNC, P_UNISON_ON, P_ARP_ON, A(HOLD), N, N, N, N}},   /* pad 0: the mockup's X-MOD slot is SYNC */
     [SCR_VCO] = {{P_VCO1_FREQ, P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_FREQ, P_VCO2_FINE, P_VCO2_SHAPE, P_VCO2_PW},
                  {P_VCO1_SHAPE, P_VCO1_PW, P_VCO2_SHAPE, P_VCO2_PW},
                  {A(PREV), A(NEXT), P_VCO1_SYNC, P_VCO2_LOWFREQ, P_VCO2_KEYBOARD, N, N, N}},
@@ -35,10 +41,12 @@ const binding_t BINDINGS[SCR_COUNT] = {
     [SCR_AT_MISC] = {{P_AT_AMT, P_DETUNE, P_PAN_SPREAD, P_BEND_RANGE, P_KEY_MODE, P_PRG_VOL, P_PORTA_RATE},  /* row 1: AT pads */
                      {P_AT_AMT, P_DETUNE, P_PORTA_RATE, P_PRG_VOL},
                      {A(PREV), A(NEXT), P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE}},
+    [SCR_CLOCK] = {{P_BPM, P_CLK_DIV, P_ARP_MODE, P_ARP_RANGE, N, N, N}, {N, N, N, N},   /* ARP + CLOCK */
+                   {A(PREV), A(NEXT), A(TAP), G(MIDI_CLOCK), G(ARP_SYNC), P_ARP_ON, P_ARP_HOLD, N}},
     [SCR_PROGRAM] = {{B_PROG(PRG_BANK), B_PROG(PRG_TENS), B_PROG(PRG_ONES), N, N, N, N}, {N, N, N, N},
                      {A(PREV), A(NEXT), A(WRITE), A(ENTER), A(MANUAL), N, N, N}},
     [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), G(TRANSPOSE), G(TUNE), G(VEL_CURVE)}, {N, N, N, N},
-                     {A(PREV), A(NEXT), G(LOCAL), G(STEREO), G(SUSTAIN), G(AT_CURVE), N, N}},
+                     {A(PREV), A(NEXT), G(LOCAL), G(STEREO), G(SUSTAIN), G(AT_CURVE), CTL_PAD_DUAL, N}},
 };
 const binding_t BINDINGS_ROW2[SCR_COUNT] = {
     [SCR_ENV] = {{P_LENV_A, P_LENV_D, P_LENV_S, P_LENV_R, P_LENV_AMT, N, N},           /* row 2: LOUDNESS */
@@ -55,9 +63,10 @@ const binding_t BINDINGS_ROW2[SCR_COUNT] = {
 #undef A
 #undef G
 const uint8_t SCR_ROWS[SCR_COUNT] = {[SCR_BOOT] = 1, [SCR_PLAY] = 1, [SCR_VCO] = 1, [SCR_MIX_FILTER] = 1, [SCR_ENV] = 2,
-                                     [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_PROGRAM] = 1, [SCR_GLOBALS] = 1};
+                                     [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_CLOCK] = 1, [SCR_PROGRAM] = 1,
+                                     [SCR_GLOBALS] = 1};
 const char *const SCR_NAME[SCR_COUNT] = {"KNOBI-SIX", "PLAY", "VCO 1 + 2", "MIX + FILTER", "ENVELOPES", "LFO + X-MOD",
-                                         "AT + MISC", "PROGRAM", "GLOBALS"};
+                                         "AT + MISC", "ARP + CLOCK", "PROGRAM", "GLOBALS"};
 static const char *const CTL_ROW_NAME[3][2] = {{"FILTER ENV", "LOUDNESS ENV"}, {"LFO", "X-MOD"}, {"AFTERTOUCH", "MISC"}};
 
 const binding_t *ctl_binding(int screen, int row)
@@ -75,7 +84,8 @@ const char *ctl_row_name(int screen, int row)
 /* ---- the pure parts */
 int32_t ctl_from7(uint16_t id, uint32_t x)
 {
-    const param_t *p = &PARAMS[id];
+    const param_t *p = param_get(id);
+    if (!p) return 0;
     if (x > 127u) x = 127u;
     if (p->bipolar) {                                  /* 0 -> min, 64 -> 0, 127 -> max, rounded */
         if (x >= 64u) return (int32_t)(((x - 64u) * (uint32_t)p->max + 31u) / 63u);
@@ -85,8 +95,9 @@ int32_t ctl_from7(uint16_t id, uint32_t x)
 }
 uint32_t ctl_to7(uint16_t id, int32_t v)
 {
-    const param_t *p = &PARAMS[id];
+    const param_t *p = param_get(id);
     uint32_t r;
+    if (!p) return 0;
     if (v < p->min) v = p->min;
     if (v > p->max) v = p->max;
     if (p->bipolar) {
@@ -107,22 +118,25 @@ int32_t ctl_enc_value(uint16_t id, int32_t cur, int32_t det, int fast)
         v = cur + det;
     } else {
         const param_t *p;
-        if (id >= P_COUNT_PHASE1) return cur;
-        p = &PARAMS[id];
+        if (!P_IS_LIVE(id)) return cur;
+        p = param_get(id);
         lo = p->min, hi = p->max;
         if (p->kind == PK_SWITCH) v = det > 0 ? 1 : det < 0 ? 0 : cur;
         else if (p->kind == PK_SELECT) v = cur + det;
-        else v = cur + det * ((hi - lo + 127) / 128) * (fast ? 4 : 1);
+        else v = cur + det * (id == P_BPM ? 1 : (hi - lo + 127) / 128) * (fast ? 4 : 1);   /* (BPM: 1 a detent) */
     }
     return v < lo ? lo : v > hi ? hi : v;
 }
+/* FX held (the OB-6's EFFECT held + MIX: reference 2.9, 4): every encoder K2..K8 edits DISTORTION, whatever the
+ * screen binds (the effects, and their MIX, are not there yet) */
+uint16_t ctl_enc_target(uint16_t bound, int fx_held) { return fx_held ? (uint16_t)P_DISTORTION : bound; }
 int32_t ctl_pad_value(uint16_t id, int32_t cur)
 {
     const param_t *p;
     if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT)
         return cur >= GLOB_MAX[id & 0xFFu] ? GLOB_MIN[id & 0xFFu] : cur + 1;
-    if (id >= P_COUNT_PHASE1) return cur;
-    p = &PARAMS[id];
+    if (!P_IS_LIVE(id)) return cur;
+    p = param_get(id);
     if (p->kind == PK_SWITCH) return cur ? 0 : 1;
     if (p->kind == PK_SELECT) return cur >= p->max ? p->min : cur + 1;
     return cur;
@@ -158,7 +172,8 @@ void ctl_fader_reset(ctl_fader_t *f) { f->id = B_NONE; f->caught = 0; }
 int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint32_t from, uint32_t to)
 {
     int32_t v, lo, hi;
-    if (id >= P_COUNT_PHASE1) return cur;
+    const param_t *pp = param_get(id);
+    if (!pp) return cur;
     if (from > 127u) from = 127u;
     if (to > 127u) to = 127u;
     if (f->id != id || f->mode != (uint8_t)mode || f->last_v != cur) {
@@ -174,8 +189,8 @@ int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint3
         v = f->caught ? ctl_from7(id, to) : cur;
     } else {
         int32_t p0 = f->anchor_p, v0 = f->anchor_v, p = (int32_t)to;
-        if (p > p0) v = v0 + (PARAMS[id].max - v0) * (p - p0) / (127 - p0);
-        else if (p < p0) v = v0 - (v0 - PARAMS[id].min) * (p0 - p) / p0;
+        if (p > p0) v = v0 + (pp->max - v0) * (p - p0) / (127 - p0);
+        else if (p < p0) v = v0 - (v0 - pp->min) * (p0 - p) / p0;
         else v = v0;
     }
     v = param_clamp(id, v);
@@ -186,7 +201,10 @@ int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint3
 #ifndef CONTROLS_PURE
 /* ---- the main loop's: state */
 #define CTL_BOOT_MS 1000u                              /* the boot screen, then Play (or at the first button) */
-static int8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1, 0, 0, 0, 1, 0, 0, 0};   /* (GLOB_DEF; app.c loads them) */
+static int8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0};   /* (GLOB_DEF; app.c loads them) */
+static clk_t ctl_tapclk;                               /* TAP's state (clock_tap; only its tap count is used here) */
+static uint32_t ctl_beat_seen, ctl_beat_ms;            /* TAP's LED: the clock's last beat, when it came */
+#define CTL_BEAT_MS 90u                                /* TAP lit this long on each beat */
 static uint8_t ctl_row[SCR_COUNT];
 static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY;
 static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel, ctl_midi_vol = 127;
@@ -230,7 +248,7 @@ static void ctl_set(program_t *edit, uint16_t id, int32_t v, int panel)   /* pan
         if (ctl_glob[g] == v) return;
         ctl_glob[g] = (int8_t)v;
     } else {
-        if (id >= P_COUNT_PHASE1) return;
+        if (!P_IS_LIVE(id)) return;
         c = param_clamp(id, v);
         if (c == edit->v[id] && c == eng_edit.v[id]) return;
         eng_param(id, c);                              /* the queue (kept and retried if it is full) */
@@ -247,7 +265,7 @@ static void ctl_goto(int *screen, int s)
     if (s < SCR_PLAY) s = SCR_PLAY;
     if (s > SCR_GLOBALS) s = SCR_GLOBALS;
     if (s == *screen) return;
-    if (s >= SCR_VCO && s <= SCR_AT_MISC) ctl_last_edit = s;
+    if (s >= SCR_VCO && s <= SCR_CLOCK) ctl_last_edit = s;
     if (s == SCR_GLOBALS) ctl_before_glob = *screen;
     *screen = s;
     for (unsigned k = 0; k < 4u; k++) ctl_fader_reset(&ctl_fad[k]);   /* the faders pick up afresh */
@@ -308,7 +326,7 @@ static void ctl_manual_press(program_t *edit)          /* MANUAL: the sound is t
     ctl_manual ^= 1u;
     if (!ctl_manual) return;
     for (unsigned k = 0; k < 4u; k++)
-        if (b->fader[k] < P_COUNT_PHASE1) ctl_set(edit, b->fader[k], ctl_from7(b->fader[k], ctl_fpos[k]), 1);
+        if (P_IS_LIVE(b->fader[k])) ctl_set(edit, b->fader[k], ctl_from7(b->fader[k], ctl_fpos[k]), 1);
 }
 static void ctl_write_press(int *screen);
 /* WRITE saves at once (spec, Our calls): the output fades out (10 ms, engine.c), the slot is saved as the base saves
@@ -356,7 +374,11 @@ static void ctl_action(int *screen, uint32_t a)
     else if (a == ACT_WRITE) ctl_write_press(screen);
     else if (a == ACT_ENTER) ctl_enter();
     else if (a == ACT_MANUAL) ctl_manual_press(&eng_edit);
-    /* ACT_ARP: the arpeggiator is phase 2 */
+    else if (a == ACT_TAP) {                           /* tap tempo: from the 4th tap the program's BPM (synth/clock.h) */
+        int bpm = clock_tap(&ctl_tapclk, fm1_ms);
+        if (bpm) ctl_set(&eng_edit, P_BPM, bpm, 1);
+        else ctl_last_id = B_ACT(ACT_TAP), ctl_last_v = ctl_tapclk.tap_n, ctl_edits++;   /* (the taps so far) */
+    }
 }
 static void ctl_write_press(int *screen)               /* WRITE (the pad, BT): arm (Program screen, the destination the
                                                         * current program) or cancel */
@@ -399,6 +421,15 @@ void controls_init(void)
     for (unsigned k = 0; k < 16u; k++) ctl_led[k] = ~0u;
 }
 
+/* TAP's light: on for CTL_BEAT_MS from each quarter note of the clock (engine.c eng_clk_beats), off while it does not
+ * run (an external clock absent or stopped) */
+static int ctl_tap_lit(void)
+{
+    uint32_t b = eng_clk_beats;
+    if (b != ctl_beat_seen) ctl_beat_seen = b, ctl_beat_ms = fm1_ms;
+    return eng_clk_run && fm1_ms - ctl_beat_ms < CTL_BEAT_MS;
+}
+
 static void ctl_leds(int screen, const program_t *edit)   /* top pads lit when on, bottom pads glow with pressure */
 {
     const binding_t *b = ctl_binding(screen, ctl_row[screen]);
@@ -406,12 +437,13 @@ static void ctl_leds(int screen, const program_t *edit)   /* top pads lit when o
     for (i = 0; i < 16u; i++) {
         if (i < 8u) {
             uint16_t x = b->pad_top[i];
-            if (x < P_COUNT_PHASE1) col = edit->v[x] != PARAMS[x].min ? 0xFF0000u : 0x180000u;   /* red / dim red */
+            if (P_IS_LIVE(x)) col = edit->v[x] != param_get(x)->min ? 0xFF0000u : 0x180000u;   /* red / dim red */
             else if (B_IS_GLOBAL(x)) col = ctl_glob[x & 0xFFu] != GLOB_MIN[x & 0xFFu] ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_HOLD)) col = ctl_hold ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_WRITE)) col = ctl_wr == 2 || (ctl_wr == 1 && fm1_ms >> 8 & 1u) ? 0xFF0000u : 0x180000u;   /* armed: blinks */
             else if (x == B_ACT(ACT_ENTER)) col = ctl_wr == 1 ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_MANUAL)) col = ctl_manual ? 0xFF0000u : 0x180000u;
+            else if (x == B_ACT(ACT_TAP)) col = ctl_tap_lit() ? 0xFF0000u : 0x180000u;          /* flashes on the beat */
             else if (B_IS_ACT(x)) col = 0x282828u;                                            /* dim white */
             else col = 0;
         } else {
@@ -467,11 +499,11 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     b = ctl_binding(*screen, ctl_row[*screen]);
     for (k = 1; k < 8u; k++)                           /* K2..K8 */
         if ((e = fm1_enc_take(k)) != 0) {
-            uint16_t id = b->enc[k - 1u];
+            uint16_t id = ctl_enc_target(b->enc[k - 1u], *screen != SCR_BOOT && (fm1_in.buttons >> BTN_FX & 1u));
             int fast = fm1_ms - ctl_enc_ms[k] < CTL_FAST_MS;
             ctl_enc_pos[k] += e;
             ctl_enc_ms[k] = fm1_ms;
-            if (id < P_COUNT_PHASE1) ctl_set(edit, id, ctl_enc_value(id, edit->v[id], e, fast), 1);
+            if (P_IS_LIVE(id)) ctl_set(edit, id, ctl_enc_value(id, edit->v[id], e, fast), 1);
             else if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) ctl_set(edit, id, ctl_enc_value(id, ctl_glob[id & 0xFFu], e, 0), 1);
             else if (B_IS_PROG(id)) ctl_prog_turn(id & 0xFFu, e);
         }
@@ -479,7 +511,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         uint32_t pos = fm1_in.fader[k];
         if (pos != ctl_fpos[k]) {
             uint16_t id = b->fader[k];
-            if (id < P_COUNT_PHASE1)
+            if (P_IS_LIVE(id))
                 ctl_set(edit, id, ctl_fader_move(&ctl_fad[k], ctl_glob[G_POT_MODE], id, edit->v[id], ctl_fpos[k], pos), 1);
             ctl_fpos[k] = (uint8_t)pos;
         }
@@ -490,7 +522,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         if (pad >= 8u || !vel) continue;
         b = ctl_binding(*screen, ctl_row[*screen]);    /* (a pad may have changed the screen) */
         x = b->pad_top[pad];
-        if (x < P_COUNT_PHASE1) ctl_set(edit, x, ctl_pad_value(x, edit->v[x]), 1);
+        if (P_IS_LIVE(x)) ctl_set(edit, x, ctl_pad_value(x, edit->v[x]), 1);
         else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) ctl_set(edit, x, ctl_pad_value(x, ctl_glob[x & 0xFFu]), 1);
         else if (B_IS_ACT(x)) ctl_action(screen, x & 0xFFu);
     }
@@ -507,6 +539,8 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     eng_tune(ctl_glob[G_TRANSPOSE] * 100 + ctl_glob[G_TUNE]);   /* the master transpose + tune (sent when it changes) */
     eng_hold(ctl_hold || ctl_sustain);
     eng_volume(ctl_midi_vol);                          /* MIDI CC 7 (sent every pass: a refused one is retried) */
+    eng_clock_mode(ctl_glob[G_MIDI_CLOCK]);            /* the clock's mode (sent when it changes) */
+    eng_arp_sync(ctl_glob[G_ARP_SYNC]);                /* ARP BEAT SYNC (sent when it changes) */
     ctl_leds(*screen, edit);
 }
 #endif

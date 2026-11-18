@@ -4,10 +4,17 @@
  * (the tables and the curves only). */
 #include "globals.h"
 
-/*                                   CH  POT TX RX  TRANSP TUNE VEL LOCAL STEREO SUS AT */
-const int8_t GLOB_MIN[G_COUNT] = {   0,  0,  0, 0,   -12,  -50,  0,  0,    0,     0,  0};
-const int8_t GLOB_MAX[G_COUNT] = {  16,  2,  1, 1,    12,   50,  7,  1,    1,     1,  3};
-const int8_t GLOB_DEF[G_COUNT] = {   0,  POT_RELATIVE, 1, 1, 0, 0, 0, 1,  0,     0,  0};
+#if KNOBI_CPU1
+#define GLOB_DUAL_MIN , 0                                 /* DUAL CORE: OFF / ON, OFF by default */
+#define GLOB_DUAL_MAX , 1
+#else
+#define GLOB_DUAL_MIN
+#define GLOB_DUAL_MAX
+#endif
+/*                                   CH  POT TX RX  TRANSP TUNE VEL LOCAL STEREO SUS AT  CLOCK ARPSYNC (DUAL) */
+const int8_t GLOB_MIN[G_COUNT] = {   0,  0,  0, 0,   -12,  -50,  0,  0,    0,     0,  0,   0,    0 GLOB_DUAL_MIN};
+const int8_t GLOB_MAX[G_COUNT] = {  16,  2,  1, 1,    12,   50,  7,  1,    1,     1,  3,   4,    1 GLOB_DUAL_MAX};
+const int8_t GLOB_DEF[G_COUNT] = {   0,  POT_RELATIVE, 1, 1, 0, 0, 0, 1,  0,     0,  0,   0,    0 GLOB_DUAL_MIN};
 
 #ifndef GLOBALS_PURE
 #include "store_prog.h"
@@ -22,7 +29,7 @@ void globals_pack(const globals_t *g, uint8_t *b)
     unsigned o = 0, i;
     uint16_t c;
     b[o++] = GLOBALS_VERSION;
-    for (i = 0; i < G_COUNT; i++) b[o++] = (uint8_t)g->v[i];
+    for (i = 0; i < G_COUNT_V2; i++) b[o++] = (uint8_t)g->v[i];
     b[o++] = (uint8_t)g->oct;
     b[o++] = (uint8_t)(g->last_prog & 0xFFu);
     b[o++] = (uint8_t)(g->last_prog >> 8);
@@ -32,14 +39,18 @@ void globals_pack(const globals_t *g, uint8_t *b)
     b[o++] = (uint8_t)(c >> 8);
 }
 
-static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record */
+static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record (version 2, or 1: the rest defaults) */
 {
     uint8_t b[GLOBALS_BYTES];
-    unsigned o = 1, i;
-    if (blob_load(blob, b, sizeof b) || b[0] != GLOBALS_VERSION ||
-        program_crc16(b, GLOBALS_BYTES - 2u) != (uint16_t)(b[GLOBALS_BYTES - 2u] | b[GLOBALS_BYTES - 1u] << 8))
+    unsigned o = 1, i, n = GLOBALS_BYTES, nv = G_COUNT_V2;
+    if (blob_load(blob, b, GLOBALS_BYTES) == 0) {
+        if (b[0] != GLOBALS_VERSION) return -1;
+    } else if (blob_load(blob, b, GLOBALS_BYTES_V1) == 0 && b[0] == 1u) n = GLOBALS_BYTES_V1, nv = G_COUNT_V1;
+    else return -1;
+    if (program_crc16(b, n - 2u) != (uint16_t)(b[n - 2u] | b[n - 1u] << 8))
         return -1;
-    for (i = 0; i < G_COUNT; i++) {
+    for (i = 0; i < G_COUNT; i++) t->v[i] = GLOB_DEF[i];   /* (what a version-1 record lacks) */
+    for (i = 0; i < nv; i++) {
         t->v[i] = (int8_t)b[o++];
         if (t->v[i] < GLOB_MIN[i] || t->v[i] > GLOB_MAX[i]) return -1;
     }
@@ -50,6 +61,28 @@ static int globals_read(uint32_t blob, globals_t *t)   /* 0: a good record */
     return t->oct < -2 || t->oct > 2 || t->last_prog >= PROG_COUNT ? -1 : 0;
 }
 static uint8_t globals_at;                            /* the blob (0 / 1 after GLOBALS_BLOB) the newest record is in */
+#if KNOBI_CPU1
+/* DUAL CORE (a KNOBI_CPU1 build only): its own blob, GLOBALS_DUAL_BLOB, never touched by a default build, so the
+ * version-1 record in blobs 0 / 1 stays byte for byte a default build's and the builds can be swapped both ways.
+ * Record: "DUAL" (LE), the value, its CRC16. Missing, broken or out of range: OFF */
+static int8_t globals_dual_saved = -1;                /* the value in the blob (-1: not known yet) */
+static int globals_dual_read(void)
+{
+    uint8_t b[GLOBALS_DUAL_BYTES];
+    if (blob_load(GLOBALS_DUAL_BLOB, b, sizeof b) || b[0] != 'D' || b[1] != 'U' || b[2] != 'A' || b[3] != 'L' ||
+        program_crc16(b, 5u) != (uint16_t)(b[5] | b[6] << 8) || (int8_t)b[4] < GLOB_MIN[G_DUAL] ||
+        (int8_t)b[4] > GLOB_MAX[G_DUAL])
+        return 0;
+    return (int8_t)b[4];
+}
+static int globals_dual_save(int v)
+{
+    uint8_t b[GLOBALS_DUAL_BYTES] = {'D', 'U', 'A', 'L', (uint8_t)v, 0, 0};
+    uint16_t c = program_crc16(b, 5u);
+    b[5] = (uint8_t)(c & 0xFFu), b[6] = (uint8_t)(c >> 8);
+    return blob_save(GLOBALS_DUAL_BLOB, b, sizeof b);
+}
+#endif
 void globals_load(globals_t *g)
 {
     globals_t a, b;
@@ -58,6 +91,13 @@ void globals_load(globals_t *g)
     globals_at = 1;                                   /* (nothing good: the first save goes to blob 0) */
     if (ga && (!gb || (int32_t)(a.seq - b.seq) > 0)) *g = a, globals_at = 0;
     else if (gb) *g = b, globals_at = 1;
+#if KNOBI_CPU1
+    g->v[G_DUAL] = (int8_t)(globals_dual_saved = (int8_t)globals_dual_read());
+#if KNOBI_CPU1_PROBE
+    g->v[G_DUAL] = 0;                                 /* the CPU1 probe: DUAL CORE OFF at every start, whatever was saved
+                                                       * (the player turns it on once the probe's checks pass) */
+#endif
+#endif
 }
 
 int globals_save(globals_t *g)
@@ -65,6 +105,12 @@ int globals_save(globals_t *g)
     uint8_t b[GLOBALS_BYTES];
     globals_t t = *g;
     t.seq = g->seq + 1u;
+#if KNOBI_CPU1
+    if (g->v[G_DUAL] != globals_dual_saved) {         /* (first: a failure changes nothing, the caller tries again) */
+        if (globals_dual_save(g->v[G_DUAL])) return -1;
+        globals_dual_saved = g->v[G_DUAL];
+    }
+#endif
     globals_pack(&t, b);
     if (blob_save(GLOBALS_BLOB + (globals_at ^ 1u), b, sizeof b) == 0) {   /* the other blob: a cut save leaves this one */
         globals_at ^= 1u;

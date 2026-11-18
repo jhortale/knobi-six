@@ -114,6 +114,32 @@ const int16_t PARAMS_RESERVED[P_RESERVED_N][3] = {
     [P_ARP_RANGE - P_COUNT_PHASE1] = {0, 2, 0}, [P_ARP_HOLD - P_COUNT_PHASE1] = {0, 1, 0},
 };
 
+/* the live reserved ids (params.h P_IS_LIVE), in id order from P_BPM: the reference's 2.11 CLOCK (CLOCK DIV's labels:
+ * clock.h's table) and 2.12 ARPEGGIATOR (synth/arp.h: the modes in the reference's order, the octaves 1..3) */
+static const char *const param_l_div[] = { "HALF", "QTR", "8TH", "8TH D", "8TH S", "8TH T", "16TH", "16TH S", "16TH T",
+                                           "32ND" };
+static const char *const param_l_arpmode[] = { "UP", "DOWN", "UP+DN", "RANDOM", "ASSIGN" };
+static const char *const param_l_arpoct[] = { "1", "2", "3" };
+const param_t PARAMS_LIVE2[P_LIVE2_N] = {
+    { P_BPM, PS_CLOCK, PK_KNOB, 2, 0, 30, 250, 120, "BPM", 0 },
+    { P_CLK_DIV, PS_CLOCK, PK_SELECT, 2, 0, 0, 9, 1, "CLOCK DIV", param_l_div },
+    { P_ARP_ON, PS_ARP, PK_SWITCH, 2, 0, 0, 1, 0, "ARP", 0 },
+    { P_ARP_MODE, PS_ARP, PK_SELECT, 2, 0, 0, 4, 0, "ARP MODE", param_l_arpmode },
+    { P_ARP_RANGE, PS_ARP, PK_SELECT, 2, 0, 0, 2, 0, "ARP OCTAVES", param_l_arpoct },
+    { P_ARP_HOLD, PS_ARP, PK_SWITCH, 2, 0, 0, 1, 0, "ARP HOLD", 0 },
+};
+
+/* the distortion (reference 2.9: hold EFFECT + MIX, 0..127, per program): the reserved range and default */
+const param_t PARAM_DISTORTION = { P_DISTORTION, PS_MISC, PK_KNOB, 2, 0, 0, 127, 0, "DISTORTION", 0 };
+
+const param_t *param_get(uint16_t id)
+{
+    if (id < P_COUNT_PHASE1) return &PARAMS[id];
+    if (id == P_DISTORTION) return &PARAM_DISTORTION;
+    if (P_IS_LIVE(id)) return &PARAMS_LIVE2[id - P_BPM];
+    return 0;
+}
+
 int16_t param_clamp(uint16_t id, int32_t value)
 {
     int32_t lo, hi;

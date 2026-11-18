@@ -48,6 +48,8 @@ run "Review Focus 3: program change under a held chord and a HOLD drone, MANUAL:
 run "Review Focus 3: the program change under the chord: no click" python3 tests/wav_check.py build/host/app.wav --steady 700 990 --check 990 1300
 run "Review Focus 3: the program change under the HOLD drone: no click" python3 tests/wav_check.py build/host/app.wav --steady 2250 2490 --check 2490 2800
 run "a program change (MIDI or the panel) while WRITE is armed or committing: ignored, the edit is stored (expect)" sh tests/run_host.sh tests/scripts/write_prog_change.txt
+run "the clock (Task 5): tap tempo, the division, LFO SYNC, MIDI clock in: start, stop, continue, gone (expect)" sh tests/run_host.sh tests/scripts/clock.txt
+run "the arpeggiator (Task 6): HOLD latch, relatch, append, HOLD off; MIDI clock in absent / stopped / gone: silent, nothing held (expect)" sh tests/run_host.sh tests/scripts/arp.txt
 run "the CPU guard on the fake clock: a spike sheds a voice, the limit comes back only where it fits; the diagnostics (expect)" sh tests/run_host.sh tests/scripts/cpu_guard.txt
 
 $CC -DBOARD_SMK37=1 -Ifirmware/hal -o "$OUT/smk_flash_test" tests/smk_flash_test.c

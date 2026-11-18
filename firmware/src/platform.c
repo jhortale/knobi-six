@@ -44,6 +44,20 @@ enum { ENC_SELECT = 0, ENC_ALGORITHM = 1, ENC_KNOB1 = 2, ENC_KNOB2 = 3, ENC_KNOB
 #define KEY_LED(k) (14u + (k))
 #endif
 
+/* the second core (docs/API.md "Second core"): without KNOBI_CPU1 (the default, and on a computer) there is none,
+ * and these say so: every job runs on CPU0 */
+#include <stdint.h>
+#if !defined(KNOBI_CPU1) || !KNOBI_CPU1 || defined(DINGHY_HOST)
+enum { CPU1_OFF = 0, CPU1_IDLE = 1, CPU1_BUSY = 2, CPU1_FAIL = 3 };
+static inline int cpu1_start(void) { return -1; }
+static inline int cpu1_post(void (*job)(void *), void *arg) { (void)job; (void)arg; return -1; }
+static inline int cpu1_join(uint32_t timeout_ticks) { (void)timeout_ticks; return 0; }   /* (nothing outstanding) */
+static inline int cpu1_state(void) { return CPU1_OFF; }
+static inline void cpu1_hold(void) { }
+static inline int cpu1_ping(uint32_t timeout_ticks) { (void)timeout_ticks; return -1; }
+static inline uint32_t cpu1_why(void) { return 0; }
+#endif
+
 #ifdef DINGHY_HOST
 #include "../../tests/host.c"                  /* on a computer: a fake FM-1 (tests/host.c) */
 #else
@@ -127,12 +141,32 @@ static volatile uint32_t fm1_ms;                /* milliseconds since power-on (
 /* ---- flash: read anywhere; erase / program only the update's staging area and the app's store (store.h) */
 #include "store.h"
 #include "fm1_flash.h"
+#if KNOBI_CPU1
+#include "fm1_cpu1.h"                           /* the second core (felucca-bsp's worker; docs/API.md "Second core") */
+#if KNOBI_CPU1_TEST
+/* (fm1-emu cases, tests/cpu1_emu/run.sh; never in a real build: 1 nostart, 2 hang, 3 a ping every ~100 ms from the audio
+ * interrupt, a post tried from the main loop, an erase and writes through the flash gate at 600 ms; 5 a warm reset in
+ * the start window) what the boot and the pings found, read from RAM at the end of the run */
+#define CPU1_TEST_JOIN_TICKS (4000u * FM1_TICKS_PER_US)    /* a join's timeout: under one block (5.8 ms) */
+struct { uint32_t magic, state, why, post, join, took, failed, pending, pings, rejected, jobs, barred, at_ms, flash,
+         main_post, refused, fl_rc, fl_at, pings_after, join_none; } cpu1_test = { 0x54314B43u };   /* "CK1T" */
+static void cpu1_test_note(void)
+{
+    cpu1_test.state = (uint32_t)cpu1_state();
+    cpu1_test.why = cpu1_why();
+    cpu1_test.pings = cpu1_pings;
+    cpu1_test.rejected = fm1_cpu1_mb.rejected;
+    cpu1_test.jobs = fm1_cpu1_mb.jobs;
+    cpu1_test.barred = (uint32_t)fm1_cpu1_barred();
+}
+#endif
+#endif
 static uint8_t flash_ok;
 static int st_read(uint32_t off, void *dst, uint32_t n)
 {
     uint8_t *d = dst;
     while (n) {
-        uint32_t k = n > 256u ? 256u : n, f = irq_save();
+        uint32_t k = n > 256u ? 256u : n, f = FL_IRQ_SAVE();
         int rc = FL_FAR(fl_read_ram)(off, d, k);
         irq_restore(f);
         if (rc)
@@ -382,6 +416,9 @@ static void app_main(void);
 void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) */
 {
     uint8_t p;
+#if KNOBI_CPU1
+    uint8_t c1 = cpu1_audio_begin();            /* the app may post CPU1 jobs in here; all joined before we return */
+#endif
     in_audio = 1;
     p = fm1_audio_pending();
     fm1_audio_ack_aux(p);
@@ -392,6 +429,14 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
             o[i] = 0;
         UAC_ONLY(uac_render_start());
         app_audio(o, HALF_FRAMES);
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST == 3
+        {   /* (fm1-emu: a ping round trip every 17 blocks, ~100 ms, inside the audio interrupt) */
+            static uint32_t blk;
+            if (++blk % 17u == 0u && cpu1_state() != CPU1_OFF && cpu1_ping(CPU1_TEST_JOIN_TICKS) < 0 &&
+                !cpu1_test.at_ms)
+                cpu1_test.at_ms = fm1_ms;
+        }
+#endif
         for (i = 0; i < HALF_WORDS; i++) {
             int32_t v = (o[i] * master_q12) >> 12;
             o[i] = v > 32767 ? 32767 : v < -32767 ? -32767 : v;
@@ -403,6 +448,9 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
         fm1_audio_ack_half();
     }
     in_audio = 0;
+#if KNOBI_CPU1
+    cpu1_audio_end(c1);
+#endif
 }
 extern void isr_alnk0(void);
 
@@ -411,6 +459,36 @@ static void platform_poll(void)
 {
     static int32_t knob_avg = 512 * 16;
     int32_t a;
+#if KNOBI_CPU1 && KNOBI_CPU1_TEST == 3
+    static uint32_t cpu1_test_next = 100u;
+    if (fm1_ms >= cpu1_test_next) {             /* (fm1-emu, every 100 ms) */
+        cpu1_test_next = fm1_ms + 100u;
+        cpu1_test.main_post = (uint32_t)cpu1_post(cpu1_job_ping, 0);   /* the main loop: refused */
+        cpu1_test.join_none = (uint32_t)cpu1_join(CPU1_TEST_JOIN_TICKS);   /* nothing outstanding: 0 */
+        cpu1_test.refused = cpu1_refused;
+        cpu1_test_note();
+        cpu1_test.flash = flash_ok;             /* (the boot's flash reads passed the gate with CPU1 running) */
+        if (fm1_ms >= 600u && !cpu1_test.fl_at && flash_ok) {
+            /* an erase and a page write, then the sliced ones (the audio interrupt and its pings run between the
+             * slices), each read back: through the gate with CPU1 on (the last blob sector: emulated flash only) */
+            static uint8_t pat[256], got[256];
+            uint32_t i, took, off = BLOBS_AT + (NBLOB - 1u) * 0x1000u, rc = 0;
+            for (i = 0; i < 256u; i++)
+                pat[i] = (uint8_t)(i * 7u + 1u);
+            rc |= fl_erase4k(off, &took) ? 1u : 0u;
+            rc |= fl_write(off, pat, 256u) ? 2u : 0u;
+            rc |= st_read(off, got, 256u) || memcmp(got, pat, 256u) ? 4u : 0u;
+            for (i = 0; i < 256u; i++)
+                pat[i] = (uint8_t)(i * 13u + 5u);
+            rc |= fl_sliced(FLS_ERASE, off, 0, 4096u) ? 8u : 0u;
+            rc |= fl_write_sliced(off, pat, 256u) ? 16u : 0u;
+            rc |= st_read(off, got, 256u) || memcmp(got, pat, 256u) ? 32u : 0u;
+            cpu1_test.fl_rc = rc;
+            cpu1_test.fl_at = fm1_ms;
+            cpu1_test.pings_after = cpu1_pings;
+        }
+    }
+#endif
     fm1_wdt_feed();
     usb_retry(fm1_ms);
     ota_service();
@@ -462,6 +540,10 @@ void fm1_cstart(void)
     extern uint32_t _data_start[], _data_end[], _data_load[], _bss_start[], _bss_end[];
     extern uint32_t _pool_start[], _pool_end[], _rt_start[], _rt_end[], _rt_load[];
     uint32_t *s, *d, p3, boot_mode;
+#if KNOBI_CPU1
+    fm1_cpu1_stop();                            /* first: a reset that left the second core running (registers only) */
+    fm1_cpu1_live_clear();                      /* (the fault path: this run's CPU1 words are not set up yet) */
+#endif
     fm1_time_init();
     fm1_reset_reason();
     p3 = fm1_boot.p3_rst;
@@ -476,11 +558,38 @@ void fm1_cstart(void)
     for (d = _pool_start; d < _pool_end; d++) *d = 0;
     for (s = _data_load, d = _data_start; d < _data_end; s++, d++) *d = *s;
     for (s = _rt_load, d = _rt_start; d < _rt_end; s++, d++) *d = *s;
+#if KNOBI_CPU1
+    fm1_cpu1_live_set();
+#endif
     fm1_mailbox_clear();
     fm1_guard_enable(FM1_GUARD_STACK | FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
     fm1_boot.p3_rst = (uint8_t)p3;
     if (boot_mode == BOOT_RECOVERY || recovery_key())
         recovery_main();                        /* OCT- at power-on: the USB rescue */
+#if KNOBI_CPU1
+    /* The second core: here, with the RAM set up (its loop is in .ram_text) and interrupts off, before the audio and
+     * the timers (the start that works on the device: Melodee, X0X), never in the rescue (above: recovery_main does
+     * not return). cpu1_start opens the PC limits while CPU1 boots through the ROM and puts them back; it does not
+     * start a CPU1 barred since a failure (until power-off). A failure CPU0 sees (no answer, a late job, a misread,
+     * a fault of CPU1's) only leaves one core and never restarts. A crash or reset of CPU0's own inside the start
+     * window (to the boot ping's answer) counts once against the boot guard, like any boot crash; the start mark
+     * then bars CPU1, and a boot after a failed one (bootguard.failed) runs on one core anyway: never twice. */
+    if (bootguard.failed == 0u && cpu1_start() == 0) {
+#if KNOBI_CPU1_TEST == 2
+        uint32_t t0;
+        cpu1_test.post = (uint32_t)cpu1_post(cpu1_job_hang, 0);   /* (fm1-emu case hang: retired within one block) */
+        t0 = fm1_ticks();
+        cpu1_test.join = (uint32_t)cpu1_join(CPU1_TEST_JOIN_TICKS);
+        cpu1_test.took = fm1_ticks() - t0;
+#endif
+    }
+    cpu1_boot_done();                           /* posts are the audio interrupt's from here on */
+#if KNOBI_CPU1_TEST
+    cpu1_test_note();
+    cpu1_test.failed = bootguard.failed;
+    cpu1_test.pending = bootguard.pending;
+#endif
+#endif
 #if BOARD_SMK37
     smk_jedec = FL_FAR(fl_jedec_ram)();         /* (the panel check shows it: units may carry another part) */
     flash_ok = FL_JEDEC_OK(smk_jedec);

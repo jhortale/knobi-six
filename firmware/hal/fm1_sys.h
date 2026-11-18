@@ -18,6 +18,12 @@
 #pragma once
 #include <stdint.h>
 #include "fm1_cc.h"
+#if KNOBI_CPU1
+#include "fm1_cpu1_stop.h"                      /* the second core held on every way out (felucca-bsp's) */
+#define FM1_SYS_HOLD_CPU1() fm1_cpu1_stop()
+#else
+#define FM1_SYS_HOLD_CPU1() ((void)0)
+#endif
 
 #define FM1_P33_CON (*(volatile uint32_t *)0x13E08u)
 #define FM1_P33_DAT (*(volatile uint32_t *)0x13E0Cu)
@@ -109,6 +115,7 @@ static void fm1_reset_reason(void)
 static void fm1_reboot(void)
 {
     __asm__ volatile("cli");
+    FM1_SYS_HOLD_CPU1();                                /* (KNOBI_CPU1) the second core held first */
     fm1_p33_or(FM1_P3_PR_PWR, 0x10);
     for (;;)
         ;
@@ -119,6 +126,7 @@ static void fm1_enter_uboot(void)
     static const char k[16] = "usb_update_mode";
     uint32_t i;
     __asm__ volatile("cli");
+    FM1_SYS_HOLD_CPU1();
     /* CPU0 write limits (fm1_guard.h) may cover the mailbox: drop them all */
     if (!(*(volatile uint32_t *)0x1EEE240u & 1u))
         *(volatile uint32_t *)0x1EEE240u = 0xE7u;
@@ -132,6 +140,7 @@ static void fm1_enter_uboot(void)
 
 FM1_INLINE void fm1_core_reset(void)
 {
+    FM1_SYS_HOLD_CPU1();                                /* it must not run old code while the loader writes */
     FM1_PWR_CON |= 0x10u;
     for (;;)
         ;
@@ -141,6 +150,7 @@ FM1_INLINE void fm1_enter_update(const uint8_t *parm)
 {
     uint32_t i;
     __asm__ volatile("cli");
+    FM1_SYS_HOLD_CPU1();                                /* before writing the bootloader's update record */
     if (!(*(volatile uint32_t *)0x1EEE240u & 1u))       /* drop CPU0 write limits, as fm1_enter_uboot */
         *(volatile uint32_t *)0x1EEE240u = 0xE7u;
     *(volatile uint32_t *)0x1EEE348u = 0;

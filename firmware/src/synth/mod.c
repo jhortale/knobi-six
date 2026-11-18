@@ -100,6 +100,16 @@ void lfo_set(lfo_t *l, int freq_param, int synced, uint32_t clock_inc)
     l->inc = p == LFO_FMAX ? LFO_INC_TOP : lfo_exp2(LFO_L0 + p * LFO_LSTEP, 0);
 }
 
+/* cycles a quarter note, num / den, for FREQUENCY x 16 / 255 (mod.h) */
+static const uint8_t LFO_SYNC_ND[16][2] = {{1, 16}, {1, 8}, {1, 4}, {1, 3}, {1, 2}, {2, 3}, {1, 1}, {4, 3}, {3, 2},
+                                           {2, 1}, {3, 1}, {4, 1}, {6, 1}, {8, 1}, {12, 1}, {16, 1}};
+uint32_t lfo_sync_inc(int freq_param, uint32_t quarter_inc)
+{
+    int p = (int)mods_clamp(freq_param, 0, LFO_FMAX), i = p * 16 / 255;
+    if (quarter_inc > 1600000u) quarter_inc = 1600000u;   /* (~985 BPM: x 16 stays below 2^32) */
+    return quarter_inc * LFO_SYNC_ND[i][0] / LFO_SYNC_ND[i][1];
+}
+
 void lfo_key(lfo_t *l, int first_key_down)
 {
     if (!first_key_down) return;

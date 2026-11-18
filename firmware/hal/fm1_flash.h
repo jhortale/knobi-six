@@ -11,7 +11,16 @@
  */
 #pragma once
 #include <stdint.h>
+#include "fm1_cc.h"                             /* KNOBI_CPU1 */
 #include "fm1_xip.h"
+#if KNOBI_CPU1
+#include "fm1_flash_access.h"                   /* the flash gate and irq_save / irq_restore (felucca-bsp's) */
+static uint32_t fm1_cpu1_flash_quiesce(void);   /* fm1_cpu1.h: interrupts off, CPU1 idle in RAM or held (it waits
+                                                 * up to a block for the audio interrupt's join, then retires CPU1) */
+#define FL_IRQ_SAVE() fm1_cpu1_flash_quiesce()
+#else
+#define FL_IRQ_SAVE() irq_save()
+#endif
 
 #define RAMFN  __attribute__((section(".ram_text"), noinline, used))
 #define RAMINL static inline __attribute__((always_inline))
@@ -86,6 +95,10 @@ RAMINL int fl_enter(fl_saved_t *s)
     mode = (s->sfc_con >> 8) & 0xFu;
     if (mode == 6u || mode == 7u)                 /* continuous-read XIP: not handled here */
         return -1;
+#if KNOBI_CPU1
+    if (!fm1_flash_access_ok())                   /* CPU0, interrupts off, CPU1 held or idle in its RAM loop */
+        return -1;
+#endif
     fl_csync();
     while ((int32_t)SFC_CON < 0) ;                /* SFC idle */
     SFC_CON = 0;                                  /* XIP OFF from here on */
@@ -256,12 +269,15 @@ static void fl_plain_window_init(void)
     __asm__ volatile("csync\n\tsti" ::: "memory");
 }
 
+#if !KNOBI_CPU1                                   /* (KNOBI_CPU1: fm1_flash_access.h's clear ICFG bits 8 and 9 and
+                                                   * give the caller's ICFG back) */
 static inline uint32_t irq_save(void) { __asm__ volatile("cli" ::: "memory"); return 0; }
 static inline void irq_restore(uint32_t f) { (void)f; __asm__ volatile("csync\n\tsti" ::: "memory"); }
+#endif
 
 static int fl_erase4k(uint32_t off, uint32_t *took_us)
 {
-    uint32_t f = irq_save();
+    uint32_t f = FL_IRQ_SAVE();
     int rc = FL_FAR(fl_erase4k_ram)(off, took_us);
     irq_restore(f);
     return rc;
@@ -271,14 +287,14 @@ static int fl_erase4k(uint32_t off, uint32_t *took_us)
 #define FL_SLICES 4000u                           /* then to the end in one go (an erase: ~50 ms worst) */
 static int fl_sliced(uint32_t op, uint32_t off, const uint8_t *src, uint32_t n)   /* interrupts on between slices */
 {
-    uint32_t f = irq_save(), k = 0;
+    uint32_t f = FL_IRQ_SAVE(), k = 0;
     int rc = FL_FAR(fl_slice_ram)(op, off, src, n, FL_SLICE_US);
     irq_restore(f);
     while (rc == 1) {
         if (k > FL_SLICES) return -5;             /* the last slice ran to the end and still reads suspended */
         fm1_delay_us(20u);                        /* the interrupts waiting run now */
         fm1_wdt_feed();
-        f = irq_save();
+        f = FL_IRQ_SAVE();
         rc = FL_FAR(fl_slice_ram)(FLS_RESUME, off, src, n, ++k < FL_SLICES ? FL_SLICE_US : 0u);
         irq_restore(f);
     }
@@ -304,7 +320,7 @@ static int fl_write(uint32_t off, const uint8_t *src_ram, uint32_t n)
         int rc;
         uint32_t f;
         if (chunk > n) chunk = n;
-        f = irq_save();
+        f = FL_IRQ_SAVE();
         rc = FL_FAR(fl_prog_ram)(off, src_ram, chunk, &took);
         irq_restore(f);
         if (rc) return rc;

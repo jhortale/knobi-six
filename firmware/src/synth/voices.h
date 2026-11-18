@@ -44,7 +44,20 @@
  * 30 Hz loses 0.12 dB; its tail runs on after the voices stop, until under half an LSB) and a soft limiter: linear to
  * SYNTH_LIMIT_KNEE (-4.4 dBFS), then a smooth knee (slope 1 there, falling) that approaches SYNTH_LIMIT_CEIL (-0.45
  * dBFS) and never reaches it: six overdriven voices at every level at full (+-65536 each, the bus up to ~13.6 dB over
- * full scale) come out below the ceiling, rounded, never flat at a clip. */
+ * full scale) come out below the ceiling, rounded, never flat at a clip.
+ *
+ * Distortion (DISTORTION 0..127, per program; docs/ob6-reference.md 2.9, Phase 2 spec: on the summed bus, before the
+ * effects): after the voices are summed (both cores' sets, on CPU0 after the join) and before the DC blocker and the
+ * limiter, each channel goes through y = KY f(KZ x), f(z) = z - 4/27 z^3 for |z| < 1.5, else +-1 (an odd cubic soft
+ * clip: slope 1 at 0, flat and smooth at its knee, odd harmonics only, no DC of its own). With d = amount / 127, the
+ * drive G = 16 d^2 (+24 dB at 127, 0 dB at 32: each doubling of the knob +12 dB), KZ = G / 32768, and the output gain
+ * KY = 32768 sqrt(1 + G) / G: a small signal comes out sqrt(1 + G) louder (1.0 .. 4.1), a saturated one at KY (0.26 of
+ * full scale at 127): the init chord's peak goes from -5 dBFS (0) to -3 (32, at the limiter's knee) and down to -11
+ * (127) while its RMS rises 3..6 dB (it squares); a single note gains up to ~+8.5 dB peak, ~+10 dB RMS (test_dist
+ * dist_max_chord); the bus after it stays far inside int32.
+ * The output is truncated toward zero (odd still). The amount glides like the other levels (SM_DIST, 5.8 ms); KZ and
+ * KY follow it at each control tick (float, on the FPU); amount 0 (smoothed to 0) skips the stage: the Phase 1 render,
+ * bit for bit. Memoryless: a render split anywhere (engine.c's arp sub-blocks) gives the same output. */
 #ifndef KNOBI_VOICES_H
 #define KNOBI_VOICES_H
 #include <stdint.h>
@@ -59,13 +72,19 @@
 #define SYNTH_LIMIT_KNEE 19661            /* the bus soft limiter's knee: 0.6 x full scale, -4.4 dBFS */
 #define SYNTH_LIMIT_CEIL 31129            /* its ceiling, approached, never reached: 0.95 x full scale, -0.45 dBFS */
 
+/* SYNTH_VOICE_ALIGN: an alignment for voice[] (a dual-core build: each voice on cache lines of its own, engine.c);
+ * empty by default */
+#ifndef SYNTH_VOICE_ALIGN
+#define SYNTH_VOICE_ALIGN
+#endif
+
 enum { SM_CUT, SM_RESO, SM_MODE, SM_BP, SM_SHAPE1, SM_PW1, SM_SHAPE2, SM_PW2, SM_L1, SM_L2, SM_LSUB, SM_LNOISE,
-       SM_VOL, SM_SPREAD, SM_COUNT };
+       SM_VOL, SM_SPREAD, SM_DIST, SM_COUNT };
 
 typedef struct synth synth_t;
 struct synth {
     program_t prog;                       /* the values in play (prog.v[]), chord memory */
-    voice_t voice[NVOICE];
+    voice_t voice[NVOICE] SYNTH_VOICE_ALIGN;
     voice_ctx_t ctx;
     lfo_t lfo;
     int32_t sm[SM_COUNT], tgt[SM_COUNT];  /* smoothed values and their targets */
@@ -81,6 +100,9 @@ struct synth {
     uint16_t calm;                        /* blocks in a row where one more voice fits (synth_guard) */
     uint32_t sheds;                       /* the CPU guard's sheds since init (each lowered the limit) */
     float dcx[2], dcy[2];                 /* the bus DC blocker: last input, last output, L R */
+    uint32_t clk_qinc;                    /* the clock's tempo, Q32 quarter notes a frame (synth_clock; 0 none) */
+    float dist_kz, dist_ky;               /* the distortion's coefficients (KZ 0: the stage off), for SM_DIST = dist_q */
+    int32_t dist_q;
 };
 
 void synth_init(synth_t *s);
@@ -95,8 +117,47 @@ void synth_panic(synth_t *s);                       /* every voice silent now, k
 void synth_all_notes_off(synth_t *s);               /* every note released (envelopes release), HOLD unchanged */
 void synth_volume(synth_t *s, int v);               /* MIDI volume 0..127, times PROGRAM VOLUME, smoothed */
 void synth_tune(synth_t *s, int cents);             /* master transpose + tune, -1250..+1250 cents, both VCOs */
+void synth_clock(synth_t *s, uint32_t quarter_inc); /* the clock's tempo for LFO SYNC (clock.h clock_quarter_inc; the
+                                                     * engine, every block): a synced LFO runs at a note value of it
+                                                     * (mod.h lfo_sync_inc); 0 = none known: free running */
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames);   /* adds into L R pairs, Q15 */
+/* the distortion's coefficients for an amount q (Q16, 0..127 << 16; 0: kz = ky = 0, the stage off), its curve, and one
+ * bus sample through it, truncated toward zero (kz > 0) */
+void synth_dist_coef(int32_t q, float *kz, float *ky);
+static inline __attribute__((always_inline)) float synth_dist_f(float x, float kz, float ky)
+{
+    float z = x * kz;
+    if (__builtin_fabsf(z) >= 1.5f) return z < 0.0f ? -ky : ky;
+    return ky * z * (1.0f - 0.14814815f * z * z);   /* (4 / 27) */
+}
+static inline __attribute__((always_inline)) int32_t synth_dist_sample(int32_t x, float kz, float ky)
+{
+    return (int32_t)synth_dist_f((float)x, kz, ky);
+}
 int  synth_active(const synth_t *s);                /* voices sounding */
+/* The render seam (Phase 2: part of the voices can render on the second core). Each control period synth_render runs
+ * the tick (the smoothers, the LFO, the shared voice_ctx_t, every voice's control and envelopes, freeing silent
+ * voices), sets ctx.pos, renders the busy voices into a zeroed int32 bus through SYNTH_SPLIT, then the DC blocker and
+ * the limiter. The bus sums int32 (exact in any order), so any split of the voices into sets is bit-exact with the
+ * one loop (tests/unit/test_split.c: every partition, and set B on a second thread under ThreadSanitizer).
+ *
+ * synth_render_set: the busy voices in voice_mask (bit i = voice i) for frames_in_period (<= the frames left in the
+ * period) ADDED into bus (L R int32 pairs; the caller zeroes it). It writes only those voices' voice_t and bus; it
+ * reads s->ctx (incl. pos), s->prog.v and those voices; nothing else of synth_t, no global. So two calls with
+ * disjoint masks may run at once (on two cores, each with its own bus, summed after), provided nothing writes the
+ * synth meanwhile: no tick, no synth_note / param / ... (those are serialised with synth_render already).
+ * synth_balance: the busy voices split by voice_t.busy (not by index): set A (mask_a: CPU0's, the core that also takes
+ * the other interrupts) the first n / 2 busy voices by index, set B (mask_b) the rest; returns n, the voices busy.
+ *
+ * SYNTH_SPLIT(s, bus, n): one period's voices into bus. A dual-core build defines it before voices.c: synth_balance,
+ * set B handed to the other core (its own bus), set A here, join, sum into bus. One core (the default): every voice
+ * as one set (set A all, set B empty: the Phase 1 loop, at its cost). */
+#define SYNTH_ALL_VOICES ((1u << NVOICE) - 1u)
+void synth_render_set(synth_t *s, uint32_t voice_mask, int32_t *bus, uint32_t frames_in_period);
+uint32_t synth_balance(const synth_t *s, uint32_t *mask_a, uint32_t *mask_b);
+#ifndef SYNTH_SPLIT
+#define SYNTH_SPLIT(s, bus, n) synth_render_set((s), SYNTH_ALL_VOICES, (bus), (n))
+#endif
 /* The CPU guard: after each render, the time it took (used) and the block's time (budget), in any one unit (the
  * platform's tick counter). Over SYNTH_GUARD_HI % of the budget the voice limit drops, in one step, to the voices that
  * fit under it at the measured cost per voice (used / voices sounding; at least one fewer, at least one), and the

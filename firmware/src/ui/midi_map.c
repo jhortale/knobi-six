@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* KNOBI-SIX MIDI mapping (docs/MIDI.md): our own CC map, one CC per continuous (knob) parameter, in and out, and the
- * channel messages. Included by app.c after ui/controls.c; tests/unit/test_controls.c includes the map with
- * CONTROLS_PURE.
+ * channel messages, and MIDI clock in (ctl_midi_rt). Included by app.c after ui/controls.c; tests/unit/test_controls.c
+ * includes the map with CONTROLS_PURE.
  *
  * In (controls_midi, main loop; the channel: global MIDI CH, 0 = ALL): notes (velocity; note-off velocity ignored),
  * channel pressure (aftertouch, with the bottom pads': the higher), pitch bend (added to the pitch wheel's), CC 1 mod
@@ -14,7 +14,14 @@
  * PARAM RX = CC the map's CCs (0..127 over the param's range, bipolar 64 = 0). A CC received is not sent back.
  * Out (midi_cc_send): a panel edit, with PARAM TX = CC, as the map's CC on the MIDI channel (ALL = 1), only when its
  * 7-bit value differs from the last one either side had (a 0..255 param moving one step may stay on the same CC
- * value). Switches and selects have no CC (NRPN later). */
+ * value). Switches and selects have no CC (NRPN later).
+ * Arp notes out (ctl_arp_out, main loop; synth/arp.h's ring): with ARP ON, PARAM TX = CC and LOCAL ON, the notes the
+ * arpeggiator plays go out on the MIDI channel (ALL = 1), as the reference has it (arp notes sent when Param Xmit is on;
+ * not under LOCAL OFF, where MIDI in alone feeds the arp and a DAW's echo would feed it its own notes), and (LOCAL
+ * ON: the keys feed the arp) the keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
+ * note-off goes out only if its note-on did; a change of ARP ON, PARAM TX or LOCAL with keys held
+ * sends their note-offs, or late note-ons, so the receiver's picture stays right: app.c). A note-off
+ * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver). */
 #include "controls.h"
 
 #define MIDI_CC_NONE 0xFFu
@@ -74,11 +81,65 @@ static void ctl_program_change(int32_t bank, int32_t prog)
     ctl_prog_select(bank * 100 + prog);
 }
 
+static uint32_t ctl_arp_r;                 /* the arp ring's read index (main loop) */
+static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bit a note) */
+static uint8_t ctl_arp_ch[128];            /* the channel each one's note-on went out on (its note-off's, final review 5:
+                                            * MIDI CH may change during its gate) */
+static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
+static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
+static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
+/* the arp's note-ons go out with PARAM TX on and LOCAL ON only (final review 2): under LOCAL OFF the arp is fed by MIDI
+ * in alone, and a DAW echoing our notes back would feed the arp its own notes (with a latch on, a loop that sustains
+ * itself). Every note-on sent gets its note-off, whatever PARAM TX or LOCAL have become since (ctl_arp_sent) */
+static void ctl_arp_out(void)
+{
+    uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
+    __asm__ volatile("" ::: "memory");     /* (the entries before the index: arp.c writes them first) */
+    if (w - ctl_arp_r > ARP_OUT_N) ctl_arp_r = w - ARP_OUT_N;   /* (a long stall: the oldest are gone) */
+    for (; ctl_arp_r != w; ctl_arp_r++) {
+        uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
+        uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
+        if (vel && ctl_glob[G_PARAM_TX] && ctl_glob[G_LOCAL]) {
+            midi_send(0x90u | ch, note, vel);
+            *m |= bit, ctl_arp_ch[note] = (uint8_t)ch;
+            ctl_arp_outs++;
+        } else if (!vel && (*m & bit)) {
+            midi_send(0x80u | ctl_arp_ch[note], note, 0);
+            *m &= ~bit;
+            ctl_arp_offs++, ctl_arp_offch = ctl_arp_ch[note];
+        }
+    }
+}
+/* the receiver has the arp's note on (sent, its off not yet) on channel ch: the key that now goes out raw on ch takes it
+ * over (returns 1; the arp's later note-off is then not sent: its ARP OFF reaches the engine after the main loop's pass).
+ * On another channel (MIDI CH changed meanwhile) not: the key sends its own note-on, the arp's off goes on its own */
+static int ctl_arp_take(uint32_t note, uint32_t ch)
+{
+    uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[(note & 127u) >> 5];
+    if (!(*m & bit) || ctl_arp_ch[note & 127u] != ch) return 0;
+    *m &= ~bit;
+    return 1;
+}
+/* the keys' own notes go out unless they feed the local arp and the arp's go instead (LOCAL ON, ARP ON, PARAM TX on).
+ * LOCAL OFF: the keys never reach the synth or the arp, so they go out raw as ever (a DAW controller) */
+static int ctl_keys_out(void) { return !(ctl_glob[G_LOCAL] && eng_edit.v[P_ARP_ON] && ctl_glob[G_PARAM_TX]); }
+
+/* MIDI clock in (0xF8 clock, FA start, FB continue, FC stop; any channel setting): to the clock when the global MIDI
+ * CLOCK follows one (IN, SLAVE THRU, IN-no-start-stop), echoed out under SLAVE THRU; ignored under OFF and OUT */
+static void ctl_midi_rt(uint32_t st)
+{
+    int m = ctl_glob[G_MIDI_CLOCK];
+    if (!CLOCK_EXTERNAL(m)) return;
+    eng_midi_rt(st);
+    if (m == CLK_MIDI_THRU) midi_send(st, 0, 0);
+}
+
 void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
 {
     uint32_t ty = st & 0xF0u;
     int id;
-    if (st >= 0xF0u || st < 0x80u) return;              /* (system messages: clock is phase 2) */
+    if (st >= 0xF8u) { ctl_midi_rt(st); return; }     /* realtime: the clock */
+    if (st >= 0xF0u || st < 0x80u) return;              /* (other system messages: not ours) */
     if (ctl_glob[G_MIDI_CH] && (st & 15u) != ctl_glob[G_MIDI_CH] - 1u) return;
     d1 &= 127u, d2 &= 127u;
     switch (ty) {

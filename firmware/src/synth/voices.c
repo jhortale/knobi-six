@@ -37,6 +37,7 @@ static void synth_targets(synth_t *s)
     s->tgt[SM_LNOISE] = v[P_MIX_NOISE] * 65536;
     s->tgt[SM_VOL] = v[P_PRG_VOL] * s->midi_vol * 65536 / 127;   /* PROGRAM VOLUME x MIDI volume (CC 7) */
     s->tgt[SM_SPREAD] = v[P_PAN_SPREAD] * 65536;
+    s->tgt[SM_DIST] = v[P_DISTORTION] * 65536;
 }
 
 static void synth_xmod(synth_t *s)
@@ -50,7 +51,32 @@ static void synth_xmod(synth_t *s)
 
 static void synth_lfo_set(synth_t *s)
 {
-    lfo_set(&s->lfo, s->prog.v[P_LFO_FREQ], s->prog.v[P_LFO_SYNC], 0);
+    lfo_set(&s->lfo, s->prog.v[P_LFO_FREQ], s->prog.v[P_LFO_SYNC],
+            s->prog.v[P_LFO_SYNC] ? lfo_sync_inc(s->prog.v[P_LFO_FREQ], s->clk_qinc) : 0);
+}
+void synth_clock(synth_t *s, uint32_t quarter_inc)
+{
+    if (quarter_inc == s->clk_qinc) return;
+    s->clk_qinc = quarter_inc;
+    if (s->prog.v[P_LFO_SYNC]) synth_lfo_set(s);
+}
+
+/* the distortion (voices.h): G = 16 d^2, d = q / (127 << 16); KZ = G / 32768, KY = 32768 sqrt(1 + G) / G. The square
+ * root by Newton's method (no libm): 1 + G is 1..17, six steps from 1 + G / 4 reach float precision */
+void synth_dist_coef(int32_t q, float *kz, float *ky)
+{
+    if (q <= 0) { *kz = *ky = 0.0f; return; }
+    if (q > 127 * 65536) q = 127 * 65536;
+    float d = (float)q * (1.0f / (127.0f * 65536.0f)), g = 16.0f * d * d, x = 1.0f + g, r = 1.0f + 0.25f * g;
+    for (int i = 0; i < 6; i++) r = 0.5f * (r + x / r);
+    *kz = g * (1.0f / 32768.0f);
+    *ky = 32768.0f * r / g;
+}
+/* the summed bus (n frames, L R) through the distortion, in place */
+static void synth_dist(synth_t *s, int32_t *bus, int n)
+{
+    float kz = s->dist_kz, ky = s->dist_ky;
+    for (int i = 0; i < 2 * n; i++) bus[i] = synth_dist_sample(bus[i], kz, ky);
 }
 
 /* the context every voice reads at this tick, from the smoothed values */
@@ -68,6 +94,7 @@ static void synth_derive(synth_t *s)
     c->gain = SYNTH_VOICE_GAIN * (s->sm[SM_VOL] >> 8) / (127 * 256);
     c->spread = (s->sm[SM_SPREAD] >> 8) * 32768 / (127 * 256);
     c->detune = v[P_DETUNE] * v[P_DETUNE] * VOICE_DETUNE_MAX / (127 * 127);
+    if (s->sm[SM_DIST] != s->dist_q) s->dist_q = s->sm[SM_DIST], synth_dist_coef(s->dist_q, &s->dist_kz, &s->dist_ky);
     /* bend: +-range at the ends (8191 up, 8192 down), Q16 semitones */
     int32_t d = s->bend14 - 8192, r = v[P_BEND_RANGE];
     c->bend = (d >= 0 ? d * r * 8 + d * r * 8 / 8191 : d * r * 8) + s->tune;   /* (+ the master tune: the globals) */
@@ -318,6 +345,7 @@ void synth_program(synth_t *s, const program_t *p)
     s->last_pitch = VOICE_NO_PITCH;   /* a new program does not glide from the old one's notes */
     s->prog = *p;
     for (unsigned i = 0; i < P_COUNT_PHASE1; i++) s->prog.v[i] = param_clamp((uint16_t)i, p->v[i]);
+    s->prog.v[P_DISTORTION] = param_clamp(P_DISTORTION, p->v[P_DISTORTION]);
     synth_targets(s);
     if (!sounding) for (int i = 0; i < SM_COUNT; i++) s->sm[i] = s->tgt[i];
     synth_rates(s);
@@ -347,7 +375,7 @@ void synth_init(synth_t *s)
 
 void synth_param(synth_t *s, uint16_t id, int16_t value)
 {
-    if (id >= P_COUNT_PHASE1) return;
+    if (id >= P_COUNT_PHASE1 && id != P_DISTORTION) return;
     int16_t old = s->prog.v[id], v = param_clamp(id, value);
     s->prog.v[id] = v;
     synth_targets(s);
@@ -493,6 +521,25 @@ static int synth_bus_live(const synth_t *s)
            __builtin_fabsf(s->dcy[1]) >= 0.5f;
 }
 
+/* the render seam (voices.h) */
+void synth_render_set(synth_t *s, uint32_t voice_mask, int32_t *bus, uint32_t frames_in_period)
+{
+    for (int i = 0; i < NVOICE; i++)
+        if ((voice_mask >> i & 1u) && s->voice[i].busy)
+            voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, (int)frames_in_period);
+}
+uint32_t synth_balance(const synth_t *s, uint32_t *mask_a, uint32_t *mask_b)
+{
+    uint32_t busy = 0, n = 0;
+    for (int i = 0; i < NVOICE; i++)
+        if (s->voice[i].busy) busy |= 1u << i, n++;
+    uint32_t a = 0, k = n >> 1;   /* set A: the first n / 2 busy voices by index (the smaller half), set B the rest */
+    for (int i = 0; k; i++)
+        if (busy >> i & 1u) a |= 1u << i, k--;
+    *mask_a = a, *mask_b = busy & ~a;
+    return n;
+}
+
 void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
 {
     if (!synth_active(s)) {
@@ -510,9 +557,9 @@ void synth_render(synth_t *s, int32_t *lr, uint32_t frames)
         int n = (int)(frames < s->ctl_left ? frames : s->ctl_left);
         int32_t bus[2 * VOICE_CTL];
         for (int i = 0; i < 2 * n; i++) bus[i] = 0;
-        s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);
-        for (int i = 0; i < NVOICE; i++)
-            if (s->voice[i].busy) voice_render(&s->voice[i], &s->ctx, s->prog.v, bus, n);
+        s->ctx.pos = (uint8_t)(VOICE_CTL - s->ctl_left);   /* (shared state: written here, before the sets) */
+        SYNTH_SPLIT(s, bus, (uint32_t)n);
+        if (s->dist_kz != 0.0f) synth_dist(s, bus, n);   /* (amount 0: no stage, the Phase 1 bus bit for bit) */
         synth_bus(s, bus, lr, n);
         lr += 2 * n;
         frames -= (uint32_t)n;

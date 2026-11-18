@@ -253,6 +253,60 @@ Flash (1 MiB): the head (0x0-0x3FFF), the app (0x4000-0x9CFFF), the store above 
 (`FL_RANGE_OK`, store.h) keeps a bug from erasing anything else, and the RAM flash driver refuses the protected ranges
 on its own as well (`FL_GUARD`, hal/fm1_flash_map.h; tests/smk_flash_test.c checks every sector).
 
+## Second core
+
+Off by default: only a build with `KNOBI_CPU1=1 ./build.sh` (package `knobi-six-cpu1.fwsc`, never a release: build.py
+refuses `--release` with it) has the AC791N's second core (CPU1). The HAL is felucca-bsp's (`hal/fm1_cpu1.h`,
+`fm1_cpu1.S`, `fm1_cpu1_stop.h`, `fm1_cpu1_hold.h`, `fm1_flash_access.h`; MPL-2.0, see LICENSING.md). Without the flag
+the calls below exist as stubs (`cpu1_post` says no, `cpu1_join` says 0, `cpu1_state` says `CPU1_OFF`), so code can
+call them either way and runs every job on CPU0.
+
+| | |
+| --- | --- |
+| `int cpu1_start(void)` | `fm1_cstart` calls it (with the flag), once, interrupts off, after the RAM is set up and before the audio and the timers, never in the rescue and never on a boot after a failed one. 0 = CPU1 runs and a ping came back; < 0 = one core. Later calls start nothing |
+| `int cpu1_post(void (*job)(void *), void *arg)` | 0 = CPU1 has `job(arg)`; < 0 = not handed over (off, failed, a job outstanding, or **not in the audio interrupt**): run it yourself |
+| `int cpu1_join(uint32_t timeout_ticks)` | 0 = nothing outstanding: the job came back, or none was posted (CPU1 off or retired). < 0 = the posted job is not done and never will be (late, a misread, a fault, held): CPU1 is **retired** (held, one core until power-off) and the job dropped, never run twice: render that share yourself. The deadline counts **from the post**: post, render CPU0's share, then join(budget) keeps the whole fork/join within budget ticks of the post. Budget: under one block (5.8 ms = 139,320 ticks at `FM1_TICKS_PER_US` 24) less the work after the join (the sum, the DC blocker, the limiter, the platform's scaling) and the TIMER5 nesting |
+| `int cpu1_state(void)` | `CPU1_OFF`, `CPU1_IDLE`, `CPU1_BUSY`, `CPU1_FAIL`; reads only, from anywhere |
+| `void cpu1_hold(void)` | hold CPU1 and mark it off (interrupts masked meanwhile); a job it drops makes the next join < 0. For the boot, a fault or a reset path |
+| `int cpu1_ping(uint32_t timeout_ticks)` | a round trip through CPU1 (the boot or the audio interrupt); < 0 = not (retired, or not posted) |
+
+The rules: post only inside the audio interrupt (platform.c brackets `app_audio` with `cpu1_audio_begin` /
+`cpu1_audio_end`, which joins a job still outstanding, so none outlives the interrupt) or the boot. A job runs from the
+flash. Every flash erase, write and read runs with interrupts off and only with CPU1 held or idle in its RAM loop:
+the wrappers (`FL_IRQ_SAVE`, `fm1_cpu1_flash_quiesce`) wait up to one block with interrupts on for the audio
+interrupt's join, then retire CPU1 and go on; the RAM driver refuses otherwise (`fm1_flash_access_ok`). Name a job
+`cpu1_job_*`: build.py adds its stack to CPU1's (2,560 B for the loop and the deepest job), and checks that the idle
+loop (`.c1_text`) calls nothing but the job and holds no flash address. CPU1 runs no interrupts. Every reset, the
+UBOOT entry and the update hold CPU1 first, and in a CPU1 build the update loader holds it again at its own start;
+CPU0's crash holds it and bars it until power-off.
+
+The boot guard: a failure CPU0 sees (no answer, a late job, a misread, a fault of CPU1's) leaves one core and never
+restarts the keyboard. A crash or reset of CPU0's own inside the start window (from the release to the boot ping's
+answer, a few ms) counts once against the boot guard like any boot crash; the start mark (`.noinit`) then bars CPU1
+until power-off, and a boot after a failed one runs on one core anyway, so it never counts twice. Results in the
+emulator: [MEASUREMENTS.md](MEASUREMENTS.md) "Dual core".
+
+KNOBI-SIX's use (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a `KNOBI_CPU1` build): with the DUAL CORE global
+on (Globals pad 7, off by default, kept in blob 2: the globals' version-1 record stays the default build's), every 16-frame control period of the audio interrupt
+splits the busy voices (`synth_balance`: CPU0 the smaller half), posts set B (`cpu1_job_voices`, into CPU1's own bus),
+renders set A, joins and adds CPU1's bus: bit for bit the one-core output. A join waits at most 1.5 ms from its post,
+and less as the block runs out: one deadline per audio block (`eng_c1_block` at the block's start), so each join's
+limit is also what is left to the end of the block (5.8 ms from its start) and of the block's shared join wait (half a
+block, `ENG_C1_WAIT_MAX`); a CPU1 slow but never hung is retired within the first block it is slow in, which overruns
+once at most (fm1-emu case `slow`). Fewer than two voices busy, or CPU1 off: one core. A failed join renders set B on
+CPU0 in the same period and leaves one core (Globals: `C1 FAIL`). `voice_t` (320 B) and `synth_t.voice[]` sit on 32-byte cache lines (the AC791N's: the SDK's
+`asm/cache.h`), CPU1's bus and counter on lines of their own.
+
+The CPU1 probe (`./build.sh --probe-cpu1`, package `knobi-six-cpu1probe.fwsc`, `KNOBI_CPU1=1` plus
+`KNOBI_CPU1_PROBE=1`; never a release, never the default package) is that build plus `src/cpu1_probe.c`: inside the
+audio interrupt, after each block's render, a ping a second, a 16 KB shared-RAM pattern test in 4 KB steps every other
+block (both directions, CPU0 reading while CPU1 works), an FPU workload on both cores compared bit for bit, and a test
+patch rendered (to a scratch buffer) on one core and on two (`eng_split_force`) with the checksums compared and both
+timed. A wrong result retires CPU1 (so DUAL CORE never uses it); the probe's own time goes into the CPU line and the
+guard (`eng_probe_ticks`). DUAL CORE starts OFF at every boot of
+the probe. The Globals screen shows the results ([CONTROLS.md](CONTROLS.md); the device run:
+[SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe").
+
 ## Build options
 
 `./build.sh` takes `--release X.Y` and `--model pro|elite|mke` (or `MODEL=`): the SMK-37 Pro, Elite and MKE-P37 are
@@ -267,6 +321,8 @@ its own package. `DINGHY_DEFS="-DFELUCCA_UAC=0" ./build.sh` adds defines for a t
 | `FELUCCA_OTA` | 1 | the updater. **Leave it on**: without it nothing can install over your firmware but the rescue |
 | `CV_MAX` | 240 x 64 | the biggest canvas, in pixels |
 | `SMK_MASTER_FROM_APP` | 0 | 1: K1 is the app's, the app sets the volume |
+| `KNOBI_CPU1` | 0 | 1: the second core (an environment variable: `KNOBI_CPU1=1 ./build.sh`; "Second core" above) |
+| `KNOBI_CPU1_PROBE` | 0 | 1: the CPU1 probe (`./build.sh --probe-cpu1`, which sets `KNOBI_CPU1` too; "Second core" above) |
 
 The app is built with `-Os`. Leave it so: with `-O2` (the unity build puts usb.c in it) the USB-MIDI IN babbled on an
 FM-1 and the host dropped the port.

@@ -19,7 +19,9 @@
 
 enum { W_END, W_HEAD, W_HVAL, W_FOOT, W_TITLE, W_RULE, W_HINT, W_KNOB, W_ENCBTN, W_LIST, W_SEGENC, W_PAD, W_ROWLED,
        W_ROWSEL, W_ENVG, W_PROG, W_DIGIT, W_NAME, W_BIGNAME, W_VOICES, W_DIAG, W_WORD, W_VER, W_BOOTTXT, W_VERTXT,
-       W_WSTAT };
+       W_WSTAT, W_BPM, W_LIST2, W_CLKSTAT };
+/* (Task 5) W_BPM: an encoder's BPM on a 3-digit display (the tempo followed: an external clock's when one is); W_LIST2:
+ * a select's LED list in two columns; W_CLKSTAT: what the clock follows, in words */
 typedef struct {
     uint8_t t, x, y, w, h;
     uint8_t a;                                    /* encoder slot 0..6 (K2..K8) or top pad 0..7 */
@@ -53,8 +55,8 @@ static const wdg_t SCR_PLAY_W[] = {
     KNOB(7, 87, 56, 0, "FREQ"), KNOB(63, 87, 56, 1, "RESO"), KNOB(119, 87, 56, 2, "MODE"),
     KNOB(175, 87, 58, 3, "ENV AMT"),
     {W_TITLE, 7, 133, 226, 19, 0, 0, "PERFORMANCE"},
-    PAD(7, 158, 56, 22, 0, 2, "SYNC"), PAD(63, 158, 56, 22, 1, 2, "UNISON"), PAD(119, 158, 56, 22, 2, 2, "ARP"),
-    PAD(175, 158, 58, 22, 3, 2, "HOLD"),
+    PAD(7, 158, 42, 22, 0, 2, "SYNC"), PAD(49, 158, 42, 22, 1, 2, "UNISON"), PAD(91, 158, 42, 22, 2, 2, "ARP"),
+    PAD(133, 158, 42, 22, 3, 2, "HOLD"), KNOB(175, 154, 58, 4, "DIST"),   /* (K6: DISTORTION, Task 7) */
     {W_HINT, 7, 196, 226, 9, 0, 0, "TOP PADS: SWITCHES"},
     {W_HINT, 7, 207, 226, 9, 0, 0, "BOTTOM PADS: PRESSURE"},
     FOOTER, END};
@@ -110,6 +112,17 @@ static const wdg_t SCR_AT_W[] = {
     PAD(119, 153, 56, 20, 2, 1, "UNISON"), PAD(119, 175, 56, 20, 3, 1, "VOX %"),
     PAD(175, 173, 58, 20, 4, 1, "PORTA"), PAD(175, 195, 58, 20, 5, 1, "%"),
     FOOTER, END};
+static const wdg_t SCR_CLOCK_W[] = {             /* ARP + CLOCK (the mockup's "Arp + Clock + Program" page, its upper
+                                                  * two sections: Program has a screen of its own) */
+    HEADER,
+    {W_TITLE, 7, 17, 226, 19, 0, 0, "CLOCK"},
+    {W_BPM, 7, 40, 111, 56, 0, 0, "BPM"}, {W_LIST2, 122, 40, 111, 56, 1, 0, "DIVISION"},
+    PAD(7, 100, 75, 22, 2, 2, "TAP"), PAD(82, 100, 75, 22, 3, 2, "CLK %"), PAD(157, 100, 76, 22, 4, 2, "BEAT SYNC"),
+    {W_CLKSTAT, 7, 126, 226, 20, 0, 0, 0},
+    {W_TITLE, 7, 148, 226, 19, 0, 0, "ARPEGGIATOR"},
+    {W_LIST2, 7, 171, 111, 38, 2, 0, "MODE"}, {W_LIST, 118, 171, 40, 38, 3, 0, "OCT"},
+    PAD(158, 171, 75, 20, 5, 2, "ARP"), PAD(158, 193, 75, 20, 6, 2, "HOLD"),
+    FOOTER, END};
 static const wdg_t SCR_PROGRAM_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "PROGRAM"},
@@ -128,11 +141,16 @@ static const wdg_t SCR_GLOBALS_W[] = {
     {W_SEGENC, 157, 81, 76, 39, 6, 0, "VEL CURVE"},
     PAD(7, 123, 56, 22, 2, 2, "LOCAL %"), PAD(63, 123, 56, 22, 3, 2, "%"), PAD(119, 123, 56, 22, 4, 2, "SUS %"),
     PAD(175, 123, 58, 22, 5, 2, "AT CRV %"),
+#if KNOBI_CPU1_PROBE
+    {W_DIAG, 7, 147, 226, 63, 0, 0, 0},           /* (the CPU1 probe's four lines over the usual three; no version line) */
+    PADHINT(210), FOOTER, END};
+#else
     {W_DIAG, 7, 148, 226, 30, 0, 0, 0},
     {W_VERTXT, 7, 182, 226, 9, 0, 0, 0},
     PADHINT(204), FOOTER, END};
+#endif
 static const wdg_t *const SCR_W[SCR_COUNT] = {SCR_BOOT_W, SCR_PLAY_W, SCR_VCO_W, SCR_MIX_W, SCR_ENV_W, SCR_LFO_W,
-                                              SCR_AT_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
+                                              SCR_AT_W, SCR_CLOCK_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
 
 /* ---- state */
 static int scr_oct;                               /* the keys' octave (app.c sets it) */
@@ -161,6 +179,8 @@ static const char *const SCR_TXRX[2] = {"OFF", "CC"};
 static const char *const SCR_ONOFF[2] = {"OFF", "ON"};
 static const char *const SCR_STEREO[2] = {"STEREO", "MONO"};
 static const char *const SCR_SUS[2] = {"N.O.", "N.C."};
+static const char *const SCR_MCLK[CLK_MIDI_COUNT] = {"OFF", "OUT", "IN", "THRU", "IN NO S/S"};   /* MIDI CLOCK */
+static const char *const SCR_MCLK7[CLK_MIDI_COUNT] = {"OFF", "Out", "In", "thru", "In.nS"};      /* (the header's) */
 static int32_t scr_prog_shown(void) { return ctl_manual ? -1 : ctl_prog; }   /* the program on the displays, -1 MANUAL */
 /* the diagnostics line's numbers, quantised (what is drawn is what is compared): the load and its peak in 5 % steps
  * (0..199: up to 995 %), the voice limit, the sheds (up to 999) */
@@ -170,9 +190,88 @@ static int32_t scr_cpu_q(void)
     return (int32_t)((ld > 199u ? 199u : ld) | (pk > 199u ? 199u : pk) << 8 | (uint32_t)(eng_vlimit & 15u) << 16 |
                      (sh > 999u ? 999u : sh) << 20);
 }
+#if KNOBI_CPU1
+/* the second core on the diagnostics line (engine.c eng_c1_status), quantised: 0 OFF (DUAL CORE off), 1 FAIL (on, but
+ * CPU1 is not running: retired, or it never started), 2 + its job load in 5 % steps (on: "C1 ON 40%") */
+static int32_t scr_c1_q(void)
+{
+    int st = eng_c1_status();
+    uint32_t ld = (eng_c1_load + 2u) / 5u;
+    return st == 0 ? 0 : st == 2 ? 1 : 2 + (int32_t)(ld > 199u ? 199u : ld);
+}
+static void scr_c1(char *d)
+{
+    int32_t q = scr_c1_q();
+    d = scr_cat(d, "  C1 ");
+    if (q < 2) scr_cat(d, q ? "FAIL" : "OFF");
+    else scr_cat(scr_num(scr_cat(d, "ON "), (q - 2) * 5), "%");
+}
+#endif
+#if KNOBI_CPU1_PROBE
+/* the CPU1 probe's lines (cpu1_probe.c), on top of the diagnostics:
+ *   C1 PING n  ERR n  MISREAD n
+ *   FPU OK|BAD|TRAP|--  DUAL=SINGLE OK|BAD|--  [BIT xxxxxxxx: the bits misread]
+ *   LOAD 1C x%  2C y%  JOB z%     (the test patch on one core, on two (CPU0), CPU1's job; -- until measured)
+ *   PROBE n%  C1 IDLE|BUSY|OFF|FAIL [why]  DUAL OFF|ON n%|FAIL   (n: the probe's own time, the last second's
+ *                                    peak, % of a block; why: PATTERN, FPU, DUAL for the probe's own, else the HAL's)
+ * what is drawn is what is compared (the widget's value) */
+static const char *const SCR_C1ST[4] = {"OFF", "IDLE", "BUSY", "FAIL"};
+static const char *const SCR_C1WHY[6] = {"", " MISREAD", " LATE", " BARRED", " FAULT", " SILENT"};
+static const char *const SCR_CHK[4] = {"--", "OK", "BAD", "TRAP"};
+static const char *const SCR_PRFAIL[4] = {"", " PATTERN", " FPU", " DUAL"};
+static char *scr_hex8(char *d, uint32_t v)
+{
+    for (int i = 7; i >= 0; i--) *d++ = "0123456789ABCDEF"[v >> 4 * i & 15u];
+    *d = 0;
+    return d;
+}
+static uint32_t scr_probe_q(void)
+{
+    uint32_t h = c1probe.pings;
+    h = h * 131u + c1probe.errs;
+    h = h * 131u + c1probe_misreads();
+    h = h * 131u + c1probe_bits();
+    h = h * 7u + (uint32_t)c1probe_fpu();
+    h = h * 7u + (uint32_t)c1probe_dual();
+    h = h * 1009u + c1probe.load1 * 1000003u + c1probe.load2 * 999983u + c1probe.loadj * 7919u + c1probe.passes * 31u;
+    h = h * 17u + (c1probe.state & 3u) * 8u + (c1probe.why & 7u);
+    h = h * 37u + (c1probe.fail & 3u) + c1probe.cost_peak * 4u;
+    return h;
+}
+static int32_t scr_probe_lines(int32_t cx, int32_t y)   /* draws them from y; returns the y after them */
+{
+    char t[48], *p;
+    uint32_t mis = c1probe_misreads(), bits = c1probe_bits(), st = c1probe.state & 3u, why = c1probe.why;
+    int fpu = c1probe_fpu(), dual = c1probe_dual(), c1 = eng_c1_status();
+    p = scr_num(scr_cat(t, "C1 PING "), (int32_t)c1probe.pings);
+    p = scr_num(scr_cat(p, "  ERR "), (int32_t)c1probe.errs);
+    scr_num(scr_cat(p, "  MISREAD "), (int32_t)mis);
+    pg_text_c(cx, y, &FONT_XS, t, c1probe.errs || mis ? PC_RED : PC_WHITE);
+    p = scr_cat(scr_cat(t, "FPU "), SCR_CHK[fpu]);
+    p = scr_cat(scr_cat(p, "  DUAL=SINGLE "), SCR_CHK[dual]);
+    if (bits) scr_hex8(scr_cat(p, "  BIT "), bits);
+    pg_text_c(cx, y + 9, &FONT_XS, t, fpu >= 2 || dual >= 2 || bits ? PC_RED : PC_WHITE);
+    p = scr_cat(t, "LOAD 1C ");
+    if (!c1probe.passes) scr_cat(p, "--  2C --  JOB --");
+    else {
+        p = scr_num(p, (int32_t)c1probe.load1);
+        p = scr_num(scr_cat(p, "%  2C "), (int32_t)c1probe.load2);
+        scr_cat(scr_num(scr_cat(p, "%  JOB "), (int32_t)c1probe.loadj), "%");
+    }
+    pg_text_c(cx, y + 18, &FONT_XS, t, PC_WHITE);
+    p = scr_num(scr_cat(t, "PROBE "), (int32_t)(c1probe.cost_peak > 999u ? 999u : c1probe.cost_peak));
+    p = scr_cat(scr_cat(p, "%  C1 "), SCR_C1ST[st]);
+    p = scr_cat(p, c1probe.fail ? SCR_PRFAIL[c1probe.fail & 3u] : why < 6u ? SCR_C1WHY[why] : " ?");
+    p = scr_cat(p, "  DUAL ");
+    if (c1 == 1) scr_cat(scr_num(scr_cat(p, "ON "), (int32_t)eng_c1_load), "%");
+    else scr_cat(p, c1 ? "FAIL" : "OFF");
+    pg_text_c(cx, y + 27, &FONT_XS, t, st == CPU1_FAIL ? PC_RED : PC_WHITE);
+    return y + 36;
+}
+#endif
 static int32_t scr_val(uint16_t id)
 {
-    if (id < P_COUNT_PHASE1) return scr_p->v[id];
+    if (P_IS_LIVE(id)) return scr_p->v[id];
     if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return ctl_glob[id & 0xFFu];
     if (B_IS_PROG(id)) {                           /* a digit of the program (WRITE armed: of its destination) */
         int32_t n = ctl_wr == 1 ? ctl_wr_dest : scr_prog_shown();
@@ -183,27 +282,42 @@ static int32_t scr_val(uint16_t id)
     if (id == B_ACT(ACT_WRITE)) return ctl_wr == 2 || (ctl_wr == 1 && (fm1_ms >> 8 & 1u));   /* armed: blinks */
     if (id == B_ACT(ACT_ENTER)) return ctl_wr == 1;
     if (id == B_ACT(ACT_MANUAL)) return ctl_manual;
+    if (id == B_ACT(ACT_TAP)) return ctl_tap_lit();   /* (flashes on the beat) */
     return 0;
+}
+/* the BPM shown: the program's, or (MIDI CLOCK following one) the tempo received, rounded (0: none yet) */
+static int32_t scr_bpm_shown(uint16_t id)
+{
+    if (CLOCK_EXTERNAL(ctl_glob[G_MIDI_CLOCK])) return (eng_clk_bpm10 + 5) / 10;
+    return scr_val(id);
 }
 static int32_t scr_lo(uint16_t id)
 {
-    if (id < P_COUNT_PHASE1) return PARAMS[id].min;
+    if (P_IS_LIVE(id)) return param_get(id)->min;
     if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return GLOB_MIN[id & 0xFFu];
     return 0;
 }
 static int32_t scr_hi(uint16_t id)
 {
-    if (id < P_COUNT_PHASE1) return PARAMS[id].max;
+    if (P_IS_LIVE(id)) return param_get(id)->max;
     if (B_IS_GLOBAL(id) && (id & 0xFFu) < G_COUNT) return GLOB_MAX[id & 0xFFu];
     if (B_IS_PROG(id)) return (id & 0xFFu) == PRG_BANK ? (int32_t)PROG_BANKS - 1 : 9;
     return 1;
 }
 static const char *scr_choice(uint16_t id, int32_t v)   /* a select's choice, else 0 */
 {
-    if (id < P_COUNT_PHASE1) return PARAMS[id].kind == PK_SELECT ? PARAMS[id].labels[v - PARAMS[id].min] : 0;
+    if (P_IS_LIVE(id)) {
+        const param_t *p = param_get(id);
+        return p->kind == PK_SELECT && v >= p->min && v <= p->max ? p->labels[v - p->min] : 0;
+    }
     if (id == B_GLOBAL(G_POT_MODE)) return SCR_POT[v % 3];
+    if (id == B_GLOBAL(G_MIDI_CLOCK)) return SCR_MCLK[(uint32_t)v % CLK_MIDI_COUNT];
+    if (id == B_GLOBAL(G_ARP_SYNC)) return SCR_ONOFF[v & 1];
     if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) return SCR_TXRX[v & 1];
     if (id == B_GLOBAL(G_LOCAL)) return SCR_ONOFF[v & 1];
+#if KNOBI_CPU1
+    if (id == B_GLOBAL(G_DUAL)) return SCR_ONOFF[v & 1];
+#endif
     if (id == B_GLOBAL(G_STEREO)) return SCR_STEREO[v & 1];
     if (id == B_GLOBAL(G_SUSTAIN)) return SCR_SUS[v & 1];
     return 0;
@@ -241,14 +355,15 @@ static const char *scr_short(uint16_t id)          /* a fader's name in the foot
     case P_PORTA_RATE: return "PORTA RT";
     case P_PRG_VOL: return "PRG VOL";
     }
-    return id < P_COUNT_PHASE1 ? PARAMS[id].name : "-";
+    return P_IS_LIVE(id) ? param_get(id)->name : "-";
 }
 
 /* the binding a widget shows: an encoder slot of the screen's row, or a top pad of its own row */
 static uint16_t scr_wid(int screen, int row, const wdg_t *w)
 {
     if (w->t == W_PAD) return ctl_binding(screen, w->b == 2 ? row : w->b)->pad_top[w->a & 7u];
-    if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT)
+    if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT || w->t == W_BPM ||
+        w->t == W_LIST2)
         return ctl_binding(screen, row)->enc[w->a % 7u];
     return B_NONE;
 }
@@ -259,7 +374,9 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     uint16_t id = scr_wid(screen, row, w);
     uint32_t h = 0, i;
     switch (w->t) {
-    case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: return scr_val(id);
+    case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: case W_LIST2: return scr_val(id);
+    case W_BPM: return scr_bpm_shown(id) | (int32_t)CLOCK_EXTERNAL(ctl_glob[G_MIDI_CLOCK]) << 12;
+    case W_CLKSTAT: return ctl_glob[G_MIDI_CLOCK] | eng_clk_run << 4 | eng_clk_alive << 5;
     case W_PAD: return scr_val(id) | (w->b == 2 || w->b == row) << 16;
     case W_ROWLED: case W_ROWSEL: return row;
     case W_HVAL: return (int32_t)(((uint32_t)ctl_last_v & 0xFFFFu) | (uint32_t)(scr_oct + 2) << 16 |      /* v 0..15, octave 16..18, */
@@ -282,7 +399,13 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
+#if KNOBI_CPU1_PROBE
+        return (int32_t)(h * 2654435761u + scr_cpu_q() + (uint32_t)scr_c1_q() * 40503u + scr_probe_q() * 2246822519u);
+#elif KNOBI_CPU1
+        return (int32_t)(h * 2654435761u + scr_cpu_q() + (uint32_t)scr_c1_q() * 40503u);
+#else
         return (int32_t)(h * 2654435761u + scr_cpu_q());   /* (the load in 5 % steps: not a repaint a pass) */
+#endif
     }
     return 0;
 }
@@ -291,14 +414,20 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
 static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's display: a value, ON / OFF, a choice no. */
 {
     *d = 0;
-    if (id < P_COUNT_PHASE1) {
-        if (PARAMS[id].kind == PK_SWITCH) scr_cat(d, v ? "On" : "OFF");
-        else if (PARAMS[id].kind == PK_SELECT) scr_num(d, v - PARAMS[id].min + 1);
+    if (P_IS_LIVE(id)) {
+        if (param_get(id)->kind == PK_SWITCH) scr_cat(d, v ? "On" : "OFF");
+        else if (param_get(id)->kind == PK_SELECT) scr_num(d, v - param_get(id)->min + 1);
         else scr_num(d, v);
-    } else if (id == B_GLOBAL(G_MIDI_CH)) {
+    } else if (id == B_GLOBAL(G_MIDI_CLOCK)) scr_cat(d, SCR_MCLK7[(uint32_t)v % CLK_MIDI_COUNT]);
+    else if (id == B_GLOBAL(G_ARP_SYNC)) scr_cat(d, v ? "On" : "OFF");
+    else if (id == B_ACT(ACT_TAP)) scr_num(scr_cat(d, "tAP"), v % 10);   /* (the taps counted so far) */
+    else if (id == B_GLOBAL(G_MIDI_CH)) {
         if (v) scr_num(d, v); else scr_cat(d, "ALL");
     } else if (id == B_GLOBAL(G_PARAM_TX) || id == B_GLOBAL(G_PARAM_RX)) scr_cat(d, v ? "CC" : "OFF");
     else if (id == B_GLOBAL(G_LOCAL)) scr_cat(d, v ? "On" : "OFF");
+#if KNOBI_CPU1
+    else if (id == B_GLOBAL(G_DUAL)) scr_cat(d, v ? "On" : "OFF");
+#endif
     else if (id == B_GLOBAL(G_TRANSPOSE) || id == B_GLOBAL(G_TUNE) || id == B_GLOBAL(G_VEL_CURVE) ||
              id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
@@ -318,6 +447,18 @@ static void scr_list(const wdg_t *w, uint16_t id, int32_t v)   /* an LED a choic
         int on = lo + i == v;
         pg_led_s(x + 3, w->y + 3 + 9 * i, on);
         pg_text(x + 9, w->y + 9 * i, &FONT_XS, scr_choice(id, lo + i), on ? PC_WHITE : PC_DIM);
+    }
+    if (w->s) pg_text_c(w->x + w->w / 2, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
+}
+
+static void scr_list2(const wdg_t *w, uint16_t id, int32_t v)   /* scr_list in two columns, the first half left */
+{
+    int32_t lo = scr_lo(id), hi = scr_hi(id), n = hi - lo + 1, rows = (n + 1) / 2, i, cw = w->w / 2;
+    for (i = 0; i < n; i++) {
+        int on = lo + i == v;
+        int32_t x = w->x + 6 + (i / rows) * cw, y = w->y + 9 * (i % rows);
+        pg_led_s(x + 3, y + 3, on);
+        pg_text(x + 9, y, &FONT_XS, scr_choice(id, lo + i), on ? PC_WHITE : PC_DIM);
     }
     if (w->s) pg_text_c(w->x + w->w / 2, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
 }
@@ -357,7 +498,7 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_led(w->x + 5, 7, 1);
         pg_text(w->x + 11, 4, &FONT_XS, "KNOBI-SIX", PC_WHITE);
         pg_text(w->x + 12, 4, &FONT_XS, "KNOBI-SIX", PC_WHITE);
-        for (i = SCR_PLAY; i < SCR_COUNT; i++) pg_disc(4 * (w->x + 80 + 7 * i) + 2, 30, 7, i == screen ? PC_LED_ON : PC_LED_OFF, 256u);
+        for (i = SCR_PLAY; i < SCR_COUNT; i++) pg_disc(4 * (w->x + 73 + 7 * i) + 2, 30, 7, i == screen ? PC_LED_ON : PC_LED_OFF, 256u);
         break;
     case W_HVAL:
         t[0] = 'O', t[1] = 'C', t[2] = 'T', t[3] = scr_oct < 0 ? '-' : '+', t[4] = (char)('0' + (scr_oct < 0 ? -scr_oct : scr_oct)), t[5] = 0;
@@ -377,7 +518,7 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_RULE: pg_fill(w->x, w->y, w->w, w->h, PC_BLUE); break;
     case W_HINT: pg_text_c(cx, w->y + 1, &FONT_XS, w->s, PC_DIM); break;
     case W_KNOB: {
-        int bip = id < P_COUNT_PHASE1 && PARAMS[id].bipolar;
+        int bip = P_IS_LIVE(id) && param_get(id)->bipolar;
         pg_knob(cx, w->y + w->h - 23, 13, v, scr_lo(id), scr_hi(id), bip);
         if (id == P_FLT_MODE) {                    /* the mode knob's ends */
             pg_text(w->x + 1, w->y + w->h - 15, &FONT_XS, "LP", PC_DIM);
@@ -392,6 +533,28 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_text_c(cx, w->y + w->h - 7, &FONT_XS, w->s, PC_WHITE);
         break;
     case W_LIST: scr_list(w, id, v); break;
+    case W_LIST2: scr_list2(w, id, v); break;
+    case W_BPM: {                                  /* the tempo on a 3-digit display; following MIDI: its tempo ("---"
+                                                    * none yet), "BPM MIDI" under it */
+        int32_t b = v & 0xFFF;
+        x = pg_seg_w(3, 14, 24);
+        if (b) scr_num(t, b); else scr_cat(t, "---");
+        pg_seg(cx - x / 2, w->y + 4, 3, 14, 24, 3, t);
+        pg_text_c(cx, w->y + w->h - 7, &FONT_XS, v >> 12 & 1 ? "BPM  MIDI" : w->s, PC_WHITE);
+        break;
+    }
+    case W_CLKSTAT: {                              /* what the clock follows (the global MIDI CLOCK), in words */
+        int m = v & 15, run = v >> 4 & 1, alive = v >> 5 & 1;
+        if (!CLOCK_EXTERNAL(m))
+            pg_text_c(cx, w->y + 1, &FONT_XS, m == CLK_MIDI_OUT ? "INTERNAL CLOCK, SENT AS MIDI CLOCK" : "INTERNAL CLOCK",
+                      PC_WHITE);
+        else if (run) pg_text_c(cx, w->y + 1, &FONT_XS, "FOLLOWING MIDI CLOCK", PC_WHITE);
+        else pg_text_c(cx, w->y + 1, &FONT_XS, alive ? "MIDI CLOCK STOPPED" : "NO MIDI CLOCK: THE ARP WAITS", PC_RED);
+                                                   /* (stopped: ticks arriving, but 0xFC, or no 0xFA yet under IN) */
+        pg_text_c(cx, w->y + 11, &FONT_XS, CLOCK_EXTERNAL(m) ? "BPM AND TAP: THE PROGRAM'S OWN TEMPO" :
+                  "CLK: THE GLOBAL MIDI CLOCK", PC_DIM);
+        break;
+    }
     case W_SEGENC:
         scr_seg_text(t, id, v);
         pg_seg(cx - pg_seg_w(3, 10, 18) / 2, w->y + 4, 3, 10, 18, 3, t);
@@ -400,16 +563,16 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_PAD: {
         int active = v >> 16 & 1, on;
         int32_t val = (int32_t)(int16_t)(v & 0xFFFF);
-        if (id < P_COUNT_PHASE1) on = val != PARAMS[id].min;
+        if (P_IS_LIVE(id)) on = val != param_get(id)->min;
         else if (B_IS_GLOBAL(id)) on = val != scr_lo(id);
         else on = val != 0;                        /* HOLD, WRITE (blinks armed), ENTER (armed), MANUAL */
         pg_button(cx - 9, w->y + 1, 18, 8, on);
         if (B_IS_GLOBAL(id)) scr_label(t, w->s, id, val);
-        else if (id < P_COUNT_PHASE1 && PARAMS[id].kind == PK_SELECT) {
+        else if (P_IS_LIVE(id) && param_get(id)->kind == PK_SELECT) {
             int has = 0;
             for (i = 0; w->s[i]; i++) has |= w->s[i] == '%';
             if (has) scr_label(t, w->s, id, val);
-            else scr_cat(t, val == PARAMS[id].min ? w->s : scr_choice(id, val));
+            else scr_cat(t, val == param_get(id)->min ? w->s : scr_choice(id, val));
         } else scr_cat(t, w->s);
         pg_text_c(cx, w->y + 12, &FONT_XS, t, active ? PC_WHITE : PC_FAINT);
         break;
@@ -483,19 +646,30 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
     case W_DIAG: {                                 /* the load and the CPU guard (engine.c eng_cpu); the raw wheels
                                                     * and faders (checking a unit's travel) */
         uint32_t q = (uint32_t)scr_cpu_q();
+#if KNOBI_CPU1_PROBE
+        int32_t y = scr_probe_lines(cx, w->y + 1);   /* (the probe's lines first; then the usual, 9 rows apart) */
+#define SCR_DIAG_Y(n) (y + 9 * (n))
+#else
+#define SCR_DIAG_Y(n) (w->y + 1 + 10 * (n))
+#endif
         char *p = scr_num(scr_cat(t, "CPU "), (int32_t)(q & 0xFFu) * 5);
         p = scr_num(scr_cat(p, "% PEAK "), (int32_t)(q >> 8 & 0xFFu) * 5);
         p = scr_num(scr_cat(p, "%  VOX "), (int32_t)(q >> 16 & 0xFu));
         p = scr_num(scr_cat(p, "/"), NVOICE);
         scr_num(scr_cat(p, "  SHED "), (int32_t)(q >> 20));
-        pg_text_c(cx, w->y + 1, &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
+        pg_text_c(cx, SCR_DIAG_Y(0), &FONT_XS, t, (q >> 20) ? PC_WHITE : PC_DIM);
         p = scr_cat(t, "WHEELS ");
         p = scr_num(p, fm1_in.wheel[0]);
-        scr_num(scr_cat(p, " "), fm1_in.wheel[1]);
-        pg_text_c(cx, w->y + 11, &FONT_XS, t, PC_DIM);
+#if KNOBI_CPU1 && !KNOBI_CPU1_PROBE
+        scr_c1(scr_num(scr_cat(p, " "), fm1_in.wheel[1]));   /* + "C1 ON 40%" / "C1 OFF" / "C1 FAIL" */
+#else
+        scr_num(scr_cat(p, " "), fm1_in.wheel[1]);    /* (the probe: DUAL's state is on its PROBE line) */
+#endif
+        pg_text_c(cx, SCR_DIAG_Y(1), &FONT_XS, t, PC_DIM);
         p = scr_cat(t, "FADERS");
         for (i = 0; i < 4; i++) p = scr_num(scr_cat(p, " "), fm1_in.fader[i]);
-        pg_text_c(cx, w->y + 21, &FONT_XS, t, PC_DIM);
+        pg_text_c(cx, SCR_DIAG_Y(2), &FONT_XS, t, PC_DIM);
+#undef SCR_DIAG_Y
         break;
     }
     case W_WORD: pg_wordmark(cx - pg_word_w(w->s) / 2, w->y + 1, w->s, PC_WHITE); break;
@@ -592,10 +766,13 @@ static int screen_check(void)
                 int32_t lim = w->w;
                 if (i >= SCR_WMAX) SCR_BAD;
                 if (w->x + w->w > 240 || w->y + w->h > 240) SCR_BAD;
-                if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT) {
-                    int kind = id < P_COUNT_PHASE1 ? PARAMS[id].kind : B_IS_GLOBAL(id) || B_IS_PROG(id) ? PK_SELECT : -1;
+                if (w->t == W_KNOB || w->t == W_ENCBTN || w->t == W_LIST || w->t == W_SEGENC || w->t == W_DIGIT ||
+                    w->t == W_BPM || w->t == W_LIST2) {
+                    int kind = P_IS_LIVE(id) ? param_get(id)->kind : B_IS_GLOBAL(id) || B_IS_PROG(id) ? PK_SELECT : -1;
                     if (w->a != n++ || id == B_NONE) SCR_BAD;
-                    if ((w->t == W_KNOB) != (kind == PK_KNOB) || (w->t == W_ENCBTN) != (kind == PK_SWITCH)) SCR_BAD;
+                    if ((w->t == W_KNOB || w->t == W_BPM) != (kind == PK_KNOB) || (w->t == W_ENCBTN) != (kind == PK_SWITCH))
+                        SCR_BAD;
+                    if (w->t == W_BPM && id != P_BPM) SCR_BAD;
                     if (w->t == W_SEGENC && !B_IS_GLOBAL(id)) SCR_BAD;
                     if ((w->t == W_DIGIT) != (B_IS_PROG(id) != 0)) SCR_BAD;
                 }
@@ -604,14 +781,14 @@ static int screen_check(void)
                     padseen |= 1u << w->a;
                 }
                 if (w->s && (w->t == W_KNOB || w->t == W_PAD || w->t == W_LIST || w->t == W_ENCBTN || w->t == W_SEGENC ||
-                             w->t == W_HINT || w->t == W_DIGIT)) {
+                             w->t == W_HINT || w->t == W_DIGIT || w->t == W_BPM || w->t == W_LIST2)) {
                     int32_t v, lo = id != B_NONE ? scr_lo(id) : 0, hi = id != B_NONE ? scr_hi(id) : 0;
                     for (v = lo; v <= hi; v++) {
-                        if (w->t == W_PAD && id < P_COUNT_PHASE1 && PARAMS[id].kind == PK_SELECT) {
+                        if (w->t == W_PAD && P_IS_LIVE(id) && param_get(id)->kind == PK_SELECT) {
                             int has = 0;
                             for (k = 0; w->s[k]; k++) has |= w->s[k] == '%';
                             if (has) scr_label(t, w->s, id, v);
-                            else scr_cat(t, v == PARAMS[id].min ? w->s : scr_choice(id, v));
+                            else scr_cat(t, v == param_get(id)->min ? w->s : scr_choice(id, v));
                         } else scr_label(t, w->s, id, v);
                         if (text_w(&FONT_XS, t) - 1 > lim) {
                             SCR_BAD;
@@ -620,6 +797,8 @@ static int screen_check(void)
 #endif
                         }
                         if (w->t == W_LIST && scr_choice(id, v) && text_w(&FONT_XS, scr_choice(id, v)) + 8 > lim) SCR_BAD;
+                        if (w->t == W_LIST2 && (!scr_choice(id, v) || text_w(&FONT_XS, scr_choice(id, v)) + 8 > lim / 2))
+                            SCR_BAD;
                     }
                 }
             }

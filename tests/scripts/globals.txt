@@ -5,7 +5,7 @@
 # 9 SUSTAIN, 10 AT CURVE). They are saved 2 s after the last change, once nothing has played for 3 s ("saves").
 50 btn 12
 100 btn 10
-150 expect 8 screen
+150 expect 9 screen
 200 enc 5 -3
 250 expect -3 glob 4
 200 enc 6 25

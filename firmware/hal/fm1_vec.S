@@ -19,4 +19,8 @@ fm1_fatal_common:
 	[--sp] = {r15-r0}
 	r0 = sp				/* frame: r0..r15, reti, rete, retx, rets(stub+6), psr, icfg, usp, ssp, sp, rets(orig) */
 	call fm1_fault_c
+#if KNOBI_CPU1
+	goto fm1_cpu1_resume		/* it returned: a fault of the second core's, CPU1 held (fm1_cpu1.S) */
+#else
 1:	goto 1b
+#endif

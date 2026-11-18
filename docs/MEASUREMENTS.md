@@ -1,5 +1,230 @@
 # Measurements
 
+## Phase 2 status (2A second core, 2B clock / arpeggiator / distortion)
+
+Everything below is emulator and host-test evidence: **nothing has run on a keyboard**. The device numbers come from
+the CPU1 probe ([SMOKE_TEST.md](SMOKE_TEST.md) §5), then the effects (2C) are planned against them. Last CI run on
+`phase2` (9384171): 44144831394, `firmware`, `fm1-emu` and `cpu1-emu` all green; its artifacts include
+`knobi-six-pro` (the default package, one core) and `knobi-six-cpu1probe`.
+
+| what | single core | dual core (`KNOBI_CPU1=1`, DUAL CORE on) | source |
+|---|---|---|---|
+| render, 6 voices, % of the 5.805 ms block at 240 MHz (hw cycle model) | init chord 65.4, musical C3..C5 80.4, C5..C7 91.6, extreme C3..C5 123.6 | 42.8, 50.3, 57.7, 75.9 (critical path estimate) | Task 3 tables below |
+| same at 360 MHz | 43.6, 53.6, 61.1, 82.4 | 28.5, 33.5, 38.4, 50.6 | Task 3 |
+| change | | -34.5 to -42.8 % (not -50: CPU0 keeps the tick, bus, DC blocker, limiter) | Task 3 |
+| CPU0 in the emulator's own time (the CPU guard's measure) | 32.7 to 67.0 % | 20.4 to 39.6 %, CPU1 job 12 to 31 % | Task 3 |
+| distortion at 127 vs 0 | +1.3 % of the block (+17,000 to +19,800 hw cycles a block); at 0 the stage is skipped (+0.1 %, bit for bit the old output) | the same, it stays on CPU0 after the join | Task 7 |
+| clock, arpeggiator | host and unit tests; no per-block cost figure was recorded for them | | Tasks 5, 6 |
+
+The default build (one core, DUAL CORE and CPU1 absent) is what a release is. Dual core is a separate
+`KNOBI_CPU1=1` build, never a release; DUAL CORE defaults to OFF even there.
+
+Caveats that apply to every dual-core figure: fm1-emu has **no cache and no bus-contention model**, both cores run at
+full speed in it, and prior art measured -27 to -41 % on devices, so **expect the device to be slower than these
+numbers**. The clock speed itself (240 vs 360 MHz) is not known for this unit; both columns are given. The emulator
+does not hold a core through `C1_CON`, has no PC-limit fault for CPU1's ROM boot and no supply-dependent misreads
+(`--flaky-core1` models them), and does not turn the XIP flash off during an erase.
+
+CI gate, narrowed on João's decision (commit ae72240): the `cpu1-emu` job used to compare the default build against
+the pre-HAL base (e800d7e) byte for byte (`app.bin`, `app.dis`, package). Every later feature changes those, so it now
+checks only that the default build has **CPU1 absent** (`CPU1: absent (KNOBI_CPU1=0, one core)` from build.py) and that
+the update loader `ota.bin` is **byte for byte** the base's. The loader is the one part that cannot be emulated and
+threatens the update path; the app and package are no longer compared.
+
+Not shown to be from the distortion: a small DC offset remains on the output for asymmetric loud material (the report
+attributes it to the existing limiter). Test `dist_max_chord` (Task 7) measured, over 10 s on the loud pulses + sync
+chord, **-64.7 dBFS at distortion 32 and -68 dBFS at 0** (with distortion at 127: -105.4 dBFS; init chord -96.6). The
+offset is there with the distortion at 0, so it is not the distortion's own; but it is 3.3 dB higher at 32 than at 0,
+so it is not shown that the distortion has no part in it either (nor that it predates Phase 2: no Phase 1 figure for
+this material was taken). Noted so it is looked at, not blamed or cleared without a measurement.
+
+### What only the device can confirm
+
+None of this is answerable on the computer or in the emulator; the probe package and its procedure
+([SMOKE_TEST.md](SMOKE_TEST.md) §5, [research/second-core.md](research/second-core.md) "What only the hardware can
+answer") exist for the first block. A fail on any of the first four means DUAL CORE stays off on this unit.
+
+1. **CPU1 starts** on this unit at all (`C1 IDLE` vs `C1 FAIL SILENT`).
+2. **Shared-RAM misreads** at the stock supply (`MISREAD`, `BIT 00200000` is the known fault; units differ).
+3. **CPU1's FPU**: the float workload equal on both cores, no trap (`FPU OK`).
+4. **DUAL = SINGLE** checksums equal on the real chip.
+5. **The real speed-up**: `LOAD 1C / 2C` on the probe's test patch (the emulator says -35 to -43 %, the device
+   likely less; cache and flash contention).
+6. **The real clock** (240 vs 360 MHz) and the real single-core CPU % for the NVOICE decision; Phase 1's open item.
+7. **The WRITE gap** with CPU1 on: whether the flash gate holds up under a real erase and write (the emulator cannot
+   turn the XIP flash off).
+8. **MIDI clock jitter on USB**: clock out is sent from the main loop (within a few ms of its time), clock in is
+   queued to the 5.8 ms audio block; whether a DAW or hardware slave accepts that, and a tempo lock, need a real host.
+9. **Distortion taper and level by ear**: the curve and the "a chord stays about as loud" rule are tested by numbers;
+   whether 32 is a pleasant warmth, 127 a usable maximum, and single notes' +8 dB acceptable is João's ear. Imported
+   programs now play their stored distortion value too.
+10. **Per-program ARP HOLD**: it is inferred from the importer's slot for imported programs; confirm against real
+    programs that it means what it does on the OB-6.
+11. Arp and clock feel: tap tempo, swing, ARP BEAT SYNC, the arp under an external clock from a real DAW.
+
+## Dual core
+
+### Phase 2 Task 2: the CPU1 HAL in fm1-emu (KNOBI_CPU1=1; no audio jobs yet)
+
+The whole device image (`KNOBI_CPU1=1 ./build.sh`, the Pro, with the test hooks of `platform.c` /
+`hal/fm1_cpu1.h` where named) booted in fm1-emu `60645a5` (joakimeriksson, MIT) in its dual mode: cpu0 and cpu1 a
+step each; cpu1 released by `0x10008` bit 3 at the word at `0x01C7FFF8`; `--flaky-core1 RATE` flips bit 21 of
+cpu1's RAM loads now and then. 1,500 emulated ms each, `bash tests/cpu1_emu/run.sh EMU OUT` (CI job `cpu1-emu`).
+The boot takes ~0.3 s, so a run plays ~203 audio halves (the single-core image: 203).
+
+| case | image | expected | seen |
+|---|---|---|---|
+| plain | no test hook (as it would be installed) | start, boot ping, CPU1 idle in its RAM loop | ready 1, request = complete = 1, jobs 1, rejected 0; no halt, no fault; 203 halves |
+| start | hook 3: a ping every 17 blocks (~100 ms) inside the audio interrupt; a post and a join from the main loop every 100 ms; at ~600 ms an erase, a page write, a sliced erase and a sliced write of one store sector, each read back | every ping back; the main loop's post refused, its join 0; the flash work through the gate with CPU1 on | IDLE, 12 pings back (12 jobs), rejected 0; main-loop post -1 (11 refused), join 0; flash work at 668 ms, all 6 steps ok, 4 pings before it and 8 after; flash_ok 1; boot guard failed 0, pending 1; 203 halves |
+| nostart | hook 1: CPU1's entry never reports in | one core after 20 ms, boot guard unaffected | FAIL (SILENT), no job; boot guard failed 0, pending 1, no chip reset; 200 halves (the boot 20 ms later) |
+| hang | hook 2: a job that never returns, joined with a 4 ms deadline from the post | retired within one block (5,804 us) | join -1 after 4,003 us; FAIL (LATE), barred until power-off; boot guard failed 0, pending 1; 202 halves |
+| flaky | hook 3 + `--flaky-core1 1e-7 --seed 7 --cpu1-survives` | a misread fails the check, CPU1 retired, audio goes on | 14 misreads injected; FAIL (MISREAD) at 441 ms after 1 good ping, rejected 14, barred; join afterwards 0; 203 halves |
+| reset | hook 5: a warm reset (`fm1_reboot`) inside the start window, after CPU1 answered and before the boot ping | the boot guard counts it once; the second boot runs one core (start mark -> bar; bootguard.failed) | 1 chip reset; second boot: OFF, barred 1, no job; boot guard failed 1, pending 1; 194 halves |
+
+`--cpu1-survives` in the flaky case: a misread pointer can send cpu1 to any address, and without the option the
+emulator stops the whole machine there; on the chip that is a fault CPU0 handles (`fm1_cpu1_fault_c`), a path the
+emulator does not have. The hang and flaky cases' "rejected"/spinning after the retirement are the emulator's cpu1
+still running (it does not model the hold); CPU0's side is what the cases check.
+
+Default build (KNOBI_CPU1 unset): `app.bin` sha1 `44541dc3b3f1f62f0021c4c359ae2f3ee1e59ca0`, the loader and the
+package byte for byte the same as before the HAL (e800d7e; local build with the local bank; CI's knobi-six.fwsc and
+app.dis of run 44079859772 equal run 44075144656's, and the CPU-gate summary is unchanged). The update
+loader holds CPU1 at its start only in a KNOBI_CPU1 build (`ota.bin` 8,621 B there); the CI job `cpu1-emu` builds
+e800d7e beside HEAD and compares the loader `ota.bin` byte for byte (until Task 5 it also compared `app.bin`, `app.dis` and the package; dropped since
+every later feature changes them, João's call); build.py: `CPU1: absent (KNOBI_CPU1=0, one core)`. The
+CPU1 build: image +2,760 B (221,892 B), RAM +3,216 B (CPU1's stacks 3,072 B and the mailbox), `.c1_text` 148 B in
+the RAM code, with no flash address in it; CPU1's stack 0 B for the loop and the ping (budget 2,560 B).
+
+What the emulator does not show (only a device can): it does not hold a core through `C1_CON` bits 1/3 (after a
+retirement its cpu1 goes on spinning; the firmware's side, single core, is what is checked), has no PC-limit fault
+for cpu1's ROM boot, no cache or bus contention, and no supply-dependent misreads (`--flaky-core1` is a model of
+them). Whether CPU1 starts on the SMK-37 at all, misreads at its stock rails, and how the flash gate behaves under a
+real save with CPU1 on stay for the device and the probe build (Task 4; the emulator's side: Task 3's `write` case below).
+
+### Phase 2 Task 3: the voices on two cores (KNOBI_CPU1=1 + DUAL CORE on; emulator only)
+
+What runs (`engine.c` `eng_split`, voices.c's `SYNTH_SPLIT` in a KNOBI_CPU1 build; [API.md](API.md) "Second core"):
+each 16-frame control period of the audio interrupt, CPU0 runs the tick, splits the busy voices (`synth_balance`:
+CPU0 the first n / 2 by index, CPU1 the rest), posts set B (`cpu1_job_voices`, CPU1's own bus), renders set A, joins
+(1.5 ms from the post at most; and within the block's deadline and its shared join wait of half a block: the final
+review's fix, case `slow` below), adds CPU1's bus, then the DC blocker and the limiter. Under two voices busy, DUAL CORE off
+(the default) or CPU1 off: one core. Cache lines: 32 B (the AC79 SDK's `asm/cache.h` `CACHE_LINE_COUNT`, Melodee's and
+felucca-bsp's mailbox lines): `voice_t` is 320 B = 10 lines and `synth_t.voice[]` starts on a line in a CPU1 build
+(`SYNTH_VOICE_ALIGN`, static asserts), CPU1's bus and its time counter sit on lines of their own.
+
+**fm1-emu has no cache and no bus-contention model**: both cores fetch and load at full speed in it. On the chip they
+share one I-cache and the XIP flash, and the voice code (`voice_render` alone is 17.8 KB) runs from the flash on both.
+Prior art measured −27…−41 % on devices ([research/second-core.md](research/second-core.md) §1, §4), not the ideal
+~−50 %; **expect the device to be slower than the numbers below**.
+
+**Cycles per core** (`tests/cpu_emu/`, harness `DUAL=1`: the same synth and split, the emulator's second core started
+bare-metal through a minimal two-line mailbox; `patch_emu.py` records core 1's pcs with bit 31 set and charges only
+core 0's costs to the clock; local run = CI's `fm1-emu` job). 6 voices, cycles per 256-frame block, emu / hw model.
+CPU0's work leaves out its wait (the emulator steps the cores an instruction each, so the wait's length is in
+instructions, not in either cycle model); CPU1's job leaves out its idle poll. The block's critical path is estimated
+as CPU0's serial work + max(set A, set B) (the same side the larger in every period, as with 3 + 3 voices):
+
+| patch | one core | CPU0 (A + serial) | CPU0 set A | CPU1 job (set B) | critical path (est.) | change |
+|---|---|---|---|---|---|---|
+| init chord | 644,307 / 911,408 | 410,906 / 580,095 | 232,846 / 331,599 | 244,191 / 347,508 | 422,251 / 596,004 | −34.5 / −34.6 % |
+| musical C3..C5 | 779,194 / 1,120,333 | 471,291 / 675,151 | 299,936 / 435,572 | 318,694 / 461,377 | 490,048 / 700,956 | −37.1 / −37.4 % |
+| musical C5..C7 | 895,157 / 1,276,663 | 511,666 / 729,465 | 340,181 / 489,647 | 394,281 / 563,393 | 565,767 / 803,211 | −36.8 / −37.1 % |
+| extreme C3..C5 | 1,210,238 / 1,721,818 | 654,247 / 932,772 | 474,950 / 679,926 | 566,782 / 805,241 | 746,078 / 1,058,087 | −38.4 / −38.5 % |
+| extreme 120..127 | 1,382,949 / 1,957,717 | 781,958 / 1,106,545 | 602,402 / 853,744 | 611,782 / 867,367 | 791,337 / 1,120,169 | −42.8 / −42.8 % |
+
+% of the block (5.805 ms), emu / hw model:
+
+| patch | one core, 240 MHz | two cores, 240 MHz | one core, 360 MHz | two cores, 360 MHz |
+|---|---|---|---|---|
+| init chord | 46.2 / 65.4 | 30.3 / 42.8 | 30.8 / 43.6 | 20.2 / 28.5 |
+| musical C3..C5 | 55.9 / 80.4 | 35.2 / 50.3 | 37.3 / 53.6 | 23.4 / 33.5 |
+| musical C5..C7 | 64.3 / 91.6 | 40.6 / 57.7 | 42.8 / 61.1 | 27.1 / 38.4 |
+| extreme C3..C5 | 86.9 / 123.6 | 53.6 / 75.9 | 57.9 / 82.4 | 35.7 / 50.6 |
+| extreme 120..127 | 99.3 / 140.5 | 56.8 / 80.4 | 66.2 / 93.7 | 37.9 / 53.6 |
+
+The split is ~−35…−43 %, not −50 %: CPU0 keeps the tick (the smoothers, the LFO, every voice's control and envelopes),
+the bus, the DC blocker and the limiter (~170–180 k emu cycles a block), and set B (the higher notes, by index) costs
+more than set A. Every dual run's checksum equals its one-core run's.
+
+**The whole image** (`tests/cpu1_emu/`, the KNOBI_CPU1=1 package booted in fm1-emu `60645a5`, cases with
+`tests/cpu1_emu/dual_hook.c`; CI job `cpu1-emu`, all 9 cases ok locally):
+
+| case | what | seen |
+|---|---|---|
+| dual | the audio interrupt plays a fixed script, block by block: the init chord, the musical patch on C3..C5 and C5..C7, the extreme patch on C3..C5, each from `synth_init`, 32 blocks held + 8 released; DUAL CORE off, then on, same image, same run | every checksum the same (24ff6590, 2c757139, debaa049, edcde981); 580 CPU1 jobs per patch with it on, none off; IDLE, nothing refused; the Globals line shows `C1 ON 20%` |
+| dualfail | as dual, CPU1's 1000th voice job never returns (in the second patch with DUAL CORE on) | the join fails after 1.5 ms, CPU0 renders set B in that period: every checksum still the same; FAIL (LATE) at 1,669 ms, jobs 580, 419, 0, 0 (one core after); no halt, 358 audio halves |
+| dualmid | as dualfail, but the 1000th job renders one voice of set B and then hangs (late part way) | CPU0 renders set B again, that voice from one period on: FAIL (LATE) at 1,669 ms; only that patch's checksum differs (99f307e5); its largest sample-to-sample step 42,349 = the one-core pass's (the waveform's own edges are larger than the jump), peak 28,494 vs 28,253, under the limiter's ceiling; the next patches equal again |
+| slow | as dual, but from CPU1's 1000th voice job on every job takes ~1.3 ms (slow, never hung: under the 1.5 ms one join may wait; final review 3) | retired (LATE) at 1,670 ms in block 227, the block of the first slow job, after 2 slow jobs came back (the block's shared join wait, half a block, ran out); 0 blocks over budget (the longest 89 %); every checksum the same as one core; jobs 580, 421, 0, 0 (CI run 44159088422) |
+| write | DUAL CORE on at 400 ms, the chord held, WRITE + ENTER at 0.9 / 1.0 s, notes off at 1.8 s, the globals' autosave, a chord again | WRITE stored (rc 1) at 1,060 ms; autosave at 5,721 ms, DUAL CORE read back 1 (its blob); jobs 1,104 before the WRITE, 1,536 after it, 7,498 at the end; CPU1 IDLE throughout (the flash gate never had to retire it: every erase and write found it idle in its RAM loop), rejected 0; no fault, 1,065 audio halves in 6.5 s |
+
+What the write case cannot see: fm1-emu does not turn the XIP flash off during an erase or a write, so a CPU1 fetch
+from the flash at that moment would not fault here. The evidence that none happens is the gate: every flash entry
+point runs only with `fm1_flash_access_ok` (CPU1 held, or idle in its RAM loop, acknowledged), `fl_enter` refuses
+otherwise, and the case shows the gate never had to retire CPU1 (it stayed IDLE) while the saves succeeded.
+
+CPU0's render in the emulator's own time (no cost model; what the CPU guard measures, the joins' waits included),
+per block, % of the block, DUAL CORE off / on; and CPU1's job load (`C1 ON n%`):
+
+| patch, 6 voices | off: CPU0 | on: CPU0 | change | on: CPU1 job |
+|---|---|---|---|---|
+| init chord | 32.7 % | 20.4 % | −37.7 % | 12 % |
+| musical C3..C5 | 45.1 % | 26.7 % | −40.8 % | 19 % |
+| musical C5..C7 | 49.9 % | 29.7 % | −40.6 % | 22 % |
+| extreme C3..C5 | 67.0 % | 39.6 % | −40.8 % | 31 % |
+
+A mutation check: dropping one sample of CPU1's bus from the sum makes every dual checksum differ (7eb24497, …):
+the case fails as it should.
+
+Default build: `app.bin` (sha1 `44541dc3…`), `app.dis`, the loader and the package byte for byte as before this task
+(everything new is under `KNOBI_CPU1`: the global, the split, the alignment, the Globals line); the CI job still
+compares them with e800d7e's default build. The CPU1 build: image 222,756 B (+864 B), RAM 27,876 B (+256 B: CPU1's
+bus and counter on their lines); CPU1's stack: the deepest job `cpu1_job_voices` 612 B of 2,560 B. The globals:
+the version-1 record in blobs 0 / 1 is byte for byte the same in both builds; a KNOBI_CPU1 build keeps DUAL CORE in
+blob 2 ("DUAL", the value, a CRC16), which a default build never touches, so swapping the builds keeps the globals both
+ways; blob 2 missing or broken: OFF (`test_store_cpu1` `globals_dual_blob`).
+
+### Phase 2 Task 4: the CPU1 probe in fm1-emu (`--probe-cpu1`; the package for the first device run)
+
+The probe image (`./build.sh --probe-cpu1`, `knobi-six-cpu1probe.fwsc`, `src/cpu1_probe.c`; the device procedure:
+[SMOKE_TEST.md](SMOKE_TEST.md) "CPU1 probe") booted in fm1-emu `60645a5`, 4,000 emulated ms, GLOBE at 800 ms
+(`tests/cpu1_emu/run.sh` cases `probe`, `probeflaky`; CI job `cpu1-emu`, which also uploads the package as the artifact
+`knobi-six-cpu1probe` and the screen as `probe_screen.png`). Image 226,312 B, RAM .data+.bss 47,332 B (+19,456 B on
+the CPU1 build: the 16 KB pattern buffer and the test patch's synth).
+
+| case | expected | seen |
+|---|---|---|
+| probe | the counters go up, no error, no misread, FPU and DUAL=SINGLE OK, CPU1 IDLE | PING 4, ERR 0, MISREAD 0 over 77 rounds of 16 KB (4 KB steps every other block, CPU0 reading the last step's chunk while CPU1 works); the probe's own time PROBE 8 % of a block at its peak (emulator time; counted in the CPU line and the guard); FPU 4 ok (both cores `d755fe69`), no trap; DUAL=SINGLE 2 passes equal (`17408792`, 128 CPU1 jobs a pass); LOAD 1C 45 % 2C 26 % JOB 19 % (the emulator's time, no cost model: as Task 3's -41 %); IDLE; 634 audio halves |
+| probemis | test hook `KNOBI_PROBE_TEST=1`: CPU1 reads `0x00200000` where 0 is in one word of round 40 | MISREAD 1 (CPU1's), BIT 00200000, ERR 1, CPU1 retired at once: FAIL PATTERN (HAL why MISREAD), rounds 40; the audio ran; lines 1, 2 and 4 red |
+| probeflaky | `--flaky-core1 1e-7 --seed 7 --cpu1-survives`: the errors show | 40 misreads injected; ERR 1, MISREAD 40 (the mailbox check refused them; the misread came before the first probe ping), FAIL (MISREAD); the audio ran (634 halves) |
+
+The screen at the end of `probe`: `C1 PING 4  ERR 0  MISREAD 0`, `FPU OK  DUAL=SINGLE OK`, `LOAD 1C 45%  2C 26%  JOB 19%`,
+`PROBE 8%  C1 IDLE  DUAL OFF`, then the CPU, wheels and faders lines. A pattern misread, FPU BAD or DUAL=SINGLE BAD
+retires CPU1 (FAIL PATTERN / FPU / DUAL), so DUAL CORE never renders the sound on a core that read or computed wrong. The default build stays byte for byte the same
+(app.bin, app.dis, ota.bin, the package; also the plain `KNOBI_CPU1=1` app.bin). What the emulator cannot say (no
+cache or bus model, no supply-dependent misreads, no FPU trap path) is what the device run is for.
+
+## Phase 2 Task 7: the distortion (fm1-emu, local run = CI's `fm1-emu` job)
+
+The distortion (`synth/voices.h` "Distortion": an odd cubic soft clip on the summed bus, after both cores' voices and
+before the DC blocker and the limiter) costs per frame two float multiplies to the curve's input, a compare, and for a
+sample under the knee three multiplies and a subtract (no division; the coefficients, with a six-step Newton square
+root, are worked out at a control tick only when the smoothed amount moves). It runs on CPU0, after the join. Harness
+`DIST=127` (run.sh's `x` runs) against the same patch at 0 (the `p` runs), 6 voices, one core, cycles per 256-frame
+block, emu / hw model:
+
+| patch | amount 0 | amount 127 | delta | delta per frame, hw | 240 MHz hw, 0 -> 127 |
+|---|---|---|---|---|---|
+| init chord | 644,969 / 912,388 | 658,345 / 932,228 | +13,375 / +19,840 | +77.5 | 65.5 -> 66.9 % |
+| musical C3..C5 | 779,857 / 1,121,313 | 792,168 / 1,139,112 | +12,311 / +17,800 | +69.5 | 80.5 -> 81.8 % |
+| musical C5..C7 | 895,819 / 1,277,643 | 907,600 / 1,294,668 | +11,781 / +17,025 | +66.5 | 91.7 -> 92.9 % |
+
+At amount 0 the stage is skipped (one float compare a 16-frame period) and the output is the one before this task bit
+for bit: the harness checksums equal the previous commit's (init chord `55761876`, musical `c7a1eda5`, `aaafdace`,
+same local run of `ae72240`), at +662 / +980 cycles a block (the extra smoother and the compare: 644,307 / 911,408
+before on the init chord, +0.1 %). At full drive it is ~+1.3 % of the block at 240 MHz (hw model), the same in a
+dual-core build (it stays on CPU0: add it to CPU0's serial part in the Task 3 table). Under the CPU guard's 80 %
+nothing changes for the gate; the musical patch was already over 50 % on one core.
+
 ## After the listening round: the bus DC blocker and limiter (CI run 44021256878)
 
 The listening round's fixes (FILTER FREQ re-anchored to 16 Hz .. 18.8 kHz, the bus DC blocker at 5 Hz and the new

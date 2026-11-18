@@ -15,6 +15,7 @@
  */
 #pragma once
 #include <stdint.h>
+#include "fm1_cc.h"                             /* KNOBI_CPU1 */
 
 #define FM1_VEC ((volatile uint32_t *)0x01C7FE00u)
 #define FM1_ICFG(n) (*(volatile uint32_t *)(0x1EEF100u + 4u * ((n) >> 3)))
@@ -87,14 +88,24 @@ static void fm1_irq_enable_all(void)
     fm1_irq_on();
 }
 
+#if KNOBI_CPU1
+static int fm1_cpu1_fault_c(const uint32_t *f);   /* fm1_cpu1.h: 1 = the second core's fault, handled */
+#endif
+
 /* called from fm1_fatal_common (fm1_vec.S) with the saved frame:
  * f[0..15] r0..r15, f[16] reti, f[17] rete, f[18] retx, f[19] stub+6,
- * f[20] psr, f[21] icfg, f[22] usp, f[23] ssp, f[24] sp, f[25] interrupted rets */
+ * f[20] psr, f[21] icfg, f[22] usp, f[23] ssp, f[24] sp, f[25] interrupted rets.
+ * With KNOBI_CPU1 (felucca-bsp's, fm1_cpu1.h): the second core's faults first; it returns only to resume CPU0 after
+ * one of those (fm1_vec.S, fm1_cpu1_resume). CPU0's own fault holds CPU1 and bars it until power-off. */
 void fm1_fault_c(uint32_t *f)
 {
     static volatile uint32_t in_fault;
     uint32_t i, count = fm1_crash.magic == FM1_CRASH_MAGIC ? fm1_crash.count : 0;
     uint32_t early = fm1_crash.magic == FM1_CRASH_MAGIC ? fm1_crash.early : 0;
+#if KNOBI_CPU1
+    if (fm1_cpu1_fault_c(f))
+        return;
+#endif
     fm1_irq_off();
     if (in_fault++)                           /* fault while reporting: reset at once */
         *(volatile uint32_t *)0x10000u |= 1u << 4;

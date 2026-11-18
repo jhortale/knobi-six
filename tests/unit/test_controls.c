@@ -15,51 +15,70 @@
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
-static int is_param(uint16_t b) { return b < P_COUNT_PHASE1; }
+static int is_param(uint16_t b) { return P_IS_LIVE(b); }   /* (phase 1's and the live phase-2 ids: P_BPM, P_CLK_DIV) */
 
 /* every binding is a param, a global, a program digit (encoders), an action or nothing; faders only take knobs; top
  * pads only switches, selects, globals and actions; at most 7 encoders (the struct) and every phase-1 param reachable from some screen */
 static void bindings_valid(void)
 {
-    uint8_t seen[P_COUNT_PHASE1] = {0};
-    int bad = 0;
+    uint8_t seen[P_COUNT_RESERVED] = {0}, gseen[G_COUNT] = {0};
+    int bad = 0, tap = 0;
     for (int s = 0; s < SCR_COUNT; s++)
         for (int r = 0; r < SCR_ROWS[s]; r++) {
             const binding_t *b = ctl_binding(s, r);
             for (int i = 0; i < 7; i++) {
                 uint16_t x = b->enc[i];
                 if (is_param(x)) seen[x] = 1;
-                else if (x != B_NONE && !(B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) && !(B_IS_PROG(x) && (x & 0xFFu) < PRG_COUNT))
+                else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) gseen[x & 0xFFu] = 1;
+                else if (x != B_NONE && !(B_IS_PROG(x) && (x & 0xFFu) < PRG_COUNT))
                     bad++, printf("  enc %d.%d.%d %x\n", s, r, i, x);
             }
             for (int i = 0; i < 4; i++) {
                 uint16_t x = b->fader[i];
-                if (is_param(x) && PARAMS[x].kind == PK_KNOB) seen[x] = 1;
+                if (is_param(x) && param_get(x)->kind == PK_KNOB) seen[x] = 1;
                 else if (x != B_NONE) bad++, printf("  fader %d.%d.%d %x\n", s, r, i, x);
             }
             for (int i = 0; i < 8; i++) {
                 uint16_t x = b->pad_top[i];
-                if (is_param(x) && PARAMS[x].kind != PK_KNOB) seen[x] = 1;
-                else if (x != B_NONE && !(B_IS_ACT(x) && (x & 0xFFu) < ACT_COUNT) && !(B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT))
+                if (is_param(x) && param_get(x)->kind != PK_KNOB) seen[x] = 1;
+                else if (B_IS_GLOBAL(x) && (x & 0xFFu) < G_COUNT) gseen[x & 0xFFu] = 1;
+                else if (x == B_ACT(ACT_TAP)) tap += s == SCR_CLOCK;
+                else if (x != B_NONE && !(B_IS_ACT(x) && (x & 0xFFu) < ACT_COUNT))
                     bad++, printf("  pad %d.%d.%d %x\n", s, r, i, x);
             }
         }
     int missing = 0;
-    for (int i = 0; i < P_COUNT_PHASE1; i++) if (!seen[i]) missing++, printf("  unreachable: %s\n", PARAMS[i].name);
+    for (int i = 0; i < P_COUNT_RESERVED; i++)
+        if (P_IS_LIVE(i) && !seen[i]) missing++, printf("  unreachable: %s\n", param_get((uint16_t)i)->name);
+    for (int i = 0; i < G_COUNT; i++) if (!gseen[i]) missing++, printf("  unreachable: global %d\n", i);
     /* the brief's pads_split: on LFO + X-MOD (first row) top pad 2 is LFO > VCO1 */
     int lfo_pad2 = ctl_binding(SCR_LFO_XMOD, 0)->pad_top[2] == P_LFO_D_VCO1;
     /* Play's faders: FREQUENCY, RESONANCE, MODE, ENV AMOUNT (spec) */
     const binding_t *pl = ctl_binding(SCR_PLAY, 0);
     int play_faders = pl->fader[0] == P_FLT_FREQ && pl->fader[1] == P_FLT_RESO && pl->fader[2] == P_FLT_MODE && pl->fader[3] == P_FLT_ENV_AMT;
-    printf("bindings_valid: %d bad bindings, %d params unreachable, LFO pad 2 = LFO>VCO1 %d, Play faders %d\n", bad, missing,
-           lfo_pad2, play_faders);
-    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders);
+    /* Task 5: the Clock screen: K2 BPM, K3 CLOCK DIV, TAP a top pad */
+    const binding_t *ck = ctl_binding(SCR_CLOCK, 0);
+    int clock_scr = ck->enc[0] == P_BPM && ck->enc[1] == P_CLK_DIV && tap == 1;
+    /* Task 6: the arpeggiator on the same screen (K4 MODE, K5 OCTAVES, pads 5 ARP ON, 6 ARP HOLD), Play's ARP pad */
+    int arp_scr = ck->enc[2] == P_ARP_MODE && ck->enc[3] == P_ARP_RANGE && ck->pad_top[5] == P_ARP_ON &&
+                  ck->pad_top[6] == P_ARP_HOLD && pl->pad_top[2] == P_ARP_ON;
+    /* Task 7: DISTORTION on Play's K6 (the encoder the filter's four leave free) */
+    int dist_play = pl->enc[4] == P_DISTORTION;
+    printf("bindings_valid: %d bad bindings, %d params / globals unreachable, LFO pad 2 = LFO>VCO1 %d, Play faders %d, "
+           "Clock screen %d, arp %d, Play K6 DISTORTION %d\n", bad, missing, lfo_pad2, play_faders, clock_scr, arp_scr,
+           dist_play);
+    CHECK(bad == 0 && missing == 0 && lfo_pad2 && play_faders && clock_scr && arp_scr && dist_play);
 }
 
 /* encoders: a knob steps (range + 127) / 128 a detent, x4 when turned fast; switches go on (+) / off (-); selects step
  * by one; everything clamps (no wrap) */
 static void encoder_steps(void)
 {
+    int bpm1 = ctl_enc_value(P_BPM, 120, 1, 0), bpm4 = ctl_enc_value(P_BPM, 120, -1, 1), bpmtop = ctl_enc_value(P_BPM, 249, 3, 0);
+    int div = ctl_enc_value(P_CLK_DIV, 1, 2, 0), clk = ctl_pad_value(B_GLOBAL(G_MIDI_CLOCK), 4);
+    printf("encoder_steps: BPM 120 +1 -> %d, fast -1 -> %d, 249 +3 -> %d; CLOCK DIV 1 +2 -> %d; MIDI CLOCK pad 4 -> %d\n",
+           bpm1, bpm4, bpmtop, div, clk);
+    CHECK(bpm1 == 121 && bpm4 == 116 && bpmtop == 250 && div == 3 && clk == 0);   /* (BPM a step a detent: 1 BPM) */
     int k255 = ctl_enc_value(P_FLT_RESO, 100, 1, 0), k255f = ctl_enc_value(P_FLT_RESO, 100, 1, 1);
     int k60 = ctl_enc_value(P_VCO1_FREQ, 24, -3, 0), top = ctl_enc_value(P_FLT_RESO, 254, 5, 1);
     int bot = ctl_enc_value(P_FLT_ENV_AMT, -126, -4, 0);
@@ -195,9 +214,28 @@ static void cc_map(void)
     CHECK(bad == 0 && unmapped && MIDI_CC[P_FLT_FREQ] == 74 && MIDI_CC[P_FLT_RESO] == 71);
 }
 
+/* Task 7: FX held (the OB-6's EFFECT held + MIX), any of K2..K8 edits DISTORTION on every screen (a detent a step, as
+ * a 0..127 knob); FX not held: the screen's binding */
+static void fx_hold_distortion(void)
+{
+    int ok = 1;
+    for (int s = 0; s < SCR_COUNT; s++)
+        for (int k = 0; k < 7; k++) {
+            uint16_t b = ctl_binding(s, 0)->enc[k];
+            ok &= ctl_enc_target(b, 1) == P_DISTORTION && ctl_enc_target(b, 0) == b;
+        }
+    int up = ctl_enc_value(P_DISTORTION, 0, 1, 0), fast = ctl_enc_value(P_DISTORTION, 10, 1, 1),
+        top = ctl_enc_value(P_DISTORTION, 126, 5, 0), down = ctl_enc_value(P_DISTORTION, 3, -9, 0);
+    ok &= up == 1 && fast == 14 && top == 127 && down == 0;
+    printf("fx_hold_distortion: FX held: K2..K8 -> DISTORTION on every screen; 0 +1 -> %d, 10 fast +1 -> %d, 126 +5 -> "
+           "%d, 3 -9 -> %d: %d\n", up, fast, top, down, ok);
+    CHECK(ok);
+}
+
 int main(void)
 {
     bindings_valid();
+    fx_hold_distortion();
     encoder_steps();
     pad_switches();
     program_digits();
