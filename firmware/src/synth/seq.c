@@ -3,7 +3,9 @@
  * also built alone by tests/unit/test_seq.c. Integers only, no allocation, no recursion. */
 #ifndef KNOBI_SEQ_C
 #define KNOBI_SEQ_C
+#ifdef DINGHY_HOST
 #include <string.h>
+#endif                                  /* (the device: memset / memcpy from libc.c, through platform.c) */
 #include "seq.h"
 
 void seq_clear(seq_t *s)
