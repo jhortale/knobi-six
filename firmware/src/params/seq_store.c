@@ -157,12 +157,18 @@ static int seqst_prog_ok(uint32_t addr, const uint8_t *p, uint32_t n)
     return 0;
 }
 
-/* a sector's header made invalid (its magic programmed to 0: one page program, no erase): free, erased before use */
-static void seqst_kill(uint32_t i)
+/* a sector's header made invalid (its magic programmed to 0: one page program, no erase): free, erased before use.
+ * Read back: a magic that still reads whole (a weak or refused program) is erased instead. -1: neither took */
+static int seqst_kill(uint32_t i)
 {
     static const uint8_t z[4] = {0, 0, 0, 0};
+    uint8_t m[4];
+    int r = 0;
     (void)seqst_fl_prog(SEQST_SECTOR_AT(i), z, sizeof z);
+    if (seqst_fl_read(SEQST_SECTOR_AT(i), m, sizeof m) || seqst_get32(m) == SEQST_MAGIC)
+        r = seqst_fl_erase(SEQST_SECTOR_AT(i)) ? -1 : 0;
     seqst_state[i] = SEQST_FREE, seqst_blank[i] = 0, seqst_live[i] = 0, seqst_fill[i] = 0x1000u;
+    return r;
 }
 
 /* walk sector i's log: pass 1 (the generations), pass 2 (live bytes, where the entries are, where the log ends) */
@@ -220,7 +226,8 @@ int seqst_init(void)
                                          * can leave cells that read 1 and are not) */
     }
     for (i = 0; i < SEQST_SECTORS; i++)         /* a format: everything older than its sector is gone for good */
-        if (seqst_state[i] == SEQST_USED && seqst_seq[i] < fseq) seqst_kill(i);
+        if (seqst_state[i] == SEQST_USED && seqst_seq[i] < fseq) (void)seqst_kill(i);   /* (one that will not die
+                                                 * is killed again at every init while the format sector lasts) */
     for (i = 0; i < SEQST_SECTORS; i++)         /* a compaction cut before its source was erased: erase it now */
         if (seqst_state[i] == SEQST_USED && seqst_src[i] < SEQST_FORMAT)
             for (j = 0; j < SEQST_SECTORS; j++)
@@ -446,13 +453,16 @@ int seqst_format(void)
 {
     int32_t f;
     uint32_t i;
+    int bad = 0;
     (void)seqst_init();
     f = seqst_free_after(0);
     if (f >= 0 && seqst_open((uint32_t)f, SEQST_FORMAT)) { (void)seqst_init(); return -1; }   /* (cut before its
                                                  * header: nothing changed) */
     for (i = 0; i < SEQST_SECTORS; i++)         /* (from here the format holds: init kills what is older) */
-        if (seqst_state[i] == SEQST_USED && (int32_t)i != f) seqst_kill(i);
-    return seqst_init();
+        if (seqst_state[i] == SEQST_USED && (int32_t)i != f) bad |= seqst_kill(i);
+    (void)seqst_init();
+    return bad ? -1 : 0;                        /* -1: a sector would neither program nor erase (formatted all the
+                                                 * same; init keeps killing it while the format sector lasts) */
 }
 
 #else /* the FM-1: no room in its flash map for it; the store is compiled out */

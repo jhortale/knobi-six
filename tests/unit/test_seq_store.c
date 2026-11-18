@@ -19,6 +19,8 @@ static int fails;
 static uint8_t F[SEQST_SECTORS][0x1000u];
 static uint32_t f_erases[SEQST_SECTORS], f_ops, f_overwrite, f_guard_bad, f_reads;
 static int f_flip_next;                         /* the next program leaves one bit of its bytes 0 (a marginal cell) */
+static int32_t f_stuck = -1;                    /* a sector whose programs change nothing (reported done) */
+static int f_stuck_erase;                       /* ... and whose erases are refused too */
 static int32_t f_cut_at = -1;                   /* the operation (1..) the power goes at; -1 never */
 static int f_dead, f_cut_full;                  /* f_cut_full: the cut operation completes, then the power goes */
 static uint32_t frs = 0x2545F491u;
@@ -47,6 +49,7 @@ static int seqst_fl_erase(uint32_t off)
     uint8_t *a = f_at(off, 0x1000u);
     uint32_t i, k;
     if (!a || (off & 0xFFFu) || f_dead) return -1;
+    if (f_stuck >= 0 && a == F[f_stuck] && f_stuck_erase) return -1;
     f_ops++;
     for (i = 0; i < SEQST_SECTORS; i++) if (a == F[i]) f_erases[i]++;
     if (f_cut_now() && !f_cut_full) {           /* half erased: some bytes 0xFF, the rest going there */
@@ -65,6 +68,7 @@ static int seqst_fl_prog(uint32_t off, const void *p, uint32_t n)
     const uint8_t *s = p;
     uint8_t *a = f_at(off, n);
     if (!a || f_dead) return -1;
+    if (f_stuck >= 0 && a >= F[f_stuck] && a < F[f_stuck] + 0x1000u) return 0;   /* (silently not programmed) */
     while (n) {                                 /* page by page, as the driver */
         uint32_t chunk = 256u - (off & 0xFFu), i, k;
         if (chunk > n) chunk = n;
@@ -583,6 +587,39 @@ static void store_format(void)
     printf("store_format: %u full-size before, %u after; empty after a power cycle\n", n0, n1);
 }
 
+/* format checks its kills: a sector whose magic will not program is erased instead; one that can be neither
+ * programmed nor erased makes seqst_format say so (-1) */
+static void store_format_verifies(void)
+{
+    static seq_t big, out;
+    uint16_t g = 0;
+    uint32_t n, i, k, blank;
+    int rc;
+    f_blank();
+    power_on();
+    seq_of_len(&big, 64, 6);
+    for (n = 0; n < 40u; n++) CHECK(seqst_put((uint16_t)n, &big, &g) == 0);
+    for (i = 0; i < SEQST_SECTORS && seqst_state[i] != SEQST_USED; i++) {}   /* a sector with entries */
+    f_stuck = (int32_t)i, f_stuck_erase = 0;
+    rc = seqst_format();
+    f_stuck = -1;
+    for (k = 0, blank = 1; k < 0x1000u; k++) blank &= F[i][k] == 0xFFu;
+    CHECK(rc == 0 && blank);                    /* (killed by an erase: nothing of the old store left in it) */
+    power_on();
+    CHECK(seqst_used() == 0 && seqst_get(0, 1, &out) == 0);
+    for (n = 0; n < 40u; n++) CHECK(seqst_put((uint16_t)n, &big, &g) == 0);
+    for (i = 0; i < SEQST_SECTORS && seqst_state[i] != SEQST_USED; i++) {}
+    f_stuck = (int32_t)i, f_stuck_erase = 1;
+    rc = seqst_format();
+    CHECK(rc == -1);                            /* a stale sector could not be killed: said */
+    f_stuck = -1, f_stuck_erase = 0;
+    power_on();                                 /* the next init kills it (the format sector is still there) */
+    CHECK(seqst_used() == 0 && seqst_get(0, 1, &out) == 0);
+    for (k = 0, blank = 1; k < 0x1000u; k++) blank &= F[i][k] == 0xFFu;
+    CHECK(seqst_get32(F[i]) != SEQST_MAGIC);
+    printf("store_format_verifies: a kill that does not take is erased; one that cannot be: -1 (%d)\n", rc);
+}
+
 /* drop: every generation of a program reclaimable (RESTORE FACTORY written: the record names none) */
 static void store_drop(void)
 {
@@ -756,6 +793,7 @@ int main(void)
     store_powercut_every_write();
     store_wear_near_full();
     store_format();
+    store_format_verifies();
     store_drop();
     store_cut_gen_burned();
     store_readback();

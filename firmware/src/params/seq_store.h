@@ -52,9 +52,10 @@
  *
  * Init: seqst_init (or seqst_format) must run once at boot (main loop) before anything else; before it seqst_get
  * finds nothing and seqst_put / release / drop do nothing, never touching the flash.
- * Task 3: when platform.c's smk_store_cleared is set (the owner tag was not ours: another firmware's data cleared,
- * the program records with it), call seqst_format() at boot instead of seqst_init(); else stale entries stay live
- * (each program's newest kept by its release) and take room for good.
+ * The owner tag (platform.c smk_owner_check): when the store is not ours, the boot erases these 20 sectors with the
+ * settings, the blobs and the slots' heads (the program records that name the entries), all before it writes the tag,
+ * so a power cut in the middle clears them again at the next boot; seqst_init then finds them free. (seqst_format is
+ * the in-app "clear every sequence"; nothing calls it at boot.)
  *
  * RAM: a directory of 8 B a program (newest gen, released gen, where their entries are: 4000 B) and 12 B a sector;
  * the record buffer (848 B) is in the pool on the device. */
@@ -82,7 +83,8 @@ void seqst_release(uint16_t prog, uint16_t keep_gen);    /* entries of prog olde
 void seqst_drop(uint16_t prog);                          /* every generation of prog reclaimable (its record names
                                                           * none: RESTORE FACTORY written) */
 int seqst_format(void);                                  /* empty the store, all or nothing (0; -1 the flash
-                                                          * failed: nothing changed); also does seqst_init's work */
+                                                          * failed: nothing changed, or an old sector would neither
+                                                          * program nor erase); also does seqst_init's work */
 uint32_t seqst_used(void);                               /* bytes of live records */
 uint32_t seqst_total(void);                              /* bytes of records the store holds (the spare excluded) */
 
