@@ -32,8 +32,8 @@ numbers (the sequencer is cheap in CPU), unlike the effects (2C), which wait for
 
 - Program records are fixed-stride (~221 B), 74 per 16 KB slot, 500 programs in 7 logical slots + 1 spare; a full
   sequence (64 × 6 × note + velocity = 768 B) cannot go inside a record. The record has reserved phase-2/3 values.
-- Factory sequences (measured locally from João's bank, counts only): every program has one, 2–64 steps, median 26;
-  steps with 1 note dominate (≈11,300), 6-note steps are rare (72). Total ≈ 19,500 notes; packed ≈ 50 KB.
+- Factory sequences (measured locally from João's bank, coarse statements only): every factory program carries a
+  sequence; most steps are single notes; packed ≈ 50–60 KB.
 - Free flash inside the app's own data window `FL_DATA` (0x9D000–0xBAFFF, already allow-listed by window): about
   80 KB not used by settings, blobs 0..7 or the owner tag (0xA6000–0xAEFFF and 0xB0000–0xBAFFF; the builder confirms
   against `store.h` and the owner tag at 0xAF000). Protected ranges (head, BTIF/USRTRIM, USR, key_mac) stay untouchable.

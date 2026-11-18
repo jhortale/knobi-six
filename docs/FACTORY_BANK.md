@@ -22,7 +22,7 @@ Where to get the file and the steps: README.md, "Importing the OB-6 factory prog
   `-local-mke.fwsc`) instead of `knobi-six.fwsc`, and warns, before and after building, that the package contains your
   own imported bank and must not be shared. Install it on your own keyboard only.
 
-Names in the v1.01 bank that contain "OB" / "Ober": 18 of 500. They are imported as they are; the importer's local
+Names in the v1.01 bank that contain "OB" / "Ober": a few. They are imported as they are; the importer's local
 report (`build/factory_bank_report.txt`) lists them for whoever runs it on their own file.
 
 ## How it behaves
