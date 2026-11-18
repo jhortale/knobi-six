@@ -104,4 +104,32 @@
 14000 pad 8 0
 16900 expect 1 saves
 17200 expect 2 saves
-17300 end
+# a sequence armed (SEQ PLAY on, MIDI CLOCK = IN, no clock: silent for as long as it takes) counts as playing too: the
+# next step could be due any moment (an erase would be late, the clock out would hiccup). Arp + Clock (btn 3 x 6 from the first screen),
+# MIDI CLOCK = IN (pad 3 twice), SEQ PLAY on; then a global changes (the octave): no save while it plays
+17400 expect 5 seqdemo
+17410 btn 3
+17420 btn 3
+17430 btn 3
+17440 btn 3
+17450 btn 3
+17460 btn 3
+17500 expect 7 screen
+17520 pad 3 100
+17530 pad 3 0
+17540 pad 3 100
+17550 pad 3 0
+17600 expect 2 glob 11
+17700 expect 0 seqplay 1
+17720 expect 2 seqstate
+17750 btn 4
+17800 expect 1 oct
+17800 expect 2 saves
+# 10 s on, still armed and silent: not saved (the old rule: saved after 3 s)
+27000 expect 2 seqstate
+27000 expect 2 saves
+# SEQ PLAY off: 3 s of quiet, then the save
+27100 expect 0 seqplay 0
+29000 expect 2 saves
+30500 expect 3 saves
+30600 end

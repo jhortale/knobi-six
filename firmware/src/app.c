@@ -316,7 +316,9 @@ static void app_main(void)
         idle_ok = 0;
 
         for (k = 0; k < FM1_NKEY && !key_note[k]; k++) {}
-        if (eng_active() || k < FM1_NKEY || fm1_in.notes) set_busy_ms = fm1_ms;   /* a voice sounding, a key held */
+        if (eng_active() || k < FM1_NKEY || fm1_in.notes || eng_seq_state) set_busy_ms = fm1_ms;   /* a voice sounding, a key
+                                                 * held, a sequence playing or armed (silent in a long rest or at a slow
+                                                 * tempo: an erase would be late for the next step and hiccup the clock) */
         for (k = 0; k < 16u; k++) if (fm1_in.pad_press[k]) set_busy_ms = fm1_ms; /* a pad pressed (pressure) */
 
         set_now(&now);                          /* a global, the octave or the program changed: save it later */
