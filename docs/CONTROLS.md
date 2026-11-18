@@ -9,7 +9,7 @@ top row of pads is switches, the bottom row is pressure only.
 
 | Button (printed) | id | Does |
 | --- | --- | --- |
-| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Arp + Clock, Program, Globals (stops at the ends) |
+| `<` / `>` | `BTN_LEFT` / `BTN_RIGHT` | the previous / next section, in panel order: Play, VCO 1 + 2, Mixer + Filter, Envelopes, LFO + X-Mod, Aftertouch + Misc, Arp + Clock, Sequencer, Program, Globals (stops at the ends). **While recording a sequence: `<` = DEC (back: the last step erased), `>` = INC (a rest; with notes held, a tie)**, see [Sequencer](#sequencer) |
 | PATCH | `BTN_HOME` | Play |
 | PARA | `BTN_EDIT` | the last edit section visited (VCO 1 + 2 at first) |
 | GLOBE | `BTN_GLO` | Globals; again: back to where you were |
@@ -19,7 +19,10 @@ top row of pads is switches, the bottom row is pressure only.
 | BT | `BTN_SAVE` | WRITE: arms a write (shows Program, the destination = the current program); again: cancels (see [Programs](#programs)) |
 | GLOBE held + BT, twice within 2 s | | RESTORE FACTORY: the first press asks (the header shows `SurE`, Program says RESTORE FACTORY? EDITS ARE LOST), the second within 2 s puts the current program's factory version into the edit buffer (header `FAC`; nothing is stored until WRITE). Not confirmed in time: forgotten. Globals, opened by GLOBE's press, closes again. No factory bank in the build: the init program. Not while a WRITE is armed (see [Programs](#programs)) |
 | FX held + any encoder K2..K8 | `BTN_FX` | DISTORTION (0..127, the program's), on every screen: the OB-6's "hold EFFECT and turn MIX" (reference 2.9, 4). The effects (and a MIX knob) are not there yet, so every knob does it while FX is held; the header shows the value. FX alone: nothing yet. **This narrows when the effects land**: it will be FX held + the MIX knob only, and FX's other uses will belong to the effects |
-| KNOB BANK, FADER BANK, ARP, NOTE REPEAT, SEQ, SEQ PLAY, SEQ REC | | nothing yet (effects, sequencer: phases 2 and 3; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
+| SEQ | `BTN_SEQ` | the Sequencer screen; again: back to where you were |
+| SEQ PLAY | `BTN_PLAY` | the sequence plays / stops (lit while it plays). While recording: recording ends and the sequence plays |
+| SEQ REC | `BTN_REC` | recording: arms (the Sequencer screen; the edit buffer's sequence is replaced, from step 1); again: ends (lit while recording). While the sequence plays: **held + a key** transposes it; **tapped** (let go with no key pressed) stops it and starts recording |
+| KNOB BANK, FADER BANK, ARP, NOTE REPEAT | | nothing yet (effects: phase 2C; the arpeggiator is on the pads: Play pad 2, Arp + Clock) |
 
 At power-on the boot screen shows for 1 s (or until a button), then Play.
 
@@ -68,6 +71,7 @@ Encoders K2..K8, faders 1..4, top pads 0..7. `—`: nothing.
 | Aftertouch + Misc, AFTERTOUCH row | AT AMOUNT, DETUNE, PAN SPREAD, BEND RANGE, KEY MODE, PROGRAM VOLUME, PORTA RATE | AT AMOUNT, DETUNE, PORTA RATE, PRG VOLUME | ◀, ▶, AT > VCO1, VCO2, LFO AMT, LOUDNESS, F FREQ, F MODE |
 | Aftertouch + Misc, MISC row | the same | the same | ◀, ▶, UNISON, UNISON VOICES (1..6, CHD), PORTAMENTO, PORTA MODE |
 | Arp + Clock | BPM (30..250, a BPM a detent), DIVISION (HALF, QTR, 8TH, 8TH D, 8TH S, 8TH T, 16TH, 16TH S, 16TH T, 32ND), ARP MODE (UP, DOWN, UP+DN, RANDOM, ASSIGN), ARP OCTAVES (1..3) | — | ◀, ▶, TAP, MIDI CLOCK (global: OFF / OUT / IN / THRU / IN NO S/S), ARP BEAT SYNC (global), ARP (ARP ON), HOLD (ARP HOLD) |
+| Sequencer | — | — | ◀, ▶, SEQ PLAY, SEQ REC (as the buttons; the pad SEQ REC acts at once, also while playing) |
 | Program | BANK (0..4), TENS (0..9), ONES (0..9) | — | ◀, ▶, WRITE, ENTER, MANUAL |
 | Globals | MIDI CH (ALL, 1..16), POT MODE, PARAM TX (OFF / CC), PARAM RX (OFF / CC), TRANSPOSE (-12..+12), TUNE (-50..+50 cents), VEL CURVE (0..7) | — | ◀, ▶, LOCAL (ON / OFF), STEREO / MONO, SUSTAIN (N.O. / N.C.), AT CURVE (0..3) |
 
@@ -76,7 +80,7 @@ are kept in flash (below).
 
 ### Arp + Clock
 
-The **Arp + Clock** screen (Phase 2; screen id 7) is the mockup's "Arp + Clock + Program" page without Program (that
+The **Arp + Clock** screen (Phase 2; screen id 7; the Sequencer is 8, Program 9, Globals 10 since Phase 3) is the mockup's "Arp + Clock + Program" page without Program (that
 has a screen of its own): CLOCK above, ARPEGGIATOR below.
 
 The clock (`firmware/src/synth/clock.h`) sets the tempo the arpeggiator and LFO SYNC follow. **BPM** (K2) and **DIVISION** (K3) are the program's (stored with it: a program from before keeps 120 and QTR).
@@ -111,8 +115,8 @@ keys: UNISON stacks each one, portamento glides between them, chord memory plays
 - MIDI out: with PARAM TX = CC the arp's notes go out (and the keys' own notes do not). LOCAL OFF: the keys go out as
   played and do not reach the arp ([MIDI.md](MIDI.md)).
 
-**Sequencer playback** (Phase 3 Task 4; OB-6 reference 5; the player: `firmware/src/synth/seq.h` "The player"). The
-buttons (SEQ PLAY, SEQ REC, SEQ) and the recording come with Task 5; the engine's behaviour is here already:
+**Sequencer playback** (Phase 3 Task 4; OB-6 reference 5; the player: `firmware/src/synth/seq.h` "The player"; the
+buttons and the recording: [Sequencer](#sequencer) below):
 - **SEQ PLAY** plays the edit buffer's sequence (the program's, as loaded or recorded) from step 1, one step per clock
   step (BPM and DIVISION), looping its recorded length. Each step's notes play for half the step at their stored
   velocities; a rest plays nothing; a tie keeps the notes before it on (no retrigger) to half of the last tied step.
@@ -122,8 +126,10 @@ buttons (SEQ PLAY, SEQ REC, SEQ) and the recording come with Task 5; the engine'
   arms it: it plays only while that clock runs: 0xFA from step 1, 0xFB on from the step it stopped at, 0xFC pauses
   (notes released, the step kept); no clock, silent. IN NO S/S: the ticks alone.
 - **Transpose**: while it plays, hold SEQ REC and press a key: the sequence plays that many semitones from middle C
-  (C4, 60 = none) from its next note; with UNISON on, a key alone transposes. (Task 5 routes the keys.) A transposed
-  note outside MIDI 0..127 is dropped. Not stored; a program change puts it back to none.
+  (C4, 60 = none: the key's note after the octave buttons) from its next note; with UNISON on (and LOCAL ON), a key
+  alone transposes. That key does nothing else: it does not sound, is not sent as MIDI, is not recorded, and neither is
+  its release; the header shows the transpose. MIDI notes in never transpose. A transposed note outside MIDI 0..127 is
+  dropped. Not stored; a program change puts it back to none.
 - **Arp and sequencer are exclusive**: SEQ PLAY turns ARP ON off; ARP ON stops the sequence (its notes released).
 - A program change (and RESTORE FACTORY) stops it and loads that program's sequence; PANIC (CC 120) stops it; ALL NOTES
   OFF (CC 123) releases its notes and it plays on. Keys played live compete with it for the six voices.
@@ -135,6 +141,50 @@ buttons (SEQ PLAY, SEQ REC, SEQ) and the recording come with Task 5; the engine'
   platform has no footswitch input distinct from the sustain message (MIDI CC 64; the SMK-37 has no pedal jack: the
   input board's mux C "pedal" channel, `hal/smk_input.h` `fm1_in.pedal`, is a raw ADC value with nothing documented
   behind it). External start / stop is MIDI's (0xFA / 0xFB / 0xFC above).
+
+### Sequencer
+
+The **Sequencer** screen (Phase 3 Task 5; screen id 8, between Arp + Clock and Program; SEQ opens it, SEQ again goes
+back): the state (STOP, PLAY, ARMED: playing, waiting for a MIDI clock; REC), three displays (STEP: playing, the step
+played last; recording, the step the next entry makes; LEN: the steps; XP: the transpose), the 64-step grid (16 a row;
+a step's notes as red dots from the bottom, one a note up to six; a rest a dash; a tie a blue bar joined to the step
+before; past the length an empty frame; the marked step framed white), the pads SEQ PLAY and SEQ REC, the sequence
+store's use (`SEQ 12 KB / 76 KB`: KB of written sequences, of the KB the store holds) and two lines saying what the
+buttons do now. Play shows `SEQ` (playing), `ARM` (armed) or `REC` (recording) beside VOICES.
+
+**Recording** (step entry; OB-6 reference 5; `firmware/src/ui/seq_rec.h`). One sequence per program, in the edit
+buffer: recording only edits it, **WRITE** stores it with the program (a program change, RESTORE FACTORY or a power cut
+without WRITE loses it, as any edit).
+- **SEQ REC** arms: the Sequencer screen shows, ARP ON goes off (the arp and the sequencer are exclusive; turning ARP ON
+  while recording ends the recording), and the sequence is **replaced** from step 1 (no overdub). SEQ REC again, SEQ
+  PLAY (which then plays it), WRITE, a program change or RESTORE FACTORY end it. Recording also ends by itself at **64
+  steps** (the 64th entry makes it the last).
+- **A step**: press a key (or a MIDI note in) and let it go: one step of that note, at its velocity. **A chord**: keep
+  at least one key held while adding notes; the step is recorded when every note is up, each note at its own velocity,
+  up to 6 (more are not kept; a note twice is kept once). Keys and MIDI notes in make one chord together.
+- The note stored is the key's note **after the octave buttons' shift** (OCTAVE +2 and the C4 key: C6 is stored); the
+  global TRANSPOSE (a master tune) is not in it. UNISON and chord memory are not recorded: they apply at playback, as
+  when playing live. Notes outside 12..108 are not recorded (a step of only such notes is no step).
+- **`>` = INC**: with nothing held, a **rest**. With notes held: they are recorded now and a **tie** follows (the step
+  held on, extended); each further `>` while they stay held adds one more tie; their release then adds nothing. A new
+  key pressed after that, while some are still held, starts the next step.
+- **`<` = DEC**: back one step, erasing it (a chord being entered is not touched). `<` / `>` change screens again once
+  recording ends; the pads ◀ / ▶ still change screens while recording.
+- The keys **sound** while recording, and go out as MIDI, as when playing (the OB-6 sounds them). Under **LOCAL OFF**
+  the keys are not recorded (they go to MIDI only, as ever): a DAW echoing them back records them once, as MIDI in.
+- SEQ REC while the sequence plays: **tapped** (let go with no key pressed while it was held) it stops the sequence
+  (its notes released) and arms recording; **held + a key** it transposes instead (above), and its release then does
+  nothing. The Sequencer screen's SEQ REC pad acts at once (stop, record), never a transpose.
+
+**Key routing** (the keybed; MIDI notes in are only ever played, captured by CHORD and recorded):
+
+| State | A key pressed |
+| --- | --- |
+| idle | plays (LOCAL ON), goes out as MIDI (ARP ON with PARAM TX: the arp's notes instead) |
+| recording | plays, goes out as MIDI, and is recorded (LOCAL ON) |
+| playing | plays live beside the sequence (the voices compete), goes out; not recorded |
+| playing, SEQ REC held | transposes (the key minus C4); nothing else, its release neither |
+| playing, UNISON on (LOCAL ON) | transposes, no hold needed; nothing else |
 
 **LFO SYNC** (LFO + X-Mod) locks the LFO to the clock's tempo: LFO FREQ then picks a note value, 16 steps from one
 cycle in 4 bars (0) through a bar, a half, a quarter (FREQ 96..111, the default 100 among them), an 8th, 16th, up to

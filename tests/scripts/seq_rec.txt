@@ -1,0 +1,353 @@
+# Phase 3 Task 5: recording a sequence and the Sequencer screen (docs/CONTROLS.md "Sequencer"; ui/seq_rec.h), the
+# whole path: the buttons (15 SEQ, 16 SEQ PLAY, 17 SEQ REC; 2 / 3 = < / > = DEC / INC while recording), the keys
+# (bit 7 = C4 at octave 0, 60) and MIDI in to the recorder, the octave baked in, rest / tie / back, the transpose keys
+# while playing (SEQ REC held; UNISON on), SEQ REC during playback, the 64-step limit, WRITE + a power cycle, a full
+# store's WRITE. Screens: 1 Play, 8 Sequencer, 9 Program. Probes (firmware/src/app.c host_probe): "recon" recording,
+# "seqlen" the edit sequence's steps, "seqcount I" / "seqtie I" / "seqnt I K" / "seqvel I K" its step I (0 = step 1),
+# "seqxpv" the transpose sent, "keyon" / "keyoff" the keys' own MIDI notes sent, "wrrc" the last WRITE (1 stored, -2
+# SEQ FULL), "seqgen N" the generation program N's record names; hooks: "powercycle N" (the sequence store read from the
+# flash again, the edit sequence empty, program N loaded from the flash), "seqfill" (the store filled: 1).
+100 btn 12
+100 expect 0 scrcheck
+150 vel 100
+# ARP ON (Play pad 2): SEQ REC turns it off when it arms (the arp and the sequencer are exclusive)
+200 pad 2 100
+210 pad 2 0
+250 expect 1 param 82
+# SEQ: the Sequencer screen; again: back where it was
+300 btn 15
+350 expect 8 screen
+350 shot
+400 btn 15
+450 expect 1 screen
+# SEQ REC: armed, on the Sequencer screen, the arp off, the edit sequence emptied (recording replaces it, from step 1)
+500 btn 17
+550 expect 1 recon
+550 expect 8 screen
+550 expect 0 param 82
+550 expect 0 seqlen
+# rec_keys_and_midi: C4 tapped: it sounds and goes out as MIDI as ever, and is a step at its release
+600 keys 0x80
+650 expect 1 sounding 60
+650 expect 1 keyon
+650 expect 0 seqlen
+700 keys 0
+750 expect 1 seqlen
+750 expect 1 seqcount 0
+750 expect 60 seqnt 0 0
+750 expect 100 seqvel 0 0
+# a chord: C4 held, E4 added (velocity 80), C4 let go, G4 from MIDI in (70), E4 let go: G4 still held, nothing yet;
+# G4's off: one step of the three, each at its own velocity
+800 keys 0x80
+850 vel 80
+850 keys 0x880
+900 keys 0x800
+950 midi 0x90 67 70
+1000 keys 0
+1050 expect 1 seqlen
+1100 midi 0x80 67 0
+1150 expect 2 seqlen
+1150 expect 3 seqcount 1
+1150 expect 60 seqnt 1 0
+1150 expect 100 seqvel 1 0
+1150 expect 64 seqnt 1 1
+1150 expect 80 seqvel 1 1
+1150 expect 67 seqnt 1 2
+1150 expect 70 seqvel 1 2
+# a MIDI note alone (its off as a note-on of velocity 0)
+1200 midi 0x90 72 60
+1250 midi 0x90 72 0
+1300 expect 3 seqlen
+1300 expect 72 seqnt 2 0
+1300 expect 60 seqvel 2 0
+# rec_octave_baked: OCTAVE + twice: the C4 key plays C6 (84) and is stored as 84; OCTAVE - twice
+1350 btn 5
+1400 btn 5
+1450 expect 2 oct
+1500 keys 0x80
+1550 expect 1 sounding 84
+1600 keys 0
+1650 expect 4 seqlen
+1650 expect 84 seqnt 3 0
+1700 btn 4
+1750 btn 4
+1800 expect 0 oct
+# rec_inc_dec: > (INC) with nothing held: a rest (the screen stays); C4 held, > twice: C4, tie, tie, and its release
+# adds nothing; < (DEC): the last step erased
+1850 btn 3
+1900 expect 5 seqlen
+1900 expect 0 seqcount 4
+1900 expect 8 screen
+1950 keys 0x80
+2000 btn 3
+2050 btn 3
+2100 keys 0
+2150 expect 8 seqlen
+2150 expect 1 seqcount 5
+2150 expect 0 seqtie 5
+2150 expect 1 seqtie 6
+2150 expect 1 seqtie 7
+2150 expect 60 seqnt 7 0
+2150 shot
+2200 btn 2
+2250 expect 7 seqlen
+2250 expect 8 screen
+# SEQ REC again: recording ends; the sequence is the edit buffer's, nothing stored; < > move between screens again
+2300 btn 17
+2350 expect 0 recon
+2350 expect 7 seqlen
+2350 expect 0 writes
+2400 btn 3
+2450 expect 9 screen
+2500 btn 2
+2550 expect 8 screen
+# SEQ PLAY: C4 | C4 E4 G4 | C5 | C6 | rest | C4 | tie, a step every 500 ms (120 BPM, QTR)
+2600 btn 16
+2650 expect 1 seqplaying
+2650 expect 1 seqstate
+2650 expect 0 seqcur
+2650 expect 1 sounding 60
+2660 shot
+# transpose: SEQ REC held + F4 (65): +5 from the next step; the key does not sound, go out or record, nor does its
+# release; SEQ REC let go then does not record (it was the transpose's hold)
+2700 btndown 17
+2750 keys 0x1000
+2800 expect 5 seqxpv
+2800 expect 0 sounding 65
+2800 expect 5 keyon
+2800 expect 0 recon
+2850 keys 0
+2900 btnup 17
+2950 expect 0 recon
+2950 expect 1 seqplaying
+2950 expect 7 seqlen
+2950 expect 5 keyoff
+3150 expect 1 seqcur
+3150 expect 65 seqnote 0
+3150 expect 69 seqnote 1
+3150 expect 72 seqnote 2
+# a key alone while playing: played live, sent, not recorded, no transpose
+3200 keys 0x200
+3250 expect 1 sounding 62
+3250 expect 6 keyon
+3250 expect 7 seqlen
+3250 expect 5 seqxpv
+3300 keys 0
+# UNISON on (Play pad 1): a key alone transposes (C4: none) and does nothing else
+3400 btn 12
+3450 pad 1 100
+3460 pad 1 0
+3500 expect 1 param 64
+3550 keys 0x80
+3600 expect 0 seqxpv
+3600 expect 6 keyon
+3600 shot
+3650 keys 0
+3700 pad 1 100
+3710 pad 1 0
+3750 expect 0 param 64
+3750 expect 6 keyoff
+# SEQ PLAY: stopped
+3850 btn 16
+3900 expect 0 seqplaying
+3900 expect 0 keyed
+# rec_then_write_then_reload: WRITE (BT, ENTER) stores program 0 with its sequence; a power cycle; the same sequence
+# comes back and plays
+4000 btn 11
+4050 expect 1 wr
+4050 expect 9 screen
+4100 pad 3 100
+4110 pad 3 0
+4500 expect 0 wr
+4500 expect 1 writes
+4500 expect 1 wrrc
+4500 expect 1 seqgen 0
+4600 expect 0 powercycle 0
+4700 expect 0 notice
+4700 expect 7 seqlen
+4700 expect 1 seqcount 0
+4700 expect 3 seqcount 1
+4700 expect 64 seqnt 1 1
+4700 expect 80 seqvel 1 1
+4700 expect 70 seqvel 1 2
+4700 expect 84 seqnt 3 0
+4700 expect 0 seqcount 4
+4700 expect 1 seqtie 6
+4800 btn 16
+4850 expect 1 seqstate
+4850 expect 1 sounding 60
+4850 expect 60 seqnote 0
+5350 expect 3 seqn
+5350 expect 64 seqnote 1
+# SEQ REC tapped while playing: the sequence stops (its notes released) and recording starts
+5500 btn 17
+5600 expect 0 seqplaying
+5600 expect 0 seqstate
+5600 expect 0 keyed
+5600 expect 1 recon
+5600 expect 0 seqlen
+# SEQ PLAY while recording: recording ends (the C4 held is recorded) and the sequence plays
+5650 keys 0x80
+5700 btn 16
+5750 expect 0 recon
+5750 expect 1 seqlen
+5750 expect 1 seqplaying
+5800 keys 0
+5850 expect 1 seqlen
+5900 btn 16
+5950 expect 0 seqplaying
+# rec_stop_at_64: 64 MIDI notes, one a step: the 64th ends the recording; one more is not recorded
+6000 btn 17
+6020 expect 1 recon
+6050 midi 0x90 48 100
+6060 midi 0x80 48 0
+6070 midi 0x90 49 100
+6080 midi 0x80 49 0
+6090 midi 0x90 50 100
+6100 midi 0x80 50 0
+6110 midi 0x90 51 100
+6120 midi 0x80 51 0
+6130 midi 0x90 52 100
+6140 midi 0x80 52 0
+6150 midi 0x90 53 100
+6160 midi 0x80 53 0
+6170 midi 0x90 54 100
+6180 midi 0x80 54 0
+6190 midi 0x90 55 100
+6200 midi 0x80 55 0
+6210 midi 0x90 56 100
+6220 midi 0x80 56 0
+6230 midi 0x90 57 100
+6240 midi 0x80 57 0
+6250 midi 0x90 58 100
+6260 midi 0x80 58 0
+6270 midi 0x90 59 100
+6280 midi 0x80 59 0
+6290 midi 0x90 60 100
+6300 midi 0x80 60 0
+6310 midi 0x90 61 100
+6320 midi 0x80 61 0
+6330 midi 0x90 62 100
+6340 midi 0x80 62 0
+6350 midi 0x90 63 100
+6360 midi 0x80 63 0
+6370 midi 0x90 64 100
+6380 midi 0x80 64 0
+6390 midi 0x90 65 100
+6400 midi 0x80 65 0
+6410 midi 0x90 66 100
+6420 midi 0x80 66 0
+6430 midi 0x90 67 100
+6440 midi 0x80 67 0
+6450 midi 0x90 68 100
+6460 midi 0x80 68 0
+6470 midi 0x90 69 100
+6480 midi 0x80 69 0
+6490 midi 0x90 70 100
+6500 midi 0x80 70 0
+6510 midi 0x90 71 100
+6520 midi 0x80 71 0
+6530 midi 0x90 48 100
+6540 midi 0x80 48 0
+6550 midi 0x90 49 100
+6560 midi 0x80 49 0
+6570 midi 0x90 50 100
+6580 midi 0x80 50 0
+6590 midi 0x90 51 100
+6600 midi 0x80 51 0
+6610 midi 0x90 52 100
+6620 midi 0x80 52 0
+6630 midi 0x90 53 100
+6640 midi 0x80 53 0
+6650 midi 0x90 54 100
+6660 midi 0x80 54 0
+6670 midi 0x90 55 100
+6680 midi 0x80 55 0
+6690 midi 0x90 56 100
+6700 midi 0x80 56 0
+6710 midi 0x90 57 100
+6720 midi 0x80 57 0
+6730 midi 0x90 58 100
+6740 midi 0x80 58 0
+6750 midi 0x90 59 100
+6760 midi 0x80 59 0
+6770 midi 0x90 60 100
+6780 midi 0x80 60 0
+6790 midi 0x90 61 100
+6800 midi 0x80 61 0
+6810 midi 0x90 62 100
+6820 midi 0x80 62 0
+6830 midi 0x90 63 100
+6840 midi 0x80 63 0
+6850 midi 0x90 64 100
+6860 midi 0x80 64 0
+6870 midi 0x90 65 100
+6880 midi 0x80 65 0
+6890 midi 0x90 66 100
+6900 midi 0x80 66 0
+6910 midi 0x90 67 100
+6920 midi 0x80 67 0
+6930 midi 0x90 68 100
+6940 midi 0x80 68 0
+6950 midi 0x90 69 100
+6960 midi 0x80 69 0
+6970 midi 0x90 70 100
+6980 midi 0x80 70 0
+6990 midi 0x90 71 100
+7000 midi 0x80 71 0
+7010 midi 0x90 48 100
+7020 midi 0x80 48 0
+7030 midi 0x90 49 100
+7040 midi 0x80 49 0
+7050 midi 0x90 50 100
+7060 midi 0x80 50 0
+7070 midi 0x90 51 100
+7080 midi 0x80 51 0
+7090 midi 0x90 52 100
+7100 midi 0x80 52 0
+7110 midi 0x90 53 100
+7120 midi 0x80 53 0
+7130 midi 0x90 54 100
+7140 midi 0x80 54 0
+7150 midi 0x90 55 100
+7160 midi 0x80 55 0
+7170 midi 0x90 56 100
+7180 midi 0x80 56 0
+7190 midi 0x90 57 100
+7200 midi 0x80 57 0
+7210 midi 0x90 58 100
+7220 midi 0x80 58 0
+7230 midi 0x90 59 100
+7240 midi 0x80 59 0
+7250 midi 0x90 60 100
+7260 midi 0x80 60 0
+7270 midi 0x90 61 100
+7280 midi 0x80 61 0
+7290 midi 0x90 62 100
+7300 midi 0x80 62 0
+7310 midi 0x90 63 100
+7320 midi 0x80 63 0
+7400 expect 0 recon
+7400 expect 64 seqlen
+7400 expect 48 seqnt 0 0
+7400 expect 63 seqnt 63 0
+7400 shot
+7450 midi 0x90 60 100
+7460 midi 0x80 60 0
+7500 expect 64 seqlen
+# write_full_message: the store filled; WRITE of the 64-step recording is refused as a whole: SEQ FULL (the Program
+# screen says SEQ FULL: NOTHING STORED and how to free room), the record still names the pair stored before, the edit
+# buffer as it was
+# (the fill erases the store's sectors one by one: the host's clock stalls ~50 ms each)
+7600 expect 1 seqfill
+9000 btn 11
+9050 pad 3 100
+9060 pad 3 0
+9600 expect 0 wr
+9600 expect -2 wrrc
+9600 expect 1 writes
+9600 expect 1 seqgen 0
+9600 expect 64 seqlen
+9600 expect 9 screen
+9600 shot
+9700 end

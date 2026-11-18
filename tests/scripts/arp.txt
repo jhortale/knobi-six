@@ -147,9 +147,11 @@
 9280 pad 5 100
 9290 pad 5 0
 # LOCAL OFF (Globals, pad 2), ARP ON, PARAM TX on: the keys go out raw as in Phase 1, the local arp never gets them
+# (Arp + Clock > Sequencer > Program > Globals: screen 10 since Phase 3 put the Sequencer at 8)
 9300 btn 3
 9310 btn 3
-9350 expect 9 screen
+9320 btn 3
+9350 expect 10 screen
 9400 pad 2 100
 9410 pad 2 0
 9450 expect 0 glob 7

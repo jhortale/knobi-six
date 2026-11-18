@@ -8,7 +8,7 @@ CLOCK** (Arp + Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN a
 
 | Message | Does |
 | --- | --- |
-| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed |
+| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed; while a sequence is being recorded (SEQ REC): recorded as a key is, by note number (keys and MIDI notes make one chord: [CONTROLS.md](CONTROLS.md) "Sequencer"). A MIDI note never transposes a playing sequence (only the keys do) |
 | channel pressure | aftertouch; the synth gets the higher of it and the bottom pads' pressure |
 | pitch bend | added to the pitch wheel's bend (±BEND RANGE at the ends) |
 | CC 1 | mod wheel (the higher of it and the panel's wheel); only adds LFO depth |
@@ -77,6 +77,9 @@ stopping it, a program change, ARP ON, PANIC, ALL NOTES OFF, a MIDI stop or the 
 is on. PANIC (CC 120) stops the sequence; ALL NOTES OFF (CC 123) only releases its notes and it plays on at its next
 step (a DAW sending CC 123 at its stop does not disarm a sequence that follows its clock). Should the main loop stall
 long enough for the shared out ring to overrun, every note still on at the receiver gets its note-off at once. The keys played with it go out as played (they are not the sequence's).
+Recording a sequence (Phase 3 Task 5): the keys go out as played (they sound too; the arp is off while recording). A
+key that transposes a playing sequence (SEQ REC held, or UNISON on with LOCAL ON) sends nothing, nor does its release.
+Under LOCAL OFF the keys are not recorded (they go out; a DAW echoing them back records them once, through MIDI in).
 Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
 note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
 on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off

@@ -52,6 +52,7 @@ run "the clock (Task 5): tap tempo, the division, LFO SYNC, MIDI clock in: start
 run "the arpeggiator (Task 6): HOLD latch, relatch, append, HOLD off; MIDI clock in absent / stopped / gone: silent, nothing held (expect)" sh tests/run_host.sh tests/scripts/arp.txt
 run "Phase 3: a stored sequence missing: the notice, an unedited WRITE keeps it named, an edit replaces it (expect)" sh tests/run_host.sh tests/scripts/seq_missing.txt
 run "Phase 3: the sequencer's player: play, gate, rest, tie, loop, transpose, MIDI out (PARAM TX, LOCAL, the channel kept), arp exclusive, MIDI clock in armed / start / stop / continue / gone, a program change (expect)" sh tests/run_host.sh tests/scripts/seq.txt
+run "Phase 3: recording (keys, MIDI in, the octave baked in, rest / tie / back, 64 steps), the transpose keys, SEQ REC while playing, WRITE + a power cycle, SEQ FULL (expect)" sh tests/run_host.sh tests/scripts/seq_rec.txt
 run "Phase 3: a WRITE that compacts the sequence store, under a HOLD drone (expect)" sh tests/run_host.sh tests/scripts/write_compact.txt
 run "Phase 3: that WRITE's WAV: the fades, no click; its silence (2 store erases + the slot save) under 450 ms" \
     python3 tests/wav_check.py build/host/app.wav --steady 1600 2450 --check 2450 3300 --fade-max 25 --gap-max 450

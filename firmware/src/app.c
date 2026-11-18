@@ -5,7 +5,9 @@
  *
  *   keys       the synth (synth/, engine.c), with the key's velocity through the VEL CURVE global (ARP ON: the
  *              arpeggiator, synth/arp.h); the notes go out over USB-MIDI (MIDI CH; ARP ON with PARAM TX: the arp's
- *              notes instead, ui/midi_map.c); LOCAL OFF: MIDI only
+ *              notes instead, ui/midi_map.c); LOCAL OFF: MIDI only. Recording a sequence (SEQ REC): also to the
+ *              recorder (LOCAL ON; ui/seq_rec.h), as played. The sequence playing: SEQ REC held (or UNISON on) + a key
+ *              transposes it, and that key does nothing else (ui/controls.c controls_seq_key)
  *   OCTAVE-/+  the octave, -2..+2 (kept in flash with the globals)
  *   K1         the volume (platform.c)
  *   K2..K8, faders, pads, the other buttons: ui/controls.c (the map: docs/CONTROLS.md): the screen's knobs, the
@@ -62,6 +64,7 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
 #include "cpu1_probe.c"
 #endif
+#include "ui/seq_rec.c"                         /* the sequencer's step entry (Phase 3 Task 5; after synth/seq.c) */
 #include "ui/controls.c"                        /* the panel: screens' bindings, pot modes, pads (after engine.c) */
 #include "ui/midi_map.c"                        /* MIDI in and the CC map */
 #include "ui/panel_gfx.c"                       /* the panel's drawing parts: knobs, 7-segment digits, wood... */
@@ -236,15 +239,17 @@ static void app_main(void)
         prev = keys;
         for (k = 0; k < 27u; k++) {             /* (a key stops the note it started: the octave may change meanwhile) */
             uint32_t key = SMK_KEY_F3 + k, vel = (uint32_t)glob_vel_curve((int)vc, fm1_in.key_vel[key]);
-            if (down >> k & 1u) {
+            if (down >> k & 1u && !controls_seq_key((int)(base + k))) {   /* (a transpose: swallowed, its release too) */
                 key_note[key] = (uint8_t)(base + k);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);    /* (chord memory capture while CHORD is held) */
+                if (ctl_glob[G_LOCAL]) controls_rec_note(key_note[key], vel ? (int)vel : 1);   /* (recording) */
                 key_vel[key] = (uint8_t)vel;
                 if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
             }
             if (up >> k & 1u && key_note[key]) {
                 stop(key_note[key]);
+                controls_rec_note(key_note[key], 0);
                 if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
                 key_note[key] = 0, key_out[key] = 0;
             }
@@ -253,13 +258,16 @@ static void app_main(void)
             uint32_t key = (uint32_t)e >> 8, vel = (uint32_t)glob_vel_curve((int)vc, (int)((uint32_t)e & 0x7Fu));
             if (key >= FM1_NKEY) continue;
             if (vel) {
+                if (controls_seq_key((int)(base + key - SMK_KEY_F3))) continue;   /* (a transpose: swallowed) */
                 key_note[key] = (uint8_t)(base + key - SMK_KEY_F3);
                 play(key_note[key], vel);
                 controls_key(key_note[key]);
+                if (ctl_glob[G_LOCAL]) controls_rec_note(key_note[key], (int)vel);
                 key_vel[key] = (uint8_t)vel;
                 if ((key_out[key] = (uint8_t)ctl_keys_out()) != 0) midi_send(0x90u | ch, key_note[key], vel), keys_tx_on++;
             } else if (key_note[key]) {
                 stop(key_note[key]);
+                controls_rec_note(key_note[key], 0);
                 if (key_out[key]) midi_send(0x80u | ch, key_note[key], 0), keys_tx_off++;
                 key_note[key] = 0, key_out[key] = 0;
             }
@@ -284,8 +292,9 @@ static void app_main(void)
         midi_in();
         clock_out();
 
-        for (k = 0; k < 18u; k++)               /* a button lit while it is held */
-            fm1_led_key(k, fm1_in.buttons >> k & 1u);
+        for (k = 0; k < 18u; k++)               /* a button lit while it is held (SEQ PLAY while the sequence plays,
+                                                 * SEQ REC while recording) */
+            fm1_led_key(k, (fm1_in.buttons >> k & 1u) || controls_btn_lit(k));
 
         idle_ok = 1;                            /* the drawing below may read MIDI meanwhile (LCD_IDLE) */
         scr_oct = set.oct;
@@ -456,6 +465,48 @@ static int host_probe(const char *name, const int *a, int n, int *got)   /* test
         *got = 0;
     }
     else if (!strcmp(name, "seqsteps")) *got = (int)eng_seqp.steps;    /* steps played so far */
+    else if (!strcmp(name, "recon")) *got = ctl_rec.on;                /* recording (SEQ REC) */
+    else if (!strcmp(name, "seqcount")) *got = a0 < SEQ_MAX_STEPS ? edit_seq()->step[a0].count : -1;   /* seqcount I:
+                                                                          the edit sequence's step I (0 = step 1): its
+                                                                          notes (0 a rest) */
+    else if (!strcmp(name, "seqtie")) *got = a0 < SEQ_MAX_STEPS ? edit_seq()->step[a0].tie : -1;   /* seqtie I: a tie */
+    else if (!strcmp(name, "seqnt") && n >= 2) *got = a0 < SEQ_MAX_STEPS && (uint32_t)a[1] < SEQ_MAX_NOTES ?
+                                                          edit_seq()->step[a0].notes[a[1]] : -1;   /* seqnt I K: note K */
+    else if (!strcmp(name, "seqvel") && n >= 2) *got = a0 < SEQ_MAX_STEPS && (uint32_t)a[1] < SEQ_MAX_NOTES ?
+                                                          edit_seq()->step[a0].vels[a[1]] : -1;    /* seqvel I K: its velocity */
+    else if (!strcmp(name, "seqxpv")) *got = eng_last_seqxp;           /* the transpose sent (semitones) */
+    else if (!strcmp(name, "wrrc")) *got = ctl_wr_rc;                  /* the last WRITE: 1 stored, -1 failed, -2 SEQ FULL */
+    else if (!strcmp(name, "seqused")) *got = (int)seqst_used();       /* the sequence store: bytes used */
+    else if (!strcmp(name, "seqfill")) {                               /* host hook: the sequence store filled: sequences
+                                                                          put for programs 499, 498, ... (never named by a
+                                                                          record), full-size until one is refused, then
+                                                                          smaller until one is refused: got 1 = full */
+        static seq_t s;
+        static const uint8_t nt[6] = {48, 52, 55, 60, 64, 67}, vl[6] = {90, 90, 90, 90, 90, 90};
+        uint16_t g;
+        int k = 0, rc = 0;
+        seq_clear(&s);
+        while (s.len < SEQ_MAX_STEPS) (void)seq_rec_step(&s, nt, vl, 6);
+        while (k < 400 && (rc = seqst_put((uint16_t)(499 - k), &s, &g)) == 0) k++;
+        seq_clear(&s);                                                 /* (then 64 one-note steps, then one step: the
+                                                                          sectors' tails filled too) */
+        while (s.len < SEQ_MAX_STEPS) (void)seq_rec_step(&s, nt, vl, 1);
+        if (rc == -1) while (k < 400 && (rc = seqst_put((uint16_t)(499 - k), &s, &g)) == 0) k++;
+        seq_clear(&s);
+        (void)seq_rec_step(&s, nt, vl, 1);
+        if (rc == -1) while (k < 400 && (rc = seqst_put((uint16_t)(499 - k), &s, &g)) == 0) k++;
+        *got = rc == -1;
+    }
+    else if (!strcmp(name, "powercycle")) {                            /* host hook: "T expect 0 powercycle N": the
+                                                                          sequence side of a power-on: the player stopped,
+                                                                          the store read from the flash again
+                                                                          (prog_seq_boot: seqst_init, the edit sequence
+                                                                          empty), then program N loaded from the flash */
+        (void)eng_seq_play(0);
+        prog_seq_boot();
+        ctl_prog_select((int32_t)a0);
+        *got = 0;
+    }
     else if (!strcmp(name, "seqformat")) *got = seqst_format();        /* every stored sequence gone (records keep
                                                                           naming theirs: "missing") */
     else if (!strcmp(name, "seqchurn")) {                              /* full-size puts and releases on program 499

@@ -10,8 +10,9 @@
 #include "../synth/voices.h"
 #include "../params/globals.h"
 
-enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_XMOD, SCR_AT_MISC, SCR_CLOCK, SCR_PROGRAM,
-                 SCR_GLOBALS, SCR_COUNT };
+enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_XMOD, SCR_AT_MISC, SCR_CLOCK, SCR_SEQ,
+                 SCR_PROGRAM, SCR_GLOBALS, SCR_COUNT };   /* SCR_SEQ: the Sequencer (Phase 3 Task 5; ids from 8 on moved
+                                                 * up by one then) */
 
 /* a binding: a live param id (params.h P_IS_LIVE), a global (B_GLOBAL, params/globals.h G_*), a program digit (B_PROG,
  * encoders only), an action (B_ACT, top pads only) or B_NONE */
@@ -22,9 +23,11 @@ enum screen_id { SCR_BOOT, SCR_PLAY, SCR_VCO, SCR_MIX_FILTER, SCR_ENV, SCR_LFO_X
 #define B_IS_PROG(x) (((x) & 0xFF00u) == 0x2000u)
 #define B_IS_GLOBAL(x) (((x) & 0xFF00u) == 0x4000u)
 #define B_IS_ACT(x) (((x) & 0xFF00u) == 0x8000u)
-enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_TAP, ACT_COUNT };
+enum { ACT_PREV, ACT_NEXT, ACT_ROW, ACT_HOLD, ACT_WRITE, ACT_ENTER, ACT_MANUAL, ACT_TAP, ACT_SEQPLAY, ACT_SEQREC,
+       ACT_COUNT };
 /* section back / on, the other row, HOLD, WRITE (arm / cancel), ENTER (commit the armed WRITE), MANUAL (the live
- * panel), TAP (tap tempo: the program's BPM from the 4th tap; synth/clock.h). ARP ON is a param pad (P_ARP_ON) */
+ * panel), TAP (tap tempo: the program's BPM from the 4th tap; synth/clock.h), SEQ PLAY and SEQ REC (the Sequencer
+ * screen's pads: as the buttons, SEQ REC acting at once). ARP ON is a param pad (P_ARP_ON) */
 enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
 /* a notice in the header (ctl_last_id = B_NOTICE, the value one of these): none, a broken stored program loaded as
  * init ("Err"), restore factory asked ("SurE": GLOBE + BT again within 2 s), factory restored ("FAC"), the stored
@@ -32,6 +35,7 @@ enum { PRG_BANK, PRG_TENS, PRG_ONES, PRG_COUNT };
 enum { NT_NONE, NT_BROKEN, NT_RESTORE_ASK, NT_RESTORED, NT_SEQ_MISSING };   /* NT_SEQ_MISSING: the record names a
                                                  * sequence the store does not give (params/prog_seq.h): empty loaded */
 #define B_NOTICE B_ACT(0x7Fu)   /* the program number's digits (OB-6: bank / tens / ones) */
+#define B_SEQXP B_ACT(0x7Eu)    /* the header's value: the sequence's transpose (ctl_last_v, semitones) */
 
 typedef struct { uint16_t enc[7]; uint16_t fader[4]; uint16_t pad_top[8]; } binding_t;  /* param ids or 0xFFFF; pad_top may be actions */
 extern const binding_t BINDINGS[SCR_COUNT];
@@ -58,6 +62,12 @@ void controls_init(void);                            /* after eng_init: pad even
 void controls_poll(synth_t *s, program_t *edit, int *screen);   /* main loop: encoders K2..K8, faders, pads, buttons */
 int  controls_aftertouch(void);                                /* highest bottom-row pressure 0..127 */
 void controls_key(int note);                         /* a note played (keys, MIDI): chord memory capture */
+int  controls_seq_key(int note);                     /* a key pressed (its note after the octave shift): 1 = it transposes
+                                                      * the sequence playing (SEQ REC held, or UNISON on): the caller
+                                                      * swallows it (no sound, no MIDI, no record; its release neither) */
+void controls_rec_note(int note, int vel);           /* a note to the sequencer's recorder (keys under LOCAL ON, MIDI in):
+                                                      * vel 1..127 on, 0 off; nothing unless recording */
+int  controls_btn_lit(uint32_t btn);                 /* a button's LED beside its press: SEQ PLAY playing, SEQ REC recording */
 void controls_midi(uint32_t st, uint32_t d1, uint32_t d2);   /* one MIDI message in (midi_map.c) */
 
 #endif

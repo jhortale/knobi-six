@@ -25,7 +25,10 @@
  * Sequence notes out: the sequencer's player (synth/seq.h) writes the same ring (the arp and the sequencer never play
  * together), so its notes go out here under the same rules and pairing (PARAM TX and LOCAL ON for a note-on; every
  * note-off sent on its note-on's channel). The keys played with a sequence go out as played (ctl_keys_out: only ARP ON
- * keeps them home). */
+ * keeps them home).
+ * Sequencer recording (Phase 3 Task 5): MIDI notes in (the MIDI CH heard) are recorded as the keys are (controls_rec_note;
+ * the keys only under LOCAL ON, so a DAW echoing them back under LOCAL OFF records them once). They never transpose: only
+ * the keys do (SEQ REC held, or UNISON on). */
 #include "controls.h"
 
 #define MIDI_CC_NONE 0xFFu
@@ -162,8 +165,9 @@ void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
     case 0x90u:
         if (d2) { eng_note((int)d1, (int)d2); controls_key((int)d1); }
         else eng_note((int)d1, 0);                    /* (velocity 0: a note-off) */
+        controls_rec_note((int)d1, (int)d2);           /* (the sequencer's recorder, when recording) */
         break;
-    case 0x80u: eng_note((int)d1, 0); break;
+    case 0x80u: eng_note((int)d1, 0); controls_rec_note((int)d1, 0); break;
     case 0xD0u: ctl_midi_at = (uint8_t)d1; break;
     case 0xE0u: ctl_midi_bend = (int32_t)(d2 << 7 | d1) - 8192; break;
     case 0xC0u: ctl_program_change(ctl_bank_sel, (int32_t)d1); break;

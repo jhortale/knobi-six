@@ -1,12 +1,12 @@
 # The faders follow the screen (Play: FILTER FREQ, RESONANCE, MODE, ENV AMOUNT) and the global POT MODE (GLOBE, K3):
 # 0 RELATIVE (the default: the move scales between the stored value and the travel's end), 1 PASSTHRU (no change
 # until the fader crosses the stored value), 2 JUMP (the fader's value at once). Param 14 = FILTER FREQ (0..164, init
-# 164), 15 = RESONANCE (0..255, init 0); "glob 1" = POT MODE; screen 9 = Globals. Faders start at 0.
+# 164), 15 = RESONANCE (0..255, init 0); "glob 1" = POT MODE; screen 10 = Globals. Faders start at 0.
 100 btn 12
 150 expect 0 glob 1
 # PASSTHRU
 200 btn 10
-250 expect 9 screen
+250 expect 10 screen
 300 enc 2 1
 350 expect 1 glob 1
 400 btn 12

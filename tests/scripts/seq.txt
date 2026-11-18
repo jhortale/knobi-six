@@ -63,7 +63,7 @@
 4920 expect -1 seqcur
 4920 expect 8 arpout
 4920 expect 8 arpoff
-# LOCAL OFF (Globals: btn 3 x 8, pad 2): the sequence plays here, nothing is sent
+# LOCAL OFF (Globals: btn 3 x 9, pad 2): the sequence plays here, nothing is sent
 5000 btn 3
 5010 btn 3
 5020 btn 3
@@ -72,7 +72,8 @@
 5050 btn 3
 5060 btn 3
 5070 btn 3
-5100 expect 9 screen
+5080 btn 3
+5100 expect 10 screen
 5200 pad 2 100
 5210 pad 2 0
 5250 expect 0 glob 7
@@ -92,9 +93,10 @@
 6400 expect 0 arpoffch
 6450 enc 1 -3
 6500 expect 0 glob 0
-# ARP ON (Arp + Clock: btn 2 x 2, pad 5) while it plays: the sequence stops (released); SEQ PLAY again: the arp off
+# ARP ON (Arp + Clock: btn 2 x 3, pad 5) while it plays: the sequence stops (released); SEQ PLAY again: the arp off
 6600 btn 2
 6610 btn 2
+6620 btn 2
 6700 expect 7 screen
 6800 pad 5 100
 6810 pad 5 0
