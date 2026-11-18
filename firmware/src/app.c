@@ -55,6 +55,7 @@ static void eng_split(struct synth *s, int32_t *bus, uint32_t n);
 #define SYNTH_VOICE_ALIGN __attribute__((aligned(32)))   /* each voice on cache lines of its own (engine.c) */
 #endif
 #include "synth/voices.c"
+#include "synth/seq.c"                      /* the step sequencer model (Phase 3) */
 #include "engine.c"
 #if KNOBI_CPU1_PROBE                            /* the CPU1 probe build (tools/build.py --probe-cpu1; docs/SMOKE_TEST.md) */
 #include "cpu1_probe.c"
