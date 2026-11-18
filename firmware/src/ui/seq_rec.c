@@ -3,7 +3,9 @@
  * with seq.c alone. */
 #ifndef KNOBI_SEQ_REC_C
 #define KNOBI_SEQ_REC_C
+#ifdef DINGHY_HOST
 #include <string.h>
+#endif                                  /* (the device: memset from libc.c, through platform.c) */
 #include "seq_rec.h"
 
 static void seqrec_full(seqrec_t *r, const seq_t *s)   /* 64 steps: recording stops */
