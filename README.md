@@ -113,6 +113,9 @@ KNOBI-SIX starts from [smk37-base](https://github.com/fc79/smk37-base) by fc79, 
 [SLOOP](https://github.com/isod89/sloop-fm1)'s platform, with genkigenki's SMK-37 port. The second-core support
 (`KNOBI_CPU1` builds) derives from [felucca-bsp](https://github.com/hugelton/felucca-bsp) (MPL-2.0) and Melodee. What came from where, and the
 third-party parts: [LICENSING.md](LICENSING.md); what the base changed from Dinghy: [docs/CHANGES.md](docs/CHANGES.md).
+The AU / VST3 plugin (`plugin/`, branch `plugin`) is built with [JUCE](https://juce.com) 8 by Raw Material Software,
+used under its open-source licence (AGPLv3 for JUCE 8, combined with KNOBI-SIX's GPL-3.0 as GPLv3 section 13 allows;
+[LICENSING.md](LICENSING.md)); how to build and install it: [plugin/README.md](plugin/README.md).
 The platform's API and the chip's rules: [docs/API.md](docs/API.md), [docs/RULES.md](docs/RULES.md). The original
 README of the base is in git history (`upstream/main`).
 

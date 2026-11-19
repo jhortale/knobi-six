@@ -203,3 +203,57 @@ jobs:
             build/cpu1emu/probe_screen.png
             build/cpu1emu/probemis_screen.png
           if-no-files-found: warn
+
+  # The AU / VST3 plugin (plugin/, plan Task 3): built WITHOUT the OB-6 factory bank (KNOBI_FACTORY_LOCAL is never set
+  # here; the job fails if a factory_bank.h is present), the core's host tests on macOS, the plugin's tests (CTest) and
+  # auval on the AU installed into the runner's ~/Library/Audio/Plug-Ins/Components. JUCE 8 pinned in
+  # plugin/CMakeLists.txt.
+  plugin-macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          brew install ninja >/dev/null 2>&1 || brew install ninja
+          cmake --version | head -1; ninja --version; xcodebuild -version | head -1
+
+      - name: No factory bank here
+        run: test ! -e firmware/gen/factory_bank.h
+
+      - name: Core host tests (macOS: make -C tests unit)
+        run: make -C tests unit
+
+      - name: Build (AU + VST3, default, no factory bank)
+        run: |
+          cmake -S plugin -B build/plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DKNOBI_FACTORY_LOCAL=OFF
+          cmake --build build/plugin
+          codesign -dv build/plugin/KnobiSix_artefacts/Release/AU/KNOBI-SIX.component 2>&1 | grep -E 'Identifier|Signature'
+
+      - name: Plugin tests (CTest)
+        run: |
+          ctest --test-dir build/plugin --output-on-failure -V | tee ctest.log | grep -E '^[0-9]+: (render|midi|rt_no|seam|bundle)|tests passed|Failed|FAIL' || true
+          grep -q '100% tests passed' ctest.log
+          { echo '### Plugin tests (CTest)'; echo '```'; grep -E '^[0-9]+: (render|midi|rt_no|seam|bundle)|tests passed' ctest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: auval (aumu Kn6x Jhrt)
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          ditto build/plugin/KnobiSix_artefacts/Release/AU/KNOBI-SIX.component ~/Library/Audio/Plug-Ins/Components/KNOBI-SIX.component
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          for i in 1 2 3 4 5; do
+            if auval -strict -v aumu Kn6x Jhrt > auval.log 2>&1; then break; fi
+            tail -5 auval.log; sleep 5
+          done
+          tail -20 auval.log
+          grep -q 'AU VALIDATION SUCCEEDED' auval.log
+          { echo '### auval -strict -v aumu Kn6x Jhrt'; echo '```'; tail -8 auval.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knobi-six-plugin-macos
+          path: |
+            build/plugin/KnobiSix_artefacts/Release/AU/KNOBI-SIX.component
+            build/plugin/KnobiSix_artefacts/Release/VST3/KNOBI-SIX.vst3
+          if-no-files-found: error

@@ -40,10 +40,12 @@
 extern "C" {
 #endif
 
+#ifndef KC_API                            /* (the plugin links the core in: -DKC_API= , nothing exported) */
 #if defined __GNUC__
 #define KC_API __attribute__((visibility("default")))   /* (the only exports under -fvisibility=hidden) */
 #else
 #define KC_API
+#endif
 #endif
 
 #define KC_RATE 44100u                    /* the sample rate */
