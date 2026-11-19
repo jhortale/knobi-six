@@ -3,8 +3,9 @@
 /* Dinghy's SMK-37 flash map (build with -DBOARD_SMK37=1; firmware/src/store.h, hal/fm1_flash_map.h): every 4 KiB
  * sector of the 1 MiB part through the app's allow-list (FL_RANGE_OK / FL_GUARD) and the update loader's
  * (FL_LDR_RANGE_OK): none may ever reach the head 0x0-0x3FFF, BTIF / USRTRIM 0xC0000-0xC1FFF (the calibration),
- * USR 0xF4000-0xFDFFF or key_mac 0xFF000-. The settings, the blobs, the owner tag, the slots and the OTA staging lie
- * in the store windows, each in its own sectors; ranges that wrap or straddle a boundary are refused. */
+ * USR 0xF4000-0xFDFFF or key_mac 0xFF000-. The settings, the blobs, the owner tag, the sequence store (KNOBI-SIX
+ * Phase 3: 0xA6000-0xAEFFF and 0xB0000-0xBAFFF), the slots and the OTA staging lie in the store windows, each in its
+ * own sectors; ranges that wrap or straddle a boundary are refused. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +40,8 @@ int main(void)
     check("no protected sector passes the app's allow-list (erase, page)", leak_app == 0);
     check("no protected sector passes the loader's allow-list", leak_ldr == 0);
     check("the RAM driver's own net (FL_PROTECTED) covers every protected sector", leak_guard == 0);
-    check("the app may write 47 sectors: settings, 8 blobs, the owner tag, 5 of OTA, 8 slots of 4", allowed == 7u + NBLOB + NSLOT * SLOT_SECT);
+    check("the app may write 67 sectors: settings, 8 blobs, the owner tag, 5 of OTA, 8 slots of 4, 20 of sequences",
+          allowed == 7u + NBLOB + NSLOT * SLOT_SECT + SEQST_SECTORS && SEQST_SECTORS == 20u);
     check("straddling ranges refused: 0xBF000+0x2000, 0x9C000+0x2000, 0xA5000+0x2000, 0x3000+0x2000",
           !FL_GUARD(0xBF000u, 0x2000u) && !FL_GUARD(0x9C000u, 0x2000u) && !FL_GUARD(0xA5000u, 0x2000u) &&
           !LDR_RANGE_OK(0xBF000u, 0x2000u) && !LDR_RANGE_OK(0x3000u, 0x2000u) && FL_PROTECTED(0xBF000u, 0x2000u));
@@ -57,6 +59,23 @@ int main(void)
     }
     check("settings 0x9D000, blobs 0x9E000-0xA5FFF, owner tag 0xAF000: in FL_DATA, writable, apart",
           inside && distinct && SETTINGS_AT == 0x9D000u && BLOBS_AT == 0x9E000u && OWNER_AT == 0xAF000u);
+    {
+        uint32_t seq_ok = 1, seq_apart = 1, k;
+        for (i = 0; i < SEQST_SECTORS; i++) {
+            uint32_t a = SEQST_SECTOR_AT(i);
+            seq_ok &= FL_GUARD(a, 0x1000u) && FL_GUARD(a + 0xF00u, 0x100u) && a % 0x1000u == 0u && a >= FL_DATA_LO &&
+                      a + 0x1000u <= FL_DATA_HI && !FL_PROTECTED(a, 0x1000u);
+            for (k = 0; k < NBLOB + 2u; k++) if (a == objs[k]) seq_apart = 0;
+            for (k = 0; k < i; k++) if (a == SEQST_SECTOR_AT(k)) seq_apart = 0;
+        }
+        check("sequences 0xA6000-0xAEFFF and 0xB0000-0xBAFFF: in FL_DATA, writable, apart from settings/blobs/owner",
+              seq_ok && seq_apart && SEQST_SECTOR_AT(0) == 0xA6000u && SEQST_SECTOR_AT(8) == 0xAE000u &&
+              SEQST_SECTOR_AT(9) == 0xB0000u && SEQST_SECTOR_AT(19) == 0xBA000u);
+        check("the sequence store's edges: straddles into the blobs, the owner tag, OTA refused",
+              !FL_GUARD(0xA5F00u, 0x200u) && !FL_GUARD(0xAEF00u, 0x200u) && !FL_GUARD(0xAFF00u, 0x200u) &&
+              !FL_GUARD(0xBAF00u, 0x200u) && !FL_GUARD(0xA6000u, 0x9000u + 0x1000u) && FL_GUARD(0xA6000u, 0x9000u) &&
+              FL_GUARD(0xB0000u, 0xB000u) && !FL_GUARD(0xB0000u, 0xC000u));
+    }
     check("OTA staging 0xBB000-0xBFFFF writable, the window ends below BTIF",
           FL_GUARD(0xBB000u, 0x1000u) && FL_GUARD(0xBFF00u, 0x100u) && !FL_GUARD(0xC0000u, 0x100u) && FL_OTA_HI == 0xC0000u);
     check("slots 0xC2000-0xE1FFF in FL_SMP, writable; the FM-1's places refused on the SMK: 0xFC000, 0xF4000-0xFBFFF",

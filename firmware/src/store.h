@@ -7,6 +7,7 @@
  *   blobs      0xF4000.. NBLOB sectors       0x9E000.. NBLOB sectors
  *   slots      0x97000.. NSLOT x SLOT_SECT   0xC2000.. NSLOT x SLOT_SECT (USRFLASH, SLOOP's sample slots)
  *   owner tag  -                             0xAF000: "SMK37DATA" + DATA_FAMILY (smk_owner_check)
+ *   sequences  - (compiled out)              0xA6000.. 9 sectors + 0xB0000.. 11 sectors (params/seq_store.h)
  *
  * On the FM-1 the other firmwares of the family keep their data in 0x97000..0xFBFFF too: a new firmware finds the
  * magic or the length wrong and starts fresh (give your fork its own STORE_MAGIC). The SMK-37's store is shared by
@@ -29,12 +30,20 @@
 #define BLOBS_AT 0x0009E000u
 #define OWNER_AT 0x000AF000u                    /* (the kit's place for it) */
 #define SLOTS_AT 0x000C2000u
+#define SEQST_A_AT 0x000A6000u                  /* the sequence store (params/seq_store.h): FL_DATA's free sectors, */
+#define SEQST_A_N 9u                            /* 0xA6000..0xAEFFF (after the blobs) and 0xB0000..0xBAFFF (after */
+#define SEQST_B_AT 0x000B0000u                  /* the owner tag), one list of sectors */
+#define SEQST_B_N 11u
+#define SEQST_SECTORS (SEQST_A_N + SEQST_B_N)
+#define SEQST_SECTOR_AT(i) ((uint32_t)(i) < SEQST_A_N ? SEQST_A_AT + (uint32_t)(i) * 0x1000u : SEQST_B_AT + ((uint32_t)(i) - SEQST_A_N) * 0x1000u)
 #ifndef DATA_FAMILY
 #define DATA_FAMILY "DINGHY"                    /* the owner tag's family: 1..7 of A-Z 0-9 (tools/build.py DATA_FAMILY) */
 #endif
 #define FL_RANGE_OK(off, n) (FL_IN(off, n, FL_OTA_LO, FL_OTA_HI) || FL_IN(off, n, SETTINGS_AT, SETTINGS_AT + 0x1000u) || \
                              FL_IN(off, n, BLOBS_AT, BLOBS_AT + NBLOB * 0x1000u) || FL_IN(off, n, OWNER_AT, OWNER_AT + 0x1000u) || \
-                             FL_IN(off, n, SLOTS_AT, SLOTS_AT + NSLOT * SLOT_SECT * 0x1000u))
+                             FL_IN(off, n, SLOTS_AT, SLOTS_AT + NSLOT * SLOT_SECT * 0x1000u) || \
+                             FL_IN(off, n, SEQST_A_AT, SEQST_A_AT + SEQST_A_N * 0x1000u) || \
+                             FL_IN(off, n, SEQST_B_AT, SEQST_B_AT + SEQST_B_N * 0x1000u))
 #else
 #define SETTINGS_AT 0x000FC000u                 /* (Felucca's globals area) */
 #define BLOBS_AT 0x000F4000u
@@ -53,6 +62,14 @@ _Static_assert(BLOBS_AT + NBLOB * 0x1000u <= OWNER_AT && OWNER_AT + 0x1000u <= F
 _Static_assert(SLOTS_AT >= FL_SMP_LO && SLOTS_AT + NSLOT * SLOT_SECT * 0x1000u <= FL_SMP_HI, "SMK store: slots outside FL_SMP");
 _Static_assert(FL_WIN_SAFE(SLOTS_AT, SLOTS_AT + NSLOT * SLOT_SECT * 0x1000u), "SMK store: the slots overlap a protected range");
 _Static_assert(FL_WIN_SAFE(SETTINGS_AT, OWNER_AT + 0x1000u), "SMK store: overlaps a protected range");
+_Static_assert(SEQST_A_AT % 0x1000u == 0u && SEQST_B_AT % 0x1000u == 0u, "SMK store: sequence sectors aligned");
+_Static_assert(BLOBS_AT + NBLOB * 0x1000u <= SEQST_A_AT && SEQST_A_AT + SEQST_A_N * 0x1000u <= OWNER_AT,
+               "SMK store: sequences (A) between the blobs and the owner tag");
+_Static_assert(OWNER_AT + 0x1000u <= SEQST_B_AT && SEQST_B_AT + SEQST_B_N * 0x1000u <= FL_DATA_HI,
+               "SMK store: sequences (B) between the owner tag and the end of FL_DATA");
+_Static_assert(SETTINGS_AT + 0x1000u <= SEQST_A_AT, "SMK store: sequences clear of the settings");
+_Static_assert(FL_WIN_SAFE(SEQST_A_AT, SEQST_A_AT + SEQST_A_N * 0x1000u) && FL_WIN_SAFE(SEQST_B_AT, SEQST_B_AT + SEQST_B_N * 0x1000u),
+               "SMK store: the sequences overlap a protected range");
 _Static_assert(sizeof DATA_FAMILY - 1u >= 1u && sizeof DATA_FAMILY - 1u <= 7u, "SMK store: family 1..7 characters");
 
 /* the 16-byte owner tag: "SMK37DATA" + the family, zero padded (a 7-letter family fills it, no NUL) */

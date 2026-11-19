@@ -327,6 +327,14 @@ static void smk_owner_check(void)
         fm1_wdt_feed();
         fl_erase4k(SLOTS_AT + i * SLOT_SECT * 0x1000u, &took);
     }
+#ifdef SEQST_SECTORS
+    for (i = 0; i < SEQST_SECTORS; i++) {       /* KNOBI-SIX: the sequence store (params/seq_store.h) goes with the
+                                                 * program records that name its entries; before the tag, so a power
+                                                 * cut in here clears it all again at the next boot */
+        fm1_wdt_feed();
+        fl_erase4k(SEQST_SECTOR_AT(i), &took);
+    }
+#endif
     fl_erase4k(OWNER_AT, &took);
     fl_write(OWNER_AT, want, 16);
     smk_store_cleared = 1;

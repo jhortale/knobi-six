@@ -25,12 +25,12 @@
 900 expect 1 writes
 900 expect 100 stored 0 14
 1000 btndown 10
-1050 expect 9 screen
+1050 expect 10 screen
 1100 btn 11
 1150 btnup 10
 1200 expect 2 notice
 1200 expect 0 restores
-1200 expect 8 screen
+1200 expect 9 screen
 1200 expect 100 edit 14
 3300 expect 0 notice
 3400 btndown 10
@@ -43,7 +43,7 @@
 3800 expect 3 notice
 3800 expect 1 restores
 3800 expect 0 wr
-3800 expect 8 screen
+3800 expect 9 screen
 3800 expect 82 edit 14
 3800 expect 70 name 0
 3800 expect 100 stored 0 14

@@ -21,6 +21,16 @@
  * and at the arp note's gate end (arp_run); a pattern start with ARP BEAT SYNC off (EV_ARPSYNC, the global) restarts the
  * clock (never under MIDI CLOCK OUT: eng_arp_start); the clock not running (an external clock absent or stopped) silences it; HOLD, ALL NOTES OFF, PANIC and program
  * loads reach it too. Its MIDI out ring (eng_arp.out[], out_w) is read by the main loop (ui/midi_map.c).
+ * The sequencer's player (synth/seq.h "The player"; eng_seqp, CPU0, never CPU1) runs beside it on the same step events
+ * and the same split (eng_render_steps: seq_step at each step's frame, seq_run to its gate's end), and writes the same
+ * MIDI out ring. It plays eng_seqd, the engine's copy of the edit buffer's sequence: eng_seq_load copies a sequence into
+ * eng_sbuf and queues EV_SEQ (one at a time, as program loads: eng_sw / eng_sr), the consumer copies it into eng_seqd as
+ * the event drains, so the interrupt never reads the main loop's buffer. SEQ PLAY (EV_SEQPLAY) starts it under the
+ * arp's start rules (eng_arp_start) and turns the arp off; ARP ON, a program load and PANIC stop it (eng_seq_stop: its
+ * notes released first, so ARP ON never takes them for keys); ALL NOTES OFF releases its notes (it plays on); the clock
+ * not running silences it (the step kept); a MIDI clock's 0xFA / 0xFB / 0xFC reach it (seq_ext; not under IN NO S/S).
+ * Published for the main loop: eng_seq_state (0 stopped, 1 playing, 2 armed: on, the clock not running), eng_seq_cur
+ * (the step played last). The producer's view of SEQ PLAY: eng_seq_playing().
  * The main loop reads what the clock publishes, one aligned word each:
  * eng_clk_ticks (ticks entered, 24 a quarter, never going back), eng_clk_starts / eng_clk_start_ticks (restarts to
  * step 0, the tick count before the latest) and eng_clk_mode (the mode applied): MIDI clock out (clock.h
@@ -66,17 +76,20 @@
 #include <stdint.h>
 #include "synth/clock.c"                  /* (the clock: a pure module, the engine's) */
 #include "synth/arp.c"                    /* (the arpeggiator: the engine's, after voices.c) */
+#include "synth/seqplay.c"                /* (the sequencer's player: the engine's, after arp.c: it shares its ring) */
 
 #define ENG_QLEN 256u                     /* events; a power of two */
 #define ENG_RESERVE 64u                   /* the last slots: note-offs, HOLD and PANIC only */
 #define ENG_BARRIER() __asm__ volatile("" ::: "memory")   /* a compiler barrier (as platform.c RING_PUBLISH) */
 
 enum { EV_NOTE, EV_PARAM, EV_BEND, EV_WHEEL, EV_PRESSURE, EV_HOLD, EV_PANIC, EV_PROGRAM, EV_CHORD, EV_ALLOFF, EV_VOLUME,
-       EV_TUNE, EV_RT, EV_CLKMODE, EV_ARPSYNC };
+       EV_TUNE, EV_RT, EV_CLKMODE, EV_ARPSYNC, EV_SEQPLAY, EV_SEQXP, EV_SEQ };
 typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel; PARAM a id b value; BEND b 0..16383;
                                                               CHORD a slot 0..5 b note (0 = empty); RT a status
                                                               (0xF8..0xFC); CLKMODE b the MIDI CLOCK global;
-                                                              ARPSYNC b the ARP BEAT SYNC global */
+                                                              ARPSYNC b the ARP BEAT SYNC global; SEQPLAY b
+                                                              PLAY on; SEQXP b transpose; SEQ a sequence
+                                                              handed over (eng_sbuf) */
 _Static_assert(P_COUNT_RESERVED <= 256, "a live id fits eng_ev_t.a");
 
 static synth_t eng_synth;                 /* the consumer's (and eng_init's, before eng_ready) */
@@ -90,6 +103,16 @@ static int32_t eng_last_clkmode;          /* the MIDI CLOCK mode sent (producer)
 static int32_t eng_last_arpsync;          /* the ARP BEAT SYNC global sent (producer) */
 static arp_t eng_arp;                     /* the arpeggiator (consumer; eng_init before eng_ready) */
 static uint8_t eng_arp_sync_on;           /* ARP BEAT SYNC as applied (consumer) */
+static seqp_t eng_seqp;                   /* the sequencer's player (consumer; eng_init before eng_ready) */
+#ifdef DINGHY_HOST
+static seq_t eng_seqd, eng_sbuf;          /* the sequence played (consumer); the hand-over buffer (eng_seq_load) */
+#else
+static seq_t eng_seqd __attribute__((section(".pool"))), eng_sbuf __attribute__((section(".pool")));   /* (897 B each) */
+#endif
+static volatile uint32_t eng_sw, eng_sr;  /* sequences handed over / taken (as eng_pw / eng_pr) */
+static int32_t eng_last_seqplay, eng_last_seqxp;   /* SEQ PLAY and the transpose sent (producer) */
+static volatile uint8_t eng_seq_state;    /* published: 0 stopped, 1 playing, 2 armed (PLAY on, the clock not running) */
+static volatile uint8_t eng_seq_cur = SEQ_NO_STEP;   /* published: the step played last (SEQ_NO_STEP none since PLAY) */
 static clk_t eng_clk;                     /* the clock (consumer; eng_init before eng_ready) */
 static volatile uint32_t eng_clk_ticks, eng_clk_beats, eng_clk_starts, eng_clk_start_ticks;   /* published by the
                                                                                           consumer (see above) */
@@ -143,6 +166,9 @@ static void eng_init(void)                /* the init program; call before audio
     eng_last_clkmode = CLK_MIDI_OFF, eng_last_arpsync = 0, eng_arp_sync_on = 0;
     arp_init(&eng_arp, 0x41525036u);
     arp_program(&eng_arp, &eng_synth, eng_edit.v);
+    seq_clear(&eng_seqd);
+    seqp_init(&eng_seqp, &eng_seqd, &eng_arp);
+    eng_sw = eng_sr = 0, eng_last_seqplay = eng_last_seqxp = 0, eng_seq_state = 0, eng_seq_cur = SEQ_NO_STEP;
     clock_init(&eng_clk);
     clock_set_bpm(&eng_clk, eng_edit.v[P_BPM]);
     clock_set_div(&eng_clk, eng_edit.v[P_CLK_DIV]);
@@ -187,6 +213,7 @@ static int eng_param(uint32_t id, int32_t v)   /* 0 queued (or unchanged), 1 kep
     c = param_clamp((uint16_t)id, v);
     if (eng_edit.v[id] == c && !ENG_BIT(eng_par_pend, id)) return 0;
     eng_edit.v[id] = c;
+    if (id == P_ARP_ON && c) eng_last_seqplay = 0;   /* (ARP ON stops the sequencer: the consumer does it as it drains) */
     if (eng_push(EV_PARAM, id, c, ENG_RESERVE)) { ENG_SET(eng_par_pend, id); return 1; }
     ENG_CLR(eng_par_pend, id);
     return 0;
@@ -219,6 +246,7 @@ static int eng_faded(void) { return eng_fade_out && eng_fade_quiet >= ENG_FADE_Q
 static int eng_panic(void)                /* 0 queued, 1 kept for eng_flush */
 {
     eng_last_hold = 0;                    /* (panic clears HOLD) */
+    eng_last_seqplay = 0;                 /* (and stops the sequencer) */
     if (eng_push(EV_PANIC, 0, 0, 0)) { eng_panic_pend = 1; return 1; }
     eng_panic_pend = 0;
     return 0;
@@ -272,12 +300,46 @@ static int eng_program(const program_t *p)   /* -1: a load is still pending (or 
     eng_pw = eng_pw + 1u;
     if (eng_push(EV_PROGRAM, 0, 0, ENG_RESERVE)) { eng_pw = eng_pw - 1u; return -1; }
     eng_edit = *p;
+    eng_last_seqplay = eng_last_seqxp = 0;   /* (a program load stops the sequencer, its transpose back to none) */
     for (unsigned i = 0; i < P_COUNT_RESERVED; i++) eng_edit.v[i] = param_clamp((uint16_t)i, p->v[i]);
     for (unsigned i = 0; i < sizeof eng_par_pend / sizeof eng_par_pend[0]; i++) eng_par_pend[i] = 0;   /* its values win */
     eng_chord_pend = 0;
     return 0;
 }
 static int eng_active(void) { return eng_voices; }   /* voices sounding after the last block */
+/* ---- the sequencer (producer; synth/seq.h "The player"). SEQ PLAY: on arms it (from step 1; the arp's start rules,
+ * eng_arp_start), off stops it (its notes released, back to step 1). Turning it on turns the arp off (ARP ON, eng_edit's
+ * too); ARP ON (eng_param), a program load (eng_program) and PANIC turn it off: eng_seq_playing() follows all of them.
+ * -1: refused (the queue full): the caller tries again on its next pass. Not stored with the program */
+static int eng_seq_play(int on)
+{
+    on = on != 0;
+    if (on != eng_last_seqplay) {
+        if (eng_push(EV_SEQPLAY, 0, on, on ? ENG_RESERVE : 0)) { eng_drops = eng_drops + 1u; return -1; }
+        eng_last_seqplay = on;
+    }
+    if (on && eng_edit.v[P_ARP_ON]) eng_param(P_ARP_ON, 0);   /* (only once PLAY is queued: a refused one leaves the
+                                                 * arp as it was. The consumer turns the arp off as it drains anyway) */
+    return 0;
+}
+static int eng_seq_playing(void) { return eng_last_seqplay; }   /* SEQ PLAY as sent (producer's view) */
+/* transpose, semitones (the UI: the key pressed - SEQ_XP_CENTER); from the next step; a program load resets it */
+static int eng_seq_transpose(int semis)
+{
+    return eng_level(EV_SEQXP, &eng_last_seqxp, semis < -127 ? -127 : semis > 127 ? 127 : semis, ENG_RESERVE);
+}
+/* the sequence the player plays (the edit buffer's, params/prog_seq.h edit_seq: the main loop hands every change
+ * over, app.c). Copied into eng_sbuf, which the consumer copies into its own (eng_seqd) as the event drains, so the
+ * interrupt never reads a sequence being written. -1: one still pending (or the queue full): try again later */
+static int eng_seq_load(const seq_t *q)
+{
+    if (eng_sw != eng_sr) return -1;
+    eng_sbuf = *q;
+    ENG_BARRIER();
+    eng_sw = eng_sw + 1u;
+    if (eng_push(EV_SEQ, 0, 0, ENG_RESERVE)) { eng_sw = eng_sw - 1u; return -1; }
+    return 0;
+}
 
 /* ---- consumer (audio interrupt) */
 /* an arp pattern starts (a key into an empty one, a relatch, ARP ON with keys held): ARP BEAT SYNC off, the clock
@@ -286,6 +348,11 @@ static int eng_active(void) { return eng_voices; }   /* voices sounding after th
  * slaves 0xFA and jump a DAW or drum machine to its bar start on every chord; the arp waits for the next step of the
  * division, as with BEAT SYNC on (the internal grid, the slaves' and the TAP LED untouched) */
 static void eng_arp_start(void) { if (!eng_arp_sync_on && eng_clk.mode != CLK_MIDI_OUT) clock_restart(&eng_clk); }
+static void eng_seq_stop(void)            /* the sequencer off, its notes released (here and in the MIDI ring) */
+{
+    seq_silence(&eng_seqp, &eng_synth);
+    seq_play(&eng_seqp, 0);
+}
 static void eng_drain(void)
 {
     uint32_t r = eng_qr, w = eng_qw;
@@ -299,13 +366,18 @@ static void eng_drain(void)
             break;
         case EV_PARAM:
             if (e->a >= P_ARP_ON && e->a <= P_ARP_HOLD) {
+                if (e->a == P_ARP_ON && e->b) eng_seq_stop();   /* (exclusive; first: ARP ON takes the synth's keys
+                                                                 * down, the sequence's must not be among them) */
                 eng_synth.prog.v[e->a] = e->b;
                 if (arp_set(&eng_arp, &eng_synth, e->a, e->b)) eng_arp_start();
             } else if (e->a == P_BPM) clock_set_bpm(&eng_clk, e->b), eng_synth.prog.v[P_BPM] = e->b;
             else if (e->a == P_CLK_DIV) clock_set_div(&eng_clk, e->b), eng_synth.prog.v[P_CLK_DIV] = e->b;
             else synth_param(&eng_synth, e->a, e->b);
             break;
-        case EV_RT: clock_midi(&eng_clk, e->a, eng_clk.now); break;   /* (at this block's start) */
+        case EV_RT:                       /* (at this block's start) */
+            clock_midi(&eng_clk, e->a, eng_clk.now);
+            if (CLOCK_EXTERNAL(eng_clk.mode) && eng_clk.mode != CLK_MIDI_IN_NSS) seq_ext(&eng_seqp, e->a);
+            break;
         case EV_CLKMODE: clock_set_mode(&eng_clk, e->b); break;
         case EV_ARPSYNC: eng_arp_sync_on = (uint8_t)(e->b != 0); break;
         case EV_BEND: synth_bend(&eng_synth, e->b); break;
@@ -315,12 +387,32 @@ static void eng_drain(void)
             arp_hold(&eng_arp, e->b);
             if (!eng_arp.on) synth_hold(&eng_synth, e->b);
             break;
-        case EV_PANIC: arp_clear(&eng_arp, &eng_synth); synth_panic(&eng_synth); arp_hold(&eng_arp, 0); break;
-        case EV_ALLOFF: arp_clear(&eng_arp, &eng_synth); synth_all_notes_off(&eng_synth); break;
+        case EV_PANIC: eng_seq_stop(); arp_clear(&eng_arp, &eng_synth); synth_panic(&eng_synth); arp_hold(&eng_arp, 0); break;
+        case EV_ALLOFF:                   /* (the sequence's notes released; it plays on at its next step) */
+            seq_silence(&eng_seqp, &eng_synth);
+            arp_clear(&eng_arp, &eng_synth);
+            synth_all_notes_off(&eng_synth);
+            break;
+        case EV_SEQPLAY:
+            if (!e->b) { eng_seq_stop(); break; }
+            if (eng_arp.on) arp_set(&eng_arp, &eng_synth, P_ARP_ON, 0), eng_synth.prog.v[P_ARP_ON] = 0;   /* exclusive */
+            if (seq_play(&eng_seqp, 1)) eng_arp_start();   /* (the arp's start rules) */
+            break;
+        case EV_SEQXP: seq_transpose(&eng_seqp, e->b); break;
+        case EV_SEQ:                      /* a new sequence: the player follows it (its notes sounding are its own) */
+            eng_seqd = eng_sbuf;
+            if (eng_seqp.cur != SEQ_NO_STEP && eng_seqp.cur >= eng_seqd.len) eng_seqp.cur = SEQ_NO_STEP;   /* (the step
+                                                 * shown never past the new length) */
+            eng_seq_cur = eng_seqp.cur;
+            ENG_BARRIER();
+            eng_sr = eng_sr + 1u;         /* the buffer is the producer's again */
+            break;
         case EV_VOLUME: synth_volume(&eng_synth, e->b); break;
         case EV_TUNE: synth_tune(&eng_synth, e->b); break;
         case EV_CHORD: if (e->a < 6u) eng_synth.prog.chord[e->a] = (uint8_t)e->b; break;
         case EV_PROGRAM:
+            eng_seq_stop();               /* (the sequencer stops; its new sequence follows: app.c) */
+            seq_transpose(&eng_seqp, 0);
             synth_program(&eng_synth, &eng_pbuf);
             arp_program(&eng_arp, &eng_synth, eng_pbuf.v);   /* (its keys forgotten, as the synth's) */
             clock_set_bpm(&eng_clk, eng_pbuf.v[P_BPM]);   /* (the program's tempo and division: the position kept) */
@@ -519,32 +611,37 @@ static void eng_cpu(uint32_t used, uint32_t budget)
     eng_sheds = eng_synth.sheds;
 }
 
-/* the block's render with the arpeggiator: split at each clock step's frame (arp_step there: its note starts on that
- * sample) and at the end of the arp note's gate (arp_run: its note-off on that sample). synth_render takes any frame
- * count and keeps its control period across the calls. With the arp off and no note of its own: one render, as before */
-static void eng_render_arp(int32_t *lr, uint32_t frames)
+/* the block's render with the arpeggiator and the sequencer (one at a time: exclusive): split at each clock step's
+ * frame (arp_step / seq_step there: their notes start on that sample) and at the end of their notes' gate (arp_run /
+ * seq_run: the note-offs on that sample). synth_render takes any frame count and keeps its control period across the
+ * calls. With both off and no note of their own: one render, as before */
+static void eng_render_steps(int32_t *lr, uint32_t frames)
 {
     uint32_t pos = 0, k = 0, n = eng_clk.n;
-    if (!eng_arp.on && eng_arp.note < 0) { synth_render(&eng_synth, lr, frames); return; }
+    if (!eng_arp.on && eng_arp.note < 0 && !eng_seqp.on && !eng_seqp.n) { synth_render(&eng_synth, lr, frames); return; }
     for (;;) {
         uint32_t end = frames, g;
         while (k < n && eng_clk.at[k] <= pos) {   /* a step here: the step's length for the gate (50 %) */
             uint32_t ticks = CLOCK_DIV_TICKS[eng_clk.div][eng_clk.step[k] & 1u], rate = eng_clk.rate;
-            eng_arp.step_len = rate ? ticks * CLOCK_U / rate : 0u;   /* (48 x CLOCK_U < 2^29) */
+            eng_arp.step_len = eng_seqp.step_len = rate ? ticks * CLOCK_U / rate : 0u;   /* (48 x CLOCK_U < 2^29) */
             arp_step(&eng_arp, &eng_synth);
+            seq_step(&eng_seqp, &eng_synth);
             k++;
         }
         if (pos >= frames) break;
         if (k < n && eng_clk.at[k] < end) end = eng_clk.at[k];
         g = arp_until(&eng_arp);
         if (g < end - pos) end = pos + g;
+        g = seq_until(&eng_seqp);
+        if (g < end - pos) end = pos + g;
         synth_render(&eng_synth, lr + 2u * pos, end - pos);
         arp_run(&eng_arp, &eng_synth, end - pos);
+        seq_run(&eng_seqp, &eng_synth, end - pos);
         pos = end;
     }
 }
 
-/* eng_render's 'used' is wall-clock ticks around the render (eng_render_arp): it includes the time of any interrupt
+/* eng_render's 'used' is wall-clock ticks around the render (eng_render_steps): it includes the time of any interrupt
  * that preempted it (USB, the key scan), which is time the block did not have either, so the guard counts it too. */
 static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L R pairs, Q15 (then the fade) */
 {
@@ -559,12 +656,18 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
     eng_clk_run = (uint8_t)clock_running(&eng_clk), eng_clk_alive = eng_clk.alive;
     eng_clk_bpm10 = (uint16_t)clock_bpm_x10(&eng_clk);
     synth_clock(&eng_synth, clock_quarter_inc(&eng_clk));   /* LFO SYNC's tempo (a compare when unchanged) */
-    if (!eng_clk_run) arp_silence(&eng_arp, &eng_synth);   /* (reference 5: no clock, no arp; no note left held) */
+    if (!eng_clk_run) {                        /* (reference 5: no clock, no arp, no sequence; no note left held. The
+                                                * sequence keeps its position: an external Continue goes on from it) */
+        arp_silence(&eng_arp, &eng_synth);
+        seq_silence(&eng_seqp, &eng_synth);
+    }
     uint32_t t0 = eng_ticks();
 #if KNOBI_CPU1
     eng_c1_block();                            /* (the joins' deadline: this block's) */
 #endif
-    eng_render_arp(lr, frames);
+    eng_render_steps(lr, frames);
+    eng_seq_state = (uint8_t)(!eng_seqp.on ? 0 : eng_clk_run ? 1 : 2);
+    eng_seq_cur = eng_seqp.cur;
 #ifdef DINGHY_HOST
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);
 #endif

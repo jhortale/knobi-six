@@ -7,8 +7,8 @@ running on the keyboard itself. The design is in
 the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md), the work plan in
 [docs/superpowers/plans/2026-11-16-standalone-phase1.md](docs/superpowers/plans/2026-11-16-standalone-phase1.md).
 
-> **Status: in development, not installable yet.** Phases 1 and 2 (2A, 2B) are built; nothing has been tried on a
-> keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
+> **Status: in development, not installable yet.** Phases 1, 2 (2A, 2B) and 3 (the sequencer) are built; nothing has
+> been tried on a keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
 
 ## Build and test
 
@@ -24,7 +24,7 @@ tests/run_host.sh tests/scripts/diag.txt    # the app on the computer: screens a
 make -C tests unit                          # unit tests (from Task 1 on)
 ```
 
-CI (`.github/workflows/build.yml`) does the device build and the tests on every push to `phase1` and `phase2` and
+CI (`.github/workflows/build.yml`) does the device build and the tests on every push to `phase1`, `phase2` and `phase3` and
 uploads the package, `app.map` and `app.dis` (the CPU1 build and the probe in the `cpu1-emu` job).
 
 ## Phase 2 (branch `phase2`)
@@ -48,6 +48,36 @@ Built and tested on the computer and in the emulator only:
 Numbers and what is still unknown: [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) "Phase 2 status" and "What only the
 device can confirm".
 
+## Phase 3 (branch `phase3`)
+
+Spec: [docs/superpowers/specs/2026-11-18-phase3-sequencer-design.md](docs/superpowers/specs/2026-11-18-phase3-sequencer-design.md).
+Built and tested on the computer and in the emulator only; the device checklist is
+[docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) §6:
+
+- **A step sequencer**, one per program: up to 64 steps, each of up to six notes, a rest or a tie, recorded step by
+  step with **SEQ REC** (a key and let go = a step, keys held together = a chord, `>` = a rest, or a tie with notes
+  held, `<` = back and erase) and played with **SEQ PLAY** on the clock of Phase 2 (BPM and division, internal or MIDI
+  clock in), a 50 % gate, looping. Held SEQ REC + a key transposes it while it plays (UNISON on: a key alone). The
+  sequence's notes go out as MIDI like the arpeggiator's; the arpeggiator and the sequencer are exclusive. A new
+  **Sequencer** screen (SEQ button) shows the state, the step, the length, the transpose and the 64-step grid.
+  [docs/CONTROLS.md](docs/CONTROLS.md) "Sequencer", [docs/MIDI.md](docs/MIDI.md).
+- **WRITE stores the program and its sequence together**, in a power-safe log in the flash sectors that were free
+  (about 76 KB of sequences; the Program screen says `SEQ FULL: NOTHING STORED` rather than half-storing). A reload
+  gives the old pair or the new one, never a mix.
+- **The record format changed** (program record version 3 names the program's sequence). **A firmware from before
+  Phase 3 reads such records as broken**: going back from Phase 3 to a Phase 2 build, written programs load as the
+  init program with `Err`. The program records are still in the flash until a WRITE under Phase 2 overwrites that
+  program's slot, and the sequences sit in sectors Phase 2 has no use for, so installing Phase 3 again gets them back;
+  do not WRITE under Phase 2 in between if they matter (not tried on a device).
+- **Factory sequences**: the importer ([Importing](#importing-the-ob-6-factory-programs) below) now also builds each
+  OB-6 factory program's sequence into your local bank, **locally only**: the data is not in this repository or in
+  any build we publish. How the file marks a rest and a tie was inferred from the data, not documented, so the
+  device check plays a few by ear ([docs/FACTORY_BANK.md](docs/FACTORY_BANK.md) "The OB-6 sequence").
+- Not there: a footswitch to start and stop (the SMK-37 has no input for one; MIDI's start / stop do it), overdub
+  (recording replaces the sequence), per-step edits beyond DEC / INC, SysEx dumps.
+
+What it costs on the CPU, measured in the emulator: [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) "Phase 3".
+
 ## Importing the OB-6 factory programs
 
 KNOBI-SIX ships with **empty banks**: every program starts as the init program. If you own the OB-6 factory programs
@@ -67,13 +97,13 @@ a firmware built with it (`firmware/gen/factory_bank.h` is in `.gitignore`).
    ```
    It writes `firmware/gen/factory_bank.h` and a report of every conversion and warning in
    `build/factory_bank_report.txt`.
-4. Build as usual (`./build.sh`) and install as usual. The bank adds about 100 KB to the image. With the header
+4. Build as usual (`./build.sh`) and install as usual. The bank adds about 160 KB to the image (programs and sequences). With the header
    there, the package is `build/knobi-six-local.fwsc` (`-local-elite`, `-local-mke`) and the build warns that it holds
    your imported bank: install it on your own keyboard, **never share it**. A `--release` build refuses to run while
    the header is there.
 
-Program names are kept as they are, including the ones that contain "OB". The sequencer data of the
-programs is not imported (a program has no room for it); effects settings are kept for a later phase but do nothing yet
+Program names are kept as they are, including the ones that contain "OB". The programs' sequences are now included
+too (each program's factory sequence, about 60 KB more; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)); effects settings are kept for a later phase but do nothing yet
 (the arpeggiator, clock and distortion settings are used since Phase 2). Delete `firmware/gen/factory_bank.h` to build without the bank again.
 
 ## Credits

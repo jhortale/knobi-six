@@ -162,6 +162,136 @@ if dists:
         print(f'| {n} | {NAMES[int(n[1])]} | {n.split("-v")[1]} | {z[1]:,.0f} / {z[2]:,.0f} | {x[1]:,.0f} / {x[2]:,.0f} | '
               f'{x[1] - z[1]:+,.0f} / {x[2] - z[2]:+,.0f} | {(x[2] - z[2]) / 256:+.1f} | '
               f'{100 * z[2] / p240:.1f} -> {100 * x[2] / p240:.1f} | {f"{c[0]}, {c[2]}" if good else "RUN FAILED"} |')
+def per_block(n, k1, k0):
+    """cycles per block (insns, emu, hw), the difference of the runs of k1 and k0 blocks; the cost files hold eighths"""
+    a, b = load(f'{out}/{n}-{k1}.cost'), load(f'{out}/{n}-{k0}.cost')
+    d = {pc: tuple(x - y for x, y in zip(a.get(pc, (0, 0, 0)), b.get(pc, (0, 0, 0)))) for pc in set(a) | set(b)}
+    return d, (k1 - k0)
+
+
+def one_core(n, k1, k0):
+    d, kk = per_block(n, k1, k0)
+    return [sum(v[i] for v in d.values()) / kk / (1 if i == 0 else 8) for i in range(3)]
+
+
+def dual_path(n, k1, k0):
+    """as the Dual core table: CPU0's serial work + max(set A, set B), cycles per block (emu, hw)"""
+    d, kk = per_block(n, k1, k0)
+    s = syms(f'{out}/{n}.nm')
+    own = {pc: owner(s, pc) for pc in d}
+    c0 = {pc: v for pc, v in d.items() if not pc >> 31}
+    c1 = {pc: v for pc, v in d.items() if pc >> 31}
+    job_fns = {own[pc] for pc, v in c1.items() if v[0] > 0} - {'c1_main', 'cpu1_job_voices'}
+
+    def tot(rows, pred):
+        return [sum(v[i] for pc, v in rows.items() if pred(own[pc])) / kk / 8 for i in (1, 2)]
+    wait = tot(c0, lambda f: f == 'c0_join')
+    work0 = [x - y for x, y in zip(tot(c0, lambda f: True), wait)]
+    a_set = tot(c0, lambda f: f in job_fns)
+    job = tot(c1, lambda f: f != 'c1_main')
+    return [w - x + max(x, y) for w, x, y in zip(work0, a_set, job)], job
+
+
+def fn_blocks(n, k1, k0):
+    """cycles per block (insns, hw) of each function: the difference of the runs of k1 and k0 blocks"""
+    d, kk = per_block(n, k1, k0)
+    s = syms(f'{out}/{n}.nm')
+    per = {}
+    for pc, v in d.items():
+        q = per.setdefault(owner(s, pc), [0, 0])
+        q[0] += v[0] / kk
+        q[1] += v[2] / kk / 8
+    return per
+
+
+# Phase 3 Task 7 (harness ENG=1): the sequencer's player through the engine, 250 BPM, 1/16, six notes a step. q runs:
+# one core; r runs: DUAL=1. SEQ 0 = the six keys held (the baseline), 1 = a chord a step with a long release (six voices
+# busy all the time: the worst case), 2 = a chord and 63 ties (a constant six-voice load: the player's own work),
+# 3 = a chord a step with the patch's own release. 83 blocks = 8.03 steps (a step is 2646 frames = 10.34 blocks).
+KS, K0, KB = 91, 8, 10
+SEQ_NAMES = {1: 'a chord a step, long release (six voices always busy)', 2: 'ties (a constant six-voice load)',
+             3: 'a chord a step, the patch\'s release (half the time sounding)'}
+seq_runs = sorted({os.path.basename(p)[:-len(f'-{KS}.cost')] for p in glob.glob(f'{out}/q*-{KS}.cost')})
+if seq_runs:
+    p240 = BLOCK_S * 240e6
+    print('\n### Sequencer playback (harness ENG=1: through eng_render; 250 BPM, 1/16, six notes a step; one core, '
+          'cycles per block over 83 blocks = 8.03 steps)\n')
+    print('| patch | no sequencer (six keys held), emu / hw | ' + ' | '.join(
+        f'{SEQ_NAMES[q]}: cycles, emu / hw | delta, emu / hw | delta, % of the block at 240 MHz (emu / hw)' for q in (1, 2, 3))
+        + ' |')
+    print('|---|---|' + '---|---|---|' * 3)
+    for pat in (3, 4):
+        r = {sq: one_core(f'q{pat}{sq}-v6', KS, K0) for sq in (0, 1, 2, 3) if f'q{pat}{sq}-v6' in seq_runs}
+        if len(r) < 4:
+            ok = False
+            continue
+        for sq in (0, 1, 2, 3):
+            ok &= check(f'{out}/q{pat}{sq}-v6-{KS}.log') is not None
+        e = lambda v: f'{v[1]:,.0f} / {v[2]:,.0f}'
+        dl = lambda v, b: f'{v[1] - b[1]:+,.0f} / {v[2] - b[2]:+,.0f}'
+        pc = lambda v, b: f'{100 * (v[1] - b[1]) / p240:+.2f} / {100 * (v[2] - b[2]) / p240:+.2f}'
+        cells = ' | '.join(f'{e(r[q])} | {dl(r[q], r[0])} | {pc(r[q], r[0])}' for q in (1, 2, 3))
+        print(f'| {NAMES[pat]} | {e(r[0])} | {cells} |')
+    print('\nThe baseline plays the same six notes through the same engine (event queue, clock, eng_render_steps with its '
+          'fast path), so the delta is the sequencer: the player, the render split at every step and every gate end, the '
+          'note-ons and note-offs, and (3) the voices that are not sounding for half of every step.')
+    f0, f1, f2 = (fn_blocks(f'q3{sq}-v6', KS, K0) for sq in (0, 1, 2))
+    print('\nWhere the sequencer\'s own cycles go (musical C3..C5, hw cycles per block): the functions that run only with a '
+          'sequence (absent from the baseline\'s profile; the player, the note-on / note-off path) and `main` (the '
+          'harness loop with engine.c inlined: eng_render, eng_render_steps, eng_drain, the clock):\n')
+    print('| | chord a step, long release | ties |')
+    print('|---|---|---|')
+    only = lambda f: sorted(((v[1], k) for k, v in f.items() if k not in f0 and v[1] > 0), reverse=True)
+    for lab, f in (('functions only a sequence runs', None),):
+        t1 = sum(v for v, k in only(f1))
+        t2 = sum(v for v, k in only(f2))
+        m1, m2 = f1.get('main', [0, 0])[1] - f0.get('main', [0, 0])[1], f2.get('main', [0, 0])[1] - f0.get('main', [0, 0])[1]
+        print(f'| {lab} | {t1:,.0f} | {t2:,.0f} |')
+        print(f'| `main` (the engine loop), against the baseline | {m1:+,.0f} | {m2:+,.0f} |')
+        print(f'| total, hw cycles a block (% of the block at 240 MHz) | {t1 + m1:,.0f} ({100 * (t1 + m1) / p240:.2f} %) '
+              f'| {t2 + m2:,.0f} ({100 * (t2 + m2) / p240:.2f} %) |')
+    print('\nThe biggest of them, chord a step: ' + ', '.join(f'{k} {v:,.0f}' for v, k in only(f1)[:6]) + '; ties: '
+          + ', '.join(f'{k} {v:,.0f}' for v, k in only(f2)[:4]) + '.')
+    print('\nOne block that holds a step (block 10 counting from 0: step 2 starts at frame 2646 of the run, all six notes '
+          'retrigger), the difference of the runs of 11 and 10 blocks; one core, cycles, emu / hw:\n')
+    print('| patch | no sequencer | chord a step, long release | delta | % of the block at 240 MHz (emu / hw) |')
+    print('|---|---|---|---|---|')
+    for pat in (3,):
+        if f'q{pat}0-v6' in seq_runs and os.path.exists(f'{out}/q{pat}1-v6-{KB + 1}.cost'):
+            z, q = one_core(f'q{pat}0-v6', KB + 1, KB), one_core(f'q{pat}1-v6', KB + 1, KB)
+            print(f'| {NAMES[pat]} | {z[1]:,.0f} / {z[2]:,.0f} | {q[1]:,.0f} / {q[2]:,.0f} | {q[1] - z[1]:+,.0f} / '
+                  f'{q[2] - z[2]:+,.0f} | {100 * q[1] / p240:.1f} / {100 * q[2] / p240:.1f} (no sequencer '
+                  f'{100 * z[1] / p240:.1f} / {100 * z[2] / p240:.1f}) |')
+        else:
+            ok = False
+    duals_q = sorted({os.path.basename(p)[:-len(f'-{KS}.cost')] for p in glob.glob(f'{out}/r*-{KS}.cost')})
+    if duals_q:
+        print('\n### Sequencer playback, two cores (harness ENG=1 DUAL=1, musical C3..C5; the split as in the Dual core '
+              'table: CPU0 serial work + max(set A, set B); cycles per block over 83 blocks)\n')
+        print('| | no sequencer, emu / hw | chord a step, long release | delta | ties | delta | as played | delta '
+              '| % of the block at 240 MHz (emu / hw): no sequencer -> chord a step -> ties | checksums = one core '
+              '| CPU1 jobs (0 / 1 / 2 / 3) |')
+        print('|---|---|---|---|---|---|---|---|---|---|---|')
+        r = {}
+        good = True
+        for sq in (0, 1, 2, 3):
+            n = f'r3{sq}-v6'
+            if n not in duals_q:
+                good = False
+                continue
+            r[sq], _ = dual_path(n, KS, K0)
+            cd, cs = dual_check(f'{out}/{n}-{KS}.log'), check(f'{out}/q3{sq}-v6-{KS}.log')
+            good &= cd is not None and cs is not None and cd[1] == cs[2]
+        ok &= good and len(r) == 4
+        if len(r) == 4:
+            jobs = ' / '.join(str(dual_check(f'{out}/r3{sq}-v6-{KS}.log')[2]) for sq in (0, 1, 2, 3))
+            e = lambda v: f'{v[0]:,.0f} / {v[1]:,.0f}'
+            dl = lambda v, b: f'{v[0] - b[0]:+,.0f} / {v[1] - b[1]:+,.0f}'
+            pc = lambda v: f'{100 * v[0] / p240:.1f} / {100 * v[1] / p240:.1f}'
+            print(f'| musical C3..C5, six voices | {e(r[0])} | {e(r[1])} | {dl(r[1], r[0])} | {e(r[2])} | {dl(r[2], r[0])} '
+                  f'| {e(r[3])} | {dl(r[3], r[0])} | {pc(r[0])} -> {pc(r[1])} -> {pc(r[2])} | {"yes" if good else "NO"} '
+                  f'| {jobs} |')
+
 if not ok:
     print('\nERROR: a run did not finish with the result words (or a dual run differs from the one-core run)')
     sys.exit(1)

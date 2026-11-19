@@ -1,5 +1,83 @@
 # Measurements
 
+## Phase 3 status (the sequencer)
+
+Emulator and host-test evidence only: **nothing has run on a keyboard**. The sequencer's own cost is small beside the
+voices, and a WRITE with a sequence works end to end in the emulator; what is left is the device ([SMOKE_TEST.md](SMOKE_TEST.md)
+§6, and "What only the device can confirm" below).
+
+**CPU of playback** (fm1-emu, `tests/cpu_emu/` harness `ENG=1`, `run.sh`'s q and r runs, `analyze.py`; local run = CI's
+`fm1-emu` job, which prints the same tables in its summary). The harness plays through `engine.c` (`eng_render`: the
+event queue, the clock, `eng_render_steps` with the player's splits and `synth_render`), 6 voices, at **250 BPM, 1/16**
+(a step every 2646 frames = 10.3 blocks), the musical stress patch with the six notes of its chord. Cycles per
+256-frame block, **one core**, over 83 blocks (8.03 steps), emu / hw model, and as % of the block (5.805 ms) at 240 MHz
+(hw model):
+
+| musical stress | no sequencer (the six notes held) | sequence, a chord a step, **LOUDNESS release at its longest** (six voices busy all the time: the worst case) | delta | sequence of **ties** (a constant six-voice load: the player's own work) | delta | a chord a step with the patch's own release (the chord sounds about half of each step) | delta |
+|---|---|---|---|---|---|---|---|
+| C3..C5 | 780,259 / 1,121,857 (56.0 / 80.5 %) | 783,131 / 1,125,829 | +2,873 / +3,971 (+0.21 / +0.29 %) | 780,613 / 1,122,352 | +355 / +495 (+0.03 / +0.04 %) | 719,155 / 1,033,848 | -61,104 / -88,010 (-4.4 / -6.3 %) |
+| C5..C7 | 895,658 / 1,277,391 (64.3 / 91.7 %) | 898,093 / 1,280,402 | +2,435 / +3,011 (+0.17 / +0.22 %) | 896,013 / 1,277,886 | +355 / +495 (+0.03 / +0.04 %) | 822,815 / 1,173,073 | -72,843 / -104,318 (-5.2 / -7.5 %) |
+
+- The baseline goes through the same engine, so the delta is the sequencer. The engine path itself costs +402 / +544
+  cycles a block (+0.04 %) over the synth-only run of Phase 2's table (779,857 / 1,121,313 for the same patch).
+- **Worst case: +0.2 to +0.3 % of the block.** Of the 3,971 hw cycles, 384 are the functions that exist only with a
+  sequence (`seq_step`, `seq_run`, `seq_out`, `synth_note_release`, the note-on path) and the engine loop's increment; the rest is the
+  voices' own work changing as six notes restart every step. A sequence cannot ask for more than six voices, so it can
+  never cost more than the six-voice patches of Phase 2's tables plus this.
+- Played with the patch's release, a chord a step is **cheaper** than six held notes (for part of each step the
+  voices have finished their release, and a voice that is not busy is not rendered), by 4 to 7 % of the block.
+- One block holding a step (block 10 of the run: step 2 starts at frame 2646 and retriggers all six notes, the long
+  release case), the difference of the runs of 11 and 10 blocks: 794,584 / 1,140,857 against 786,097 / 1,128,754 held
+  (+8,488 / +12,103: +0.9 % of the block, hw model), so a step is not a spike beyond the six-voice load that is
+  already there.
+- **Two cores** (the harness's dual-core split, `DUAL=1`, as the Phase 2 Task 3 table: CPU0 serial work + max(set A,
+  set B)): 490,856 / 702,195 without a sequencer, 493,200 / 705,373 worst case (+2,344 / +3,178), ties +274 / +379,
+  as played -37,471 / -53,797; every dual run's checksum equals the one-core run's (bit for bit). The player runs on
+  CPU0 only (in the audio interrupt, like the arpeggiator), so the split does not change what it costs.
+- The CPU guard's clock is stubbed in the harness (it never sheds there), so these are the render's cycles, not the
+  guard's load figure; with its 80 % threshold on the emulator's own time nothing changes for the gate (the musical
+  patch is 56 % on one core in the emulator).
+- Not measured: the sequence store's flash work (it runs in the main loop, inside WRITE's silent gap, never in the
+  audio interrupt), and the MIDI out ring's cost (the main loop's).
+
+**A WRITE with a sequence, in the whole image** (fm1-emu `60645a5`, the device image booted, `tests/cpu1_emu/seq_hook.c`,
+cases `seqwrite` and `seqwrite1` of `run.sh`, CI job `cpu1-emu`, 3,000 emulated ms each): `seqwrite` is the **default
+build** (`./build.sh`: one core, `CPU1: absent`), `seqwrite1` a `KNOBI_CPU1=1` build with **DUAL CORE on**. The hook
+records an 8-step sequence (6-, 3-, 2-, 4-note chords, a note, two rests, a tie) into the edit buffer as the recorder
+does, plays it at 250 BPM, 1/16, and presses WRITE and ENTER (1.2 and 1.3 s) while it plays. Both builds read the same:
+
+| | seen |
+|---|---|
+| the WRITE | stored (rc 1, one write) at 1,326 ms |
+| the pair | the record names generation 1 and the store holds it (72 B); read back as a power cycle reloads it (`prog_load`, `seqst_get`) it equals what was recorded; `prog_open` (the edit buffer from the store) equals it too |
+| playback | still playing after the WRITE, on another step (step 5, 300 ms later step 2) |
+| the sound | before the WRITE 134 blocks (9 silent: the rests and gaps), largest sample-to-sample step 7,164, peak 16,812; during it 5 blocks, 2 of them silent, step 2,332, peak 2,388 (a fade: nothing louder or sharper than the playing before it); after it 52 blocks, step 4,193, peak 12,898 (no click) |
+| faults | no halt, no chip reset, 461 audio halves in 3 s; `seqwrite1`: DUAL CORE 1, CPU1 IDLE throughout (the flash gate never had to retire it), rejected 0 |
+
+What it cannot see: fm1-emu does not time an erase or turn the XIP flash off, so the length of the silent gap here is the
+emulator's (two silent blocks), not the chip's, and a fetch from the flash during an erase would not fault here (the
+gate in front of every flash entry point is the evidence, as for Phase 2's `write` case).
+
+Last CI run with these numbers: 44272838452 (`aeba02e`, branch `phase3`): `firmware`, `fm1-emu` and `cpu1-emu` green
+(`cpu1-emu` took 39 min of its 45 min limit on that run: the new cases add two builds and two short emulator runs to a
+job that already took 19 to 38 min on earlier runs).
+
+**Host-model numbers** (not the chip's): WRITE's silent gap in the host's flash model, `write_held` with a sequence
+~0.26 s (it was ~0.2 s without: the sequence store opens a sector), `write_compact` (the store has to compact first)
+~0.31 s, worst case (a put that compacts twice plus the slot) ~0.4 s; `tests/run_tests.sh` holds `write_compact` to
+450 ms and the others to 300 ms. These are `tests/wav_check.py` readings of the host's WAV, where an erase costs what the
+model says it costs.
+
+### What only the device can confirm (Phase 3)
+
+1. **The sequence store on the real flash**, including a power cut during WRITE (tested on the host by cutting at
+   every flash operation: the old pair or the new, never a mix), weak cells, wear.
+2. **The WRITE gap with a sequence** on the real flash, a compacting one included.
+3. **MIDI clock jitter with the sequencer** (clock in is queued to the 5.8 ms block; clock out from the main loop).
+4. **Rest and tie decoding of the imported factory sequences by ear** (inferred from the data).
+5. **The CPU with a sequence on the chip** (no cache or contention in the emulator), against the CPU line's PEAK.
+6. Everything listed under Phase 2's "What only the device can confirm" below, which Phase 3 leaves open.
+
 ## Phase 2 status (2A second core, 2B clock / arpeggiator / distortion)
 
 Everything below is emulator and host-test evidence: **nothing has run on a keyboard**. The device numbers come from

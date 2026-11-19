@@ -40,7 +40,13 @@ enum param_id {
     P_FXA_TYPE, P_FXA_MIX, P_FXA_P1, P_FXA_P2, P_FXA_SYNC, P_FXA_DIV,
     P_FXB_TYPE, P_FXB_MIX, P_FXB_P1, P_FXB_P2, P_FXB_SYNC, P_FXB_DIV,
     P_BPM, P_CLK_DIV, P_ARP_ON, P_ARP_MODE, P_ARP_RANGE, P_ARP_HOLD,
-    P_COUNT_RESERVED
+    P_COUNT_RESERVED,
+    /* Stored values that are not parameters (record version 3): no range, no default but 0, never clamped, never live
+     * (not a param: no queue, no screen). P_SEQ_GEN: the generation of the program's sequence in the sequence store
+     * (params/seq_store.h), kept as the uint16 1..65535 in the int16 slot (program_seq_gen); 0 = none, the program plays
+     * its factory sequence (params/prog_seq.h). A version 1 or 2 record loads it as 0. */
+    P_SEQ_GEN = P_COUNT_RESERVED,
+    P_COUNT_STORED
 };
 #define P_RESERVED_N (P_COUNT_RESERVED - P_COUNT_PHASE1)
 /* the reserved ids' ranges and defaults (params.c): { min, max, def } */
@@ -64,8 +70,9 @@ extern const param_t PARAM_DISTORTION;
 const param_t *param_get(uint16_t id);                     /* a live id's entry, else 0 */
 
 #ifndef PROGRAM_VERSION
-#define PROGRAM_VERSION 2                 /* current record version; bump together with a PROGRAM_VERSION_TABLE entry
-                                           * (1: the phase-1 values; 2: + the reserved phase-2/3 values) */
+#define PROGRAM_VERSION 3                 /* current record version; bump together with a PROGRAM_VERSION_TABLE entry
+                                           * (1: the phase-1 values; 2: + the reserved phase-2/3 values; 3: + the
+                                           * sequence generation P_SEQ_GEN, Phase 3) */
 #endif
 #define PROGRAM_NAME_LEN 20
 #define PROGRAM_VALUES 96                 /* sized for phases 2-3 */
@@ -86,5 +93,8 @@ int16_t param_clamp(uint16_t id, int32_t value);           /* a reserved id clam
 /* bytes of a packed record of this version (version, name, v[nparams] LE, chord, crc); 0 if the version is unknown */
 uint32_t program_packed_size(unsigned version);
 uint16_t program_crc16(const uint8_t *d, uint32_t n);               /* CRC-16/CCITT-FALSE */
+/* the record's sequence generation (P_SEQ_GEN: 0 none, 1..65535) */
+static inline uint16_t program_seq_gen(const program_t *p) { return (uint16_t)p->v[P_SEQ_GEN]; }
+static inline void program_set_seq_gen(program_t *p, uint16_t g) { p->v[P_SEQ_GEN] = (int16_t)g; }
 
 #endif

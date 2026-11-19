@@ -68,7 +68,8 @@ static void dist_param_live(void)
     }
     /* still stored only: the effects */
     ok &= !P_IS_LIVE(P_FX_ON) && !param_get(P_FX_ON) && !P_IS_LIVE(P_FXB_DIV) && !param_get(P_FXB_DIV);
-    /* a version-1 record (no reserved values) loads with distortion 0; the record version stays 2 */
+    /* a version-1 record (no reserved values) loads with distortion 0 (the record version: 2 when this landed, 3 since
+     * Phase 3 added the sequence generation, params.h P_SEQ_GEN) */
     program_t p;
     uint8_t buf[PROGRAM_PACKED_MAX];
     program_init(&p);
@@ -79,7 +80,7 @@ static void dist_param_live(void)
     uint16_t c = program_crc16(buf, v1 - 2);
     buf[v1 - 2] = (uint8_t)c, buf[v1 - 1] = (uint8_t)(c >> 8);
     int got = program_unpack(&p, buf, v1);
-    ok &= got == 0 && p.v[P_DISTORTION] == 0 && PROGRAM_VERSION == 2;
+    ok &= got == 0 && p.v[P_DISTORTION] == 0 && PROGRAM_VERSION == 3;
     /* the synth takes it: a live edit and a program load set the amount, clamped */
     synth_init(&S);
     set(&S, P_DISTORTION, 200);
@@ -264,7 +265,7 @@ static void dist_max_chord(void)
 }
 
 /* the stage is memoryless and its coefficients follow the control ticks: any split of the render calls gives the same
- * output (engine.c eng_render_arp cuts a block at arp steps and gates) */
+ * output (engine.c eng_render_steps cuts a block at arp and sequence steps and gates) */
 static void dist_subblocks(void)
 {
     static const uint32_t steps[4] = {256, 1, 7, 100};

@@ -116,3 +116,58 @@ LOAD 1C / 2C / JOB and the CPU line with DUAL CORE off and on.
 The default firmware: `knobi-six.fwsc` (the `knobi-six-pro` artifact) with `fm1_install.py`, as in §1; the programs
 and globals stay (the probe saves the same records, plus DUAL CORE in a blob of its own that the default build never
 reads). Stock: M-Vave's package or your dump, as in §4.
+
+## 6. Sequencer (Phase 3: the step sequencer and its storage)
+
+Nothing here has run on a keyboard; the emulator and the host tests cover the logic and the flows
+([MEASUREMENTS.md](MEASUREMENTS.md) "Phase 3"), not the flash and not the ear. Same safety rules as §0 (**the backup
+first**, the way back ready, and **João installs it himself**: no agent runs `fm1_install.py`, flashes, or uses the
+USB rescue). **Package**: the `knobi-six-pro` artifact of the last green `phase3` CI run (the run and its SHA-256 are
+named in MEASUREMENTS.md "Phase 3" once the branch is final); a `-local` package (your imported OB-6 bank) only on your
+own keyboard. Run §2 first with it (items 1-12 are unchanged; item 10 now also stores a sequence, below).
+
+Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer screen; SEQ REC arms recording (lit);
+`<` / `>` = DEC / INC on that screen while recording.
+
+| # | Check | Expect | Result |
+|---|---|---|---|
+| S1 | SEQ: the Sequencer screen; SEQ again: back | STOP, STEP --, LEN 0, XP 0 (a program with no sequence); `SEQ n KB / m KB` shows the store | |
+| S2 | **Record**: SEQ REC, then play C, E, G one at a time; `>`; two keys held and a third added, all let go; `<` | each key sounds as it is played; the grid gets a red dot a step, a dash for the rest, a stack of dots for the chord; `<` erases the last step | |
+| S3 | Record a tie: hold a note, press `>` twice, let go | the step plus two blue tie bars; SEQ REC again ends it (lit off) | |
+| S4 | **Play**: SEQ PLAY at 120 BPM, 1/16 | steps in time with BPM and DIVISION (change both while it plays), a short note each (gate half the step), the rest silent, the tie one long note with no retrigger, then it loops; STEP follows | |
+| S5 | **Transpose**: while it plays hold SEQ REC and press a key a fifth above C4 (G4); then C4 | from the next note it plays a fifth up; that key makes no sound and records nothing; C4 = back to normal. With UNISON on a key alone does it | |
+| S6 | SEQ REC **tapped** while it plays | it stops, recording arms (the screen says REC); a second tap ends it. The sequence is kept if no key was pressed | |
+| S7 | Arp and sequencer | SEQ PLAY with ARP on turns the arp off; ARP ON stops the sequence | |
+| S8 | **WRITE with a sequence** (record or load one, then WRITE, ENTER; once with it playing, once stopped) | the same fade, a gap and fade-in as item 10 but longer: **time it** (stopwatch or recording); STORED; the sequence plays on afterwards; no stuck note | |
+| S9 | **Power-cycle** | the program is back with its sequence (LEN, SEQ PLAY plays the same notes, ties and rests). A program change loads that program's own sequence and stops the playing one; a sequence edited and not written is gone after a program change | |
+| S10 | MIDI notes in while recording (a DAW or keyboard on USB) | recorded like the keys; with LOCAL OFF only the MIDI notes are | |
+| S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | |
+| S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | |
+| S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | |
+| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | |
+
+**Not part of the checklist**: `SEQ FULL: NOTHING STORED` needs the store to be full (about 76 KB: 76 full
+64-step six-note sequences, the largest there are; a sequence of 16 single-note steps takes 64 B, so every one of the
+500 programs could have one), which normal use does not reach; it is tested on
+the host only (the host test fills the store with 76 full-size sequences, then checks that the next WRITE is refused
+whole, with nothing changed). It can appear while the meter still shows a little room (a full-size sequence needs one sector with about 850 B free; short ones still fit).
+
+### What only the device can confirm
+
+None of this is answerable on the computer or in the emulator.
+
+1. **The store on real flash**: sequences written, read back and surviving power-cycles; weak cells and wear (the log,
+   its compaction and its read-backs are tested against a flash model); a power cut during WRITE leaves the old
+   program with its old sequence or the new pair, never a mix (tested on the host by cutting at every flash operation;
+   the real flash and supply are another matter).
+2. **The WRITE gap with a sequence**: the host's model of the flash says ~0.26 s (the sequence store opens a sector),
+   ~0.31 s when the store has to compact first, a worst case of ~0.4 s; the emulator times no erase. The real erase
+   times decide whether that is a pleasant gap (S8; a compacting WRITE shows only after many writes).
+3. **MIDI clock jitter with the sequencer**: clock in is queued to the 5.8 ms audio block, clock out is sent from the
+   main loop; whether a DAW or a hardware slave stays tight with a sequence on it needs a real host (S12).
+4. **Rest and tie decoding by ear**: how the OB-6 file marks a rest and a tie was inferred from the data and tested
+   for consistency only (S14).
+5. **The CPU with a sequence on the chip**: the emulator says the sequencer costs well under 1 % of the block beside
+   the voices ([MEASUREMENTS.md](MEASUREMENTS.md) "Phase 3"), with no cache or contention model (S13).
+6. **Feel**: step entry timing (a chord is recorded when every key is up), the velocity stored through the VEL CURVE,
+   the pads' and buttons' response, whether the grid and the two hint lines read at arm's length.

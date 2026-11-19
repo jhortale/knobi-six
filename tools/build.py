@@ -82,6 +82,21 @@ PROBE = False                       # --probe-cpu1 (main): the CPU1 probe build 
 FACTORY_H = FW / "gen" / "factory_bank.h"   # the user's own imported OB-6 bank (never committed, never published)
 
 
+# Test-only macros: a release build refuses them in DINGHY_DEFS (the host tests, the emulator hooks, the probes).
+TEST_DEFS = re.compile(r"-D(KNOBI_\w*(TEST|PROBE)\w*|KNOBI_CPU1|KNOBI_NO_FACTORY|KNOBI_WRITE_(SLICED|NOFADE)|"
+                       r"DINGHY_\w+|FELUCCA_OTA_(DRYRUN|RAMONLY))\b")
+
+
+def defs_guard(release, defs=None):
+    """refuse a --release build whose DINGHY_DEFS carry a test-only define (-DKNOBI_*_TEST, -DKNOBI_*PROBE*,
+    -DDINGHY_HOST, ...): a release is the plain firmware"""
+    defs = os.environ.get("DINGHY_DEFS", "") if defs is None else defs
+    bad = [d for d in defs.split() if TEST_DEFS.match(d)]
+    if release and bad:
+        raise SystemExit(f"build: --release refused: DINGHY_DEFS holds test-only defines ({' '.join(bad)}). A release "
+                         "is the plain firmware: unset DINGHY_DEFS (or drop those) and build the release again.")
+
+
 def factory_guard(release, header=None):
     """the package name's mark for the factory bank: refuse a release build while firmware/gen/factory_bank.h is there
     (SystemExit); "-local" (and a warning) for any other build with it; "" without it"""
@@ -500,6 +515,7 @@ def main():
         suffix += "-" + model
     PRODUCT = BOARD_PREFIX[BOARD] + IDENT
     local = factory_guard(a.release)    # (before anything is built)
+    defs_guard(a.release)
     if CPU1:                        # never the default package: a build with the second core is named so
         suffix = ("-cpu1probe" if PROBE else "-cpu1") + suffix
     name = f"knobi-six{local}{suffix}.fwsc"

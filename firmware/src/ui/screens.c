@@ -19,9 +19,13 @@
 
 enum { W_END, W_HEAD, W_HVAL, W_FOOT, W_TITLE, W_RULE, W_HINT, W_KNOB, W_ENCBTN, W_LIST, W_SEGENC, W_PAD, W_ROWLED,
        W_ROWSEL, W_ENVG, W_PROG, W_DIGIT, W_NAME, W_BIGNAME, W_VOICES, W_DIAG, W_WORD, W_VER, W_BOOTTXT, W_VERTXT,
-       W_WSTAT, W_BPM, W_LIST2, W_CLKSTAT };
+       W_WSTAT, W_BPM, W_LIST2, W_CLKSTAT, W_SEQSTAT, W_SEQROW, W_SEQUSE, W_SEQHINT, W_SEQTAG };
 /* (Task 5) W_BPM: an encoder's BPM on a 3-digit display (the tempo followed: an external clock's when one is); W_LIST2:
- * a select's LED list in two columns; W_CLKSTAT: what the clock follows, in words */
+ * a select's LED list in two columns; W_CLKSTAT: what the clock follows, in words.
+ * (Phase 3 Task 5, the Sequencer) W_SEQSTAT: the state in words (STOP, PLAY, ARMED, REC) and three displays: the step
+ * (playing: the one played last; recording: the next to record), the length, the transpose; W_SEQROW: 16 steps of the
+ * grid (a = the row, 0..3: steps 16a+1 .. 16a+16); W_SEQUSE: the sequence store's use; W_SEQHINT: what the buttons do
+ * now, in words; W_SEQTAG: Play's SEQ / ARM / REC tag */
 typedef struct {
     uint8_t t, x, y, w, h;
     uint8_t a;                                    /* encoder slot 0..6 (K2..K8) or top pad 0..7 */
@@ -50,7 +54,8 @@ static const wdg_t SCR_PLAY_W[] = {
     HEADER,
     {W_PROG, 11, 17, 90, 44, 0, 0, 0},
     {W_NAME, 104, 21, 125, 16, 0, 0, 0},
-    {W_VOICES, 104, 44, 125, 10, 0, 0, 0},
+    {W_SEQTAG, 104, 44, 24, 10, 0, 0, 0},         /* (the sequencer: SEQ playing, ARM armed, REC recording) */
+    {W_VOICES, 128, 44, 101, 10, 0, 0, 0},
     {W_TITLE, 7, 64, 226, 19, 0, 0, "FILTER"},
     KNOB(7, 87, 56, 0, "FREQ"), KNOB(63, 87, 56, 1, "RESO"), KNOB(119, 87, 56, 2, "MODE"),
     KNOB(175, 87, 58, 3, "ENV AMT"),
@@ -123,6 +128,18 @@ static const wdg_t SCR_CLOCK_W[] = {             /* ARP + CLOCK (the mockup's "A
     {W_LIST2, 7, 171, 111, 38, 2, 0, "MODE"}, {W_LIST, 118, 171, 40, 38, 3, 0, "OCT"},
     PAD(158, 171, 75, 20, 5, 2, "ARP"), PAD(158, 193, 75, 20, 6, 2, "HOLD"),
     FOOTER, END};
+static const wdg_t SCR_SEQ_W[] = {               /* the Sequencer (Phase 3 Task 5): the state, the 64-step grid (16 a
+                                                  * row: the notes of a step as dots, a tie joined to the step before,
+                                                  * a rest a dash, the marked step framed), the pads, the store */
+    HEADER,
+    {W_TITLE, 7, 17, 226, 19, 0, 0, "SEQUENCER"},
+    {W_SEQSTAT, 7, 39, 226, 30, 0, 0, 0},
+    {W_SEQROW, 16, 71, 208, 23, 0, 0, 0}, {W_SEQROW, 16, 94, 208, 23, 1, 0, 0},
+    {W_SEQROW, 16, 117, 208, 23, 2, 0, 0}, {W_SEQROW, 16, 140, 208, 23, 3, 0, 0},
+    PAD(7, 166, 75, 22, 2, 2, "SEQ PLAY"), PAD(82, 166, 75, 22, 3, 2, "SEQ REC"),
+    {W_SEQUSE, 7, 190, 226, 9, 0, 0, 0},
+    {W_SEQHINT, 7, 200, 226, 19, 0, 0, 0},
+    FOOTER, END};
 static const wdg_t SCR_PROGRAM_W[] = {
     HEADER,
     {W_TITLE, 7, 17, 226, 19, 0, 0, "PROGRAM"},
@@ -150,7 +167,7 @@ static const wdg_t SCR_GLOBALS_W[] = {
     PADHINT(204), FOOTER, END};
 #endif
 static const wdg_t *const SCR_W[SCR_COUNT] = {SCR_BOOT_W, SCR_PLAY_W, SCR_VCO_W, SCR_MIX_W, SCR_ENV_W, SCR_LFO_W,
-                                              SCR_AT_W, SCR_CLOCK_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
+                                              SCR_AT_W, SCR_CLOCK_W, SCR_SEQ_W, SCR_PROGRAM_W, SCR_GLOBALS_W};
 
 /* ---- state */
 static int scr_oct;                               /* the keys' octave (app.c sets it) */
@@ -283,8 +300,36 @@ static int32_t scr_val(uint16_t id)
     if (id == B_ACT(ACT_ENTER)) return ctl_wr == 1;
     if (id == B_ACT(ACT_MANUAL)) return ctl_manual;
     if (id == B_ACT(ACT_TAP)) return ctl_tap_lit();   /* (flashes on the beat) */
+    if (id == B_ACT(ACT_SEQPLAY)) return ctl_seq_on();
+    if (id == B_ACT(ACT_SEQREC)) return ctl_rec.on || ctl_rec_arm;
     return 0;
 }
+/* ---- the sequencer's state, for the screens: 0 stopped, 1 playing, 2 armed (playing, waiting for a MIDI clock), 3
+ * recording; the step marked (playing: the one played last; recording: the next to record), -1 none */
+static int scr_seq_state(void)
+{
+    if (ctl_rec.on || ctl_rec_arm) return 3;
+    if (!ctl_seq_on()) return 0;
+    return eng_seq_state == 2 ? 2 : 1;
+}
+static const seq_t *scr_seq(void)                 /* the sequence shown: a fresh recording (nothing entered yet; it
+                                                  * replaces the sequence at its first entry) as empty */
+{
+    static seq_t none;                            /* (zero: empty) */
+    return seqrec_fresh(&ctl_rec) ? &none : edit_seq();
+}
+static int32_t scr_seq_mark(void)
+{
+    int st = scr_seq_state();
+    if (st == 3) return scr_seq()->len < SEQ_MAX_STEPS ? scr_seq()->len : -1;
+    if (st == 1 && eng_seq_cur != SEQ_NO_STEP && eng_seq_cur < scr_seq()->len) return eng_seq_cur;
+    return -1;
+}
+static int32_t scr_kb(uint32_t b) { return (int32_t)((b + 1023u) / 1024u); }   /* bytes -> KB, rounded up */
+static const char *const SCR_SEQHINT[3][2] = {    /* the Sequencer's hint lines: stopped, playing (or armed), recording */
+    {"SEQ REC: RECORD   SEQ PLAY: PLAY", "SEQ: BACK   WRITE KEEPS THE SEQUENCE"},
+    {"SEQ REC HELD + KEY: TRANSPOSE", "MIDDLE C: NONE   SEQ REC: RECORD"},
+    {"KEYS: A STEP (A CHORD: KEEP ONE HELD)", ">: REST / TIE   <: BACK   SEQ REC: END"}};
 /* the BPM shown: the program's, or (MIDI CLOCK following one) the tempo received, rounded (0: none yet) */
 static int32_t scr_bpm_shown(uint16_t id)
 {
@@ -377,6 +422,20 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_KNOB: case W_ENCBTN: case W_LIST: case W_SEGENC: case W_DIGIT: case W_LIST2: return scr_val(id);
     case W_BPM: return scr_bpm_shown(id) | (int32_t)CLOCK_EXTERNAL(ctl_glob[G_MIDI_CLOCK]) << 12;
     case W_CLKSTAT: return ctl_glob[G_MIDI_CLOCK] | eng_clk_run << 4 | eng_clk_alive << 5;
+    case W_SEQSTAT: {
+        int32_t m = scr_seq_mark();
+        return scr_seq_state() | (m + 1) << 4 | (int32_t)scr_seq()->len << 12 | (eng_last_seqxp + 128) << 20;
+    }
+    case W_SEQROW: {                               /* its 16 steps as drawn, and the mark if it is in this row */
+        const seq_t *q = scr_seq();
+        int32_t m = scr_seq_mark();
+        for (i = 16u * w->a; i < 16u * w->a + 16u; i++)
+            h = h * 37u + (i < q->len ? 16u + q->step[i].count + 8u * q->step[i].tie : 0u);
+        return (int32_t)(h * 67u + (uint32_t)(m >= 16 * w->a && m < 16 * w->a + 16 ? m - 16 * w->a + 1 : 0) +
+                         (uint32_t)(scr_seq_state() == 3) * 33u);
+    }
+    case W_SEQUSE: return scr_kb(seqst_used()) | scr_kb(seqst_total()) << 12;
+    case W_SEQHINT: case W_SEQTAG: return scr_seq_state();
     case W_PAD: return scr_val(id) | (w->b == 2 || w->b == row) << 16;
     case W_ROWLED: case W_ROWSEL: return row;
     case W_HVAL: return (int32_t)(((uint32_t)ctl_last_v & 0xFFFFu) | (uint32_t)(scr_oct + 2) << 16 |      /* v 0..15, octave 16..18, */
@@ -395,7 +454,7 @@ static int32_t scr_wval(int screen, int row, const wdg_t *w)
     case W_PROG: return scr_prog_shown();
     case W_WSTAT:
         return (int32_t)((uint32_t)ctl_wr | (uint32_t)ctl_wr_dest << 2 | (uint32_t)ctl_manual << 12 |
-                         (uint32_t)(ctl_wr_rc + 1) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
+                         (uint32_t)(ctl_wr_rc + 2) << 13 | (uint32_t)scr_prog_shown() << 16 | (uint32_t)ctl_notice << 28);
     case W_DIAG:
         for (i = 0; i < 4u; i++) h = h * 131u + (fm1_in.fader[i] >> 3);   /* (quantised: ADC noise must not repaint) */
         h = h * 1031u + (fm1_in.wheel[0] >> 3) * 7u + (fm1_in.wheel[1] >> 3) * 65599u;
@@ -432,7 +491,8 @@ static void scr_seg_text(char *d, uint16_t id, int32_t v)   /* the header's disp
              id == B_GLOBAL(G_AT_CURVE)) scr_num(d, v);
     else if (B_IS_GLOBAL(id)) scr_num(d, v + 1);
     else if (id == B_ACT(ACT_HOLD)) scr_cat(d, v ? "On" : "OFF");
-    else if (id == B_NOTICE) scr_cat(d, v == NT_BROKEN ? "Err" : v == NT_RESTORE_ASK ? "SurE" : v == NT_RESTORED ? "FAC" : "");
+    else if (id == B_NOTICE) scr_cat(d, v == NT_BROKEN ? "Err" : v == NT_RESTORE_ASK ? "SurE" : v == NT_RESTORED ? "FAC" : v == NT_SEQ_MISSING ? "Err" : "");
+    else if (id == B_SEQXP) scr_num(d, v);         /* (the transpose, semitones) */
 }
 
 static void scr_list(const wdg_t *w, uint16_t id, int32_t v)   /* an LED a choice, the lit one the value */
@@ -498,7 +558,7 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         pg_led(w->x + 5, 7, 1);
         pg_text(w->x + 11, 4, &FONT_XS, "KNOBI-SIX", PC_WHITE);
         pg_text(w->x + 12, 4, &FONT_XS, "KNOBI-SIX", PC_WHITE);
-        for (i = SCR_PLAY; i < SCR_COUNT; i++) pg_disc(4 * (w->x + 73 + 7 * i) + 2, 30, 7, i == screen ? PC_LED_ON : PC_LED_OFF, 256u);
+        for (i = SCR_PLAY; i < SCR_COUNT; i++) pg_disc(4 * (w->x + 76 + 6 * i) + 2, 30, 7, i == screen ? PC_LED_ON : PC_LED_OFF, 256u);
         break;
     case W_HVAL:
         t[0] = 'O', t[1] = 'C', t[2] = 'T', t[3] = scr_oct < 0 ? '-' : '+', t[4] = (char)('0' + (scr_oct < 0 ? -scr_oct : scr_oct)), t[5] = 0;
@@ -555,6 +615,51 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
                   "CLK: THE GLOBAL MIDI CLOCK", PC_DIM);
         break;
     }
+    case W_SEQSTAT: {                              /* the state; STEP, LEN, XP displays */
+        static const char *const ST[4] = {"STOP", "PLAY", "ARMED", "REC"};
+        int st = v & 15;
+        int32_t m = (v >> 4 & 0xFF) - 1, len = v >> 12 & 0xFF, xp = (v >> 20 & 0xFFF) - 128, k;
+        pg_text_bold_c(w->x + 32, w->y + 4, &FONT_S, ST[st], st == 0 ? PC_DIM : st == 1 ? PC_WHITE : PC_RED);
+        pg_text_c(w->x + 32, w->y + 22, &FONT_XS, "SEQ", PC_LABEL);
+        for (k = 0; k < 3; k++) {
+            int32_t n = k == 2 ? 3 : 2, x0 = w->x + (k == 0 ? 92 : k == 1 ? 142 : 197) - pg_seg_w(n, 9, 14) / 2;
+            if (k == 0) { if (m >= 0) scr_num(t, m + 1); else scr_cat(t, "--"); }
+            else if (k == 1) scr_num(t, len);
+            else scr_num(t, xp);
+            pg_seg(x0, w->y, n, 9, 14, 1, t);
+            pg_text_c(x0 + pg_seg_w(n, 9, 14) / 2, w->y + 22, &FONT_XS, k == 0 ? "STEP" : k == 1 ? "LEN" : "XP", PC_LABEL);
+        }
+        break;
+    }
+    case W_SEQROW: {                               /* 16 cells of 13 x 23: a frame, the notes as dots from the bottom
+                                                    * (one a note, up to 6), a rest a dash, a tie a blue bar from the step
+                                                    * before; past the length: an empty frame; the marked step: white */
+        const seq_t *q = scr_seq();
+        int32_t m = scr_seq_mark(), j, k;
+        for (j = 0; j < 16; j++) {
+            uint32_t si = 16u * w->a + (uint32_t)j;
+            int32_t x0 = w->x + 13 * j, in = si < q->len, mk = (int32_t)si == m;
+            pg_fill(x0 + 1, w->y + 1, 11, 21, mk ? PC_WHITE : j % 4 == 0 ? PC_DIM : PC_FAINT);
+            pg_fill(x0 + 2, w->y + 2, 9, 19, in ? PC_GRAPH_BG : PC_BG);
+            if (!in) continue;
+            if (!q->step[si].count) pg_fill(x0 + 4, w->y + 11, 5, 1, PC_DIM);
+            for (k = 0; k < q->step[si].count; k++) pg_fill(x0 + 4, w->y + 17 - 3 * (int32_t)k, 5, 2, PC_RED);
+            if (q->step[si].tie) pg_fill(x0 + 1, w->y + 3, 5, 2, PC_BLUE);   /* (joined to the step before) */
+        }
+        break;
+    }
+    case W_SEQUSE:                                 /* the store: KB used of the KB it has (none: the FM-1) */
+        if (!(v >> 12)) { pg_text_c(cx, w->y + 1, &FONT_XS, "NO SEQUENCE STORE ON THIS BOARD", PC_FAINT); break; }
+        scr_cat(scr_num(scr_cat(scr_num(scr_cat(t, "SEQ "), v & 0xFFF), " KB / "), v >> 12), " KB");
+        pg_text_c(cx, w->y + 1, &FONT_XS, t, PC_LABEL);
+        break;
+    case W_SEQHINT:                                /* what the buttons do now */
+        pg_text_c(cx, w->y + 1, &FONT_XS, SCR_SEQHINT[v == 3 ? 2 : v != 0][0], PC_DIM);
+        pg_text_c(cx, w->y + 11, &FONT_XS, SCR_SEQHINT[v == 3 ? 2 : v != 0][1], PC_DIM);
+        break;
+    case W_SEQTAG:                                 /* Play: the sequencer's state */
+        if (v) pg_text(w->x + 1, w->y + 2, &FONT_XS, v == 3 ? "REC" : v == 2 ? "ARM" : "SEQ", v == 1 ? PC_WHITE : PC_RED);
+        break;
     case W_SEGENC:
         scr_seg_text(t, id, v);
         pg_seg(cx - pg_seg_w(3, 10, 18) / 2, w->y + 4, 3, 10, 18, 3, t);
@@ -614,6 +719,9 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
             if (ctl_wr == 1) pg_text_c(cx, w->y + 11, &FONT_XS, "ENTER: STORE   WRITE: CANCEL", PC_DIM);
         } else if (ctl_notice == NT_BROKEN) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "STORED PROGRAM BROKEN: INIT LOADED", PC_RED);
+        } else if (ctl_notice == NT_SEQ_MISSING) {
+            pg_text_c(cx, w->y + 1, &FONT_XS, "STORED SEQUENCE MISSING: EMPTY LOADED", PC_RED);
+            pg_text_c(cx, w->y + 11, &FONT_XS, "WRITE KEEPS IT; AN EDIT REPLACES IT", PC_DIM);
         } else if (ctl_notice == NT_RESTORE_ASK) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "RESTORE FACTORY? EDITS ARE LOST", PC_WHITE);
             pg_text_c(cx, w->y + 11, &FONT_XS, "GLOBE + BT AGAIN WITHIN 2 S", PC_DIM);
@@ -622,7 +730,10 @@ static void scr_paint_w(int screen, int row, const wdg_t *w, int32_t v)
         } else if (ctl_manual) {
             pg_text_c(cx, w->y + 1, &FONT_XS, "MANUAL: THE SOUND IS THE PANEL", PC_WHITE);
         } else if (ctl_wr_rc) {
-            pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : "WRITE FAILED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+            pg_text_c(cx, w->y + 1, &FONT_XS, ctl_wr_rc > 0 ? "STORED" : ctl_wr_rc == -2 ? "SEQ FULL: NOTHING STORED" :
+                      "WRITE FAILED: NOTHING CHANGED", ctl_wr_rc > 0 ? PC_WHITE : PC_RED);
+            if (ctl_wr_rc == -2)                   /* (the spec's way to free room) */
+                pg_text_c(cx, w->y + 11, &FONT_XS, "CLEAR SEQS OR RESTORE FACTORY+WRITE", PC_DIM);
         } else pg_text_c(cx, w->y + 1, &FONT_XS, "WRITE (OR BT) TO STORE THE SOUND", PC_DIM);
         break;
     }
@@ -811,5 +922,22 @@ static int screen_check(void)
             if (bad) printf("screen_check: screen %d row %d: %d fault(s) so far\n", sc, row, bad);
 #endif
         }
+    {                                               /* the Sequencer's words (drawn from state, not a label) fit; Play's
+                                                    * tag and the voices' LEDs beside it do not overlap */
+        uint32_t i = 0;
+        int32_t vx;
+        sc = SCR_SEQ, row = 0;
+        for (i = 0; i < 6u; i++) if (text_w(&FONT_XS, SCR_SEQHINT[i / 2u][i & 1u]) - 1 > 226) SCR_BAD;
+        if (text_w(&FONT_XS, "SEQ 999 KB / 999 KB") - 1 > 226 || text_w(&FONT_XS, "NO SEQUENCE STORE ON THIS BOARD") - 1 > 226)
+            SCR_BAD;
+        for (i = 0; SCR_PLAY_W[i].t != W_END; i++)
+            if (SCR_PLAY_W[i].t == W_SEQTAG) {
+                sc = SCR_PLAY;
+                if (text_w(&FONT_XS, "REC") + 1 > SCR_PLAY_W[i].w || text_w(&FONT_XS, "ARM") + 1 > SCR_PLAY_W[i].w) SCR_BAD;
+            } else if (SCR_PLAY_W[i].t == W_VOICES) {
+                vx = SCR_PLAY_W[i].x + SCR_PLAY_W[i].w - text_w(&FONT_XS, "VOICES") - 8 - 9 * (NVOICE - 1);
+                if (vx - 6 < SCR_PLAY_W[i].x) SCR_BAD;      /* (the leftmost LED and its glow, 5.5 px, inside the widget) */
+            }
+    }
     return bad;
 }

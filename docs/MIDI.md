@@ -8,17 +8,17 @@ CLOCK** (Arp + Clock screen) OFF (default) / OUT / IN / THRU / IN NO S/S. NRPN a
 
 | Message | Does |
 | --- | --- |
-| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed |
+| note on / off | plays the synth with its velocity (note-off velocity ignored); a note played while CHORD is held is captured; with ARP ON: a key of the arpeggiator's pattern, as a key of the keybed; while a sequence is being recorded (SEQ REC): recorded as a key is, by note number (keys and MIDI notes make one chord: [CONTROLS.md](CONTROLS.md) "Sequencer"). A MIDI note never transposes a playing sequence (only the keys do) |
 | channel pressure | aftertouch; the synth gets the higher of it and the bottom pads' pressure |
 | pitch bend | added to the pitch wheel's bend (±BEND RANGE at the ends) |
 | CC 1 | mod wheel (the higher of it and the panel's wheel); only adds LFO depth |
 | CC 64 | sustain: ≥ 64 = HOLD on (with the HOLD pad: either); the global SUSTAIN = N.C. reads it upside down (< 64 = on) |
 | CC 32 | bank select 0..4: the next program change's bank (kept until another CC 32; before any, the current program's bank). 5 and up: the program change is ignored |
 | CC 0 | ignored: CC 32 alone picks the bank (as the OB-6 receives it; 5 banks need no second byte) |
-| program change | 0..99: that program of the bank, loaded (notes sounding release, no click); ignored in MANUAL and while a WRITE is armed or committing (the edit buffer is what WRITE stores) |
+| program change | 0..99: that program of the bank, loaded (notes sounding release, no click) with its sequence (a playing sequence stops, its transpose goes back to none; a recording ends); ignored in MANUAL and while a WRITE is armed or committing (the edit buffer is what WRITE stores) |
 | CC 7 | volume: times PROGRAM VOLUME (the master volume, K1, after both); glides like PROGRAM VOLUME (no zipper); kept across program changes; 127 at power-on |
-| CC 120 | all sound off: PANIC (every voice silent at once, HOLD off) |
-| CC 123 | all notes off: every note released (the envelopes run their release), the notes HOLD has latched too; HOLD itself (pad or sustain) stays on, latching the notes played after it |
+| CC 120 | all sound off: PANIC (every voice silent at once, HOLD off; a playing arpeggiator or sequence stops) |
+| CC 123 | all notes off: every note released (the envelopes run their release), the notes HOLD has latched too; HOLD itself (pad or sustain) stays on, latching the notes played after it. A playing sequence has its notes released and **plays on** from its next step (only CC 120 stops it) |
 | CC 121 | reset controllers: MIDI wheel, bend, pressure and sustain to rest (not volume, as MIDI's RP-015) |
 | CC 4 | foot controller: ignored in phase 1 (the reference lists it as received but not what it does) |
 | the CCs below | with PARAM RX = CC: sets the parameter (0..127 over its range; bipolar: 64 = 0). Not sent back |
@@ -31,9 +31,9 @@ IN, THRU and IN NO S/S follow it (`firmware/src/synth/clock.h`):
 | Byte | IN / THRU | IN NO S/S |
 | --- | --- | --- |
 | 0xF8 clock (24 a quarter note) | moves the clock one tick; the tempo is measured over the last beat (24 ticks), so it locks within a beat or two | the same; the first tick after a silence starts from the downbeat |
-| 0xFA start | the next 0xF8 is the downbeat: step 0 there | ignored |
-| 0xFB continue | runs on from where it stopped | ignored |
-| 0xFC stop | stopped: no steps (the arpeggiator waits) | ignored |
+| 0xFA start | the next 0xF8 is the downbeat: step 0 there (a sequence playing or armed: from its step 1) | ignored |
+| 0xFB continue | runs on from where it stopped (a sequence: on from the step it stopped at) | ignored |
+| 0xFC stop | stopped: no steps (the arpeggiator waits; the sequencer pauses, its step kept) | ignored |
 
 Under IN and THRU the clock **waits for a start**: ticks alone give the tempo but no steps until a 0xFA (the next 0xF8
 is the downbeat) or a 0xFB arrives, so the arpeggiator stays silent until the sender's transport starts (the screen
@@ -43,6 +43,24 @@ No 0xF8 for 0.25 s (more than three ticks at 30 BPM, the slowest tempo) and the 
 with the clock set to follow and none present, the arpeggiator does not run. Ticks again: it runs on (unless stopped).
 Steps fall on the ticks received (the audio takes the queue at each 5.8 ms block: within one block). THRU sends every
 clock byte received straight on. The program's BPM is kept (and TAP still sets it) but not used while following.
+
+### The sequencer and MIDI (Phase 3)
+
+There is no CC or NRPN for SEQ PLAY, SEQ REC or the sequence itself (no SysEx dump yet), and no footswitch message
+beyond CC 64, which is the sustain (HOLD): it latches the keys played live, never the sequence's notes. What MIDI does
+reach, all described above:
+- **Notes in** are recorded while a sequence is being recorded (SEQ REC), on the MIDI CH heard, with the keys: one chord
+  between them, velocity as received (0 = a note-off); under LOCAL OFF too (the keys then are not recorded, so a DAW
+  that echoes them back records each note once). They never transpose a playing sequence: only the keys do (SEQ REC
+  held, or UNISON on).
+- **Clock in** (IN, THRU): SEQ PLAY arms the sequence and it plays only while the clock runs: 0xFA from
+  step 1, 0xFB on from the step it stopped at, 0xFC pauses it (notes released, the step kept), the clock going away
+  silences it (its notes released, its step kept); a Start while it plays restarts it at step 1. IN NO S/S ignores
+  start, continue and stop: the sequence follows the ticks alone. With **OUT** SEQ PLAY starts the sequence on the next step of the division and
+  sends no 0xFA (the slaves are not restarted).
+- **Notes out**: a playing sequence's notes go out as the arpeggiator's do (Sent, below).
+- A DAW that sends CC 123 and 0xFC at its stop leaves a sequence that follows its clock armed (CC 123 only releases
+  notes); one that must be stopped from MIDI needs CC 120.
 
 ### The autosave and MIDI notes
 
@@ -70,6 +88,16 @@ reach the synth or its arp: they go out as played, as ever (a DAW controller), w
 then plays what MIDI in feeds it, here only: its notes are not sent under LOCAL OFF, so a DAW that echoes our notes
 back (its MIDI thru, as a DAW controller needs) never feeds the arp its own notes (with a latch on, a loop that would
 sustain itself).
+Sequencer (Phase 3): the notes a playing sequence plays go out under the arp's rules, through the same path: with
+PARAM TX = CC and LOCAL ON, note on with the step's velocity, note off at the end of its gate (a tie sends nothing: the
+note stays on), each note-off on its note-on's channel and sent whatever PARAM TX, LOCAL or MIDI CH became meanwhile;
+stopping it, a program change, ARP ON, PANIC, ALL NOTES OFF, a MIDI stop or the clock going away send the offs of what
+is on. PANIC (CC 120) stops the sequence; ALL NOTES OFF (CC 123) only releases its notes and it plays on at its next
+step (a DAW sending CC 123 at its stop does not disarm a sequence that follows its clock). Should the main loop stall
+long enough for the shared out ring to overrun, every note still on at the receiver gets its note-off at once. The keys played with it go out as played (they are not the sequence's).
+Recording a sequence (Phase 3 Task 5): the keys go out as played (they sound too; the arp is off while recording). A
+key that transposes a playing sequence (SEQ REC held, or UNISON on with LOCAL ON) sends nothing, nor does its release.
+Under LOCAL OFF the keys are not recorded (they go out; a DAW echoing them back records them once, through MIDI in).
 Keys held while one of those three changes: the receiver is kept in step. Keys that start feeding the arp send their
 note-offs; keys that stop (ARP OFF: the synth plays them) send their note-ons then, except a key whose note the arp has
 on at the receiver right then: the key takes that note over (the arp's own note-off is then not sent) and its note-off

@@ -93,7 +93,11 @@ int prog_factory(uint32_t n, program_t *p)
 {
 #if FACTORY_COUNT
     if (n < FACTORY_COUNT && program_packed_size(factory_bank[n][0]) == FACTORY_SIZE &&
-        program_unpack(p, factory_bank[n], FACTORY_SIZE) == 0) return 0;
+        program_unpack(p, factory_bank[n], FACTORY_SIZE) == 0) {
+        program_set_seq_gen(p, 0);                     /* (a factory program names no stored sequence: its own is the
+                                                        * bank's, prog_seq.c factory_seq) */
+        return 0;
+    }
 #else
     (void)n;
 #endif

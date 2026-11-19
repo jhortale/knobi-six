@@ -1,0 +1,178 @@
+# Phase 3 Task 4: the sequencer's player (synth/seq.h "The player", synth/seqplay.c) through the main loop and the
+# queue: play, the 50 % gate, rest, tie (no retrigger), the loop, transpose, the MIDI out log (PARAM TX and LOCAL, the
+# channel kept), arp / sequencer exclusive, an external clock (armed, Start, Stop, Continue, gone) and a program change.
+# Task 5's buttons (SEQ PLAY, SEQ REC + a key) are not there yet: host hooks stand in for them: "seqdemo" (the edit
+# sequence = C4 | rest | E4 | tie | G4 + B4), "seqplay 1 / 0" (SEQ PLAY), "seqxp N" (transpose). Probes: "seqstate"
+# (0 stopped, 1 playing, 2 armed), "seqcur" (the step played last, 0 = step 1), "seqn" / "seqnote I" (its notes
+# sounding), "seqplaying" (SEQ PLAY as sent), "arpout" / "arpoff" / "arpoffch" (the arp's MIDI out, which the sequence
+# shares: notes sent, note-offs sent, the last off's channel), "keyed" voices with a key down or latched.
+# Internal clock 120 BPM, QTR: a step every 500 ms, the gate 250 ms; ARP BEAT SYNC off: PLAY restarts the clock.
+100 expect 0 scrcheck
+100 expect 0 seqlen
+200 expect 5 seqdemo
+220 expect 5 seqlen
+# PLAY at 300: step 1 (C4) at once, off at ~550; step 2 (rest) ~800; step 3 (E4) ~1300, held through the tie (step 4,
+# ~1800: no retrigger, nothing sent) to ~2050; step 5 (G4 + B4) ~2300; step 1 again ~2800
+300 expect 0 seqplay 1
+320 expect 1 seqplaying
+320 expect 1 seqstate
+320 expect 0 seqcur
+320 expect 1 sounding 60
+320 expect 1 arpout
+520 expect 1 keyed
+600 expect 0 keyed
+600 expect 1 arpoff
+850 expect 1 seqcur
+850 expect 0 keyed
+850 expect 1 arpout
+1350 expect 2 seqcur
+1350 expect 1 sounding 64
+1350 expect 2 arpout
+1850 expect 3 seqcur
+1850 expect 1 sounding 64
+1850 expect 2 arpout
+1850 expect 1 arpoff
+2100 expect 0 keyed
+2100 expect 2 arpoff
+2350 expect 4 seqcur
+2350 expect 2 seqn
+2350 expect 1 sounding 67
+2350 expect 1 sounding 71
+2350 expect 4 arpout
+2850 expect 0 seqcur
+2850 expect 60 seqnote 0
+2850 expect 5 arpout
+2850 expect 4 arpoff
+# transpose: F4 (+5) from the next note (step 2 is a rest at ~3300; step 3 at ~3800: E4 -> A4; step 5 at ~4800: G4 + B4
+# -> C5 + E5); middle C: none again (from the next note)
+2900 expect 0 seqxp 5
+3350 expect 1 seqcur
+3350 expect 0 keyed
+3850 expect 2 seqcur
+3850 expect 1 sounding 69
+3850 expect 69 seqnote 0
+4850 expect 72 seqnote 0
+4850 expect 76 seqnote 1
+4850 expect 2 keyed
+4880 expect 0 seqxp 0
+# SEQ PLAY off during the chord's gate: released at once, here and at the receiver; back to step 1
+4900 expect 0 seqplay 0
+4920 expect 0 seqstate
+4920 expect 0 keyed
+4920 expect 0 seqn
+4920 expect -1 seqcur
+4920 expect 8 arpout
+4920 expect 8 arpoff
+# LOCAL OFF (Globals: btn 3 x 9, pad 2): the sequence plays here, nothing is sent
+5000 btn 3
+5010 btn 3
+5020 btn 3
+5030 btn 3
+5040 btn 3
+5050 btn 3
+5060 btn 3
+5070 btn 3
+5080 btn 3
+5100 expect 10 screen
+5200 pad 2 100
+5210 pad 2 0
+5250 expect 0 glob 7
+5300 expect 0 seqplay 1
+5320 expect 1 sounding 60
+5320 expect 8 arpout
+5900 expect 0 seqplay 0
+# LOCAL ON; PLAY; MIDI CH 3 (K2) during C4's gate: its note-off still on channel 1 ("arpoffch" 0)
+6000 pad 2 100
+6010 pad 2 0
+6050 expect 1 glob 7
+6100 expect 0 seqplay 1
+6120 expect 9 arpout
+6130 enc 1 3
+6200 expect 3 glob 0
+6400 expect 9 arpoff
+6400 expect 0 arpoffch
+6450 enc 1 -3
+6500 expect 0 glob 0
+# ARP ON (Arp + Clock: btn 2 x 3, pad 5) while it plays: the sequence stops (released); SEQ PLAY again: the arp off
+6600 btn 2
+6610 btn 2
+6620 btn 2
+6700 expect 7 screen
+6800 pad 5 100
+6810 pad 5 0
+6850 expect 1 param 82
+6850 expect 0 seqplaying
+6850 expect 0 seqstate
+6850 expect 0 seqn
+6850 expect 0 keyed
+7000 expect 0 seqplay 1
+7020 expect 0 param 82
+7020 expect 1 seqstate
+7020 expect 1 seqplaying
+7400 expect 0 seqplay 0
+# MIDI CLOCK = IN (pad 3 twice): PLAY arms; no clock: silent
+7500 pad 3 100
+7510 pad 3 0
+7520 pad 3 100
+7530 pad 3 0
+7600 expect 2 glob 11
+7700 expect 0 seqplay 1
+7720 expect 2 seqstate
+8100 expect 0 keyed
+8100 expect -1 seqcur
+# 0xFA and a 120 BPM clock (8.5 .. 10.58 s): step 1 on the downbeat (no tempo known yet: held to the next step, as the
+# arp's), step 2 at ~9.0, step 3 at ~9.5
+8500 midi 0xFA 0 0
+8500 clock 120 100
+8550 expect 1 seqstate
+8550 expect 0 seqcur
+8550 expect 1 sounding 60
+9550 expect 2 seqcur
+9550 expect 1 sounding 64
+# 0xFC: paused (the ticks go on), released at once, step 3 held
+9600 midi 0xFC 0 0
+9620 expect 2 seqstate
+9620 expect 0 keyed
+9620 expect 0 seqn
+10000 expect 2 seqcur
+10000 expect 0 keyed
+# 0xFB: on from the held step (step 4, the tie: nothing sounding, so its notes play: E4) when the clock's position
+# reaches the step's end (~10.42 s: it was stopped ~4 ticks into step 3)
+10010 midi 0xFB 0 0
+10480 expect 3 seqcur
+10480 expect 1 sounding 64
+# the clock gone (the last tick ~10.56 s): silent after 0.25 s, still armed
+11000 expect 2 seqstate
+11000 expect 0 keyed
+11000 expect 0 seqn
+# MIDI CLOCK back to OFF (THRU, IN NO S/S, OFF): it plays on the internal clock (PLAY still on)
+11100 pad 3 100
+11110 pad 3 0
+11120 pad 3 100
+11130 pad 3 0
+11140 pad 3 100
+11150 pad 3 0
+11200 expect 0 glob 11
+11700 expect 1 seqstate
+# a program change (MIDI, program 2): the sequence stops, released; program 2's sequence (empty here) loaded
+11800 midi 0xC0 1 0
+11850 expect 0 seqplaying
+11850 expect 0 seqstate
+11850 expect 0 seqn
+11850 expect 0 keyed
+11850 expect 0 seqlen
+# every note-on sent has had its note-off
+12000 expect 15 arpout
+12000 expect 15 arpoff
+# the MIDI out ring overrun (a main-loop stall while 12 events a step go in): note 100 on at the receiver, then its off
+# lost under 141 events (host hooks "ringon" / "ringflood"): the reader sends 100's off itself, then what the ring
+# still holds (64 on / off pairs of 101); nothing left on at the receiver ("arphang")
+12010 expect 0 ringon 100
+12020 expect 16 arpout
+12020 expect 1 arphang
+12030 expect 0 ringflood 100
+12040 expect 1 arpoverrun
+12040 expect 0 arphang
+12040 expect 80 arpout
+12040 expect 80 arpoff
+12100 end

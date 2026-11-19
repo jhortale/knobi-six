@@ -105,5 +105,28 @@ with tempfile.TemporaryDirectory() as td:
     check(msg is None and "knobi-six-1.0.fwsc" in pkgs, f"main --release, no header: knobi-six-1.0.fwsc ({msg}, {pkgs})")
     print(f"without the header: {pkgs}")
 
+# a release refuses test-only defines in DINGHY_DEFS (before anything is built); a harmless one and a dev build pass
+import os  # noqa: E402
+
+for d in ("-DKNOBI_CPU1_TEST=1", "-DKNOBI_SEQ_TEST", "-DKNOBI_PROBE_TEST=1", "-DDINGHY_HOST", "-DKNOBI_CPU1_PROBE=1",
+          "-DKNOBI_NO_FACTORY", "-DKNOBI_CPU1=1", "-DFELUCCA_OTA_DRYRUN=1"):
+    try:
+        build.defs_guard("1.0", "-DFELUCCA_UAC=0 " + d)
+        check(False, f"release with {d}: refused")
+    except SystemExit as e:
+        check("--release refused" in str(e.code) and d in str(e.code), f"release with {d}: the message")
+    build.defs_guard(None, d)                                   # (not a release: allowed)
+build.defs_guard("1.0", "-DFELUCCA_UAC=0")                      # (a harmless define: allowed)
+build.defs_guard("1.0", "")
+with tempfile.TemporaryDirectory() as td2:
+    out = Path(td2)
+    os.environ["DINGHY_DEFS"] = "-DKNOBI_SEQ_TEST=1"
+    try:
+        msg, err, pkgs, built = run_main(["--release", "1.0"], Path(td2) / "none.h", out)
+    finally:
+        del os.environ["DINGHY_DEFS"]
+    check(msg is not None and "test-only defines" in msg and built == [], f"main --release, DINGHY_DEFS: refused ({msg})")
+print("release with test defines: refused")
+
 print("build_factory_test:", f"{fails} FAILED" if fails else "all passed")
 sys.exit(1 if fails else 0)

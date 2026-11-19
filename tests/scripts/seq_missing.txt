@@ -1,0 +1,45 @@
+# Phase 3 Task 3: a stored sequence that is missing (here: the sequence store emptied behind the record's back with the
+# host hook "seqformat"; on the chip: flash damage or a read that fails twice). Loading the program shows the notice
+# (NT_SEQ_MISSING = 4: "Err" in the header, STORED SEQUENCE MISSING: EMPTY LOADED on Program) with an empty sequence;
+# a WRITE that does not edit the sequence keeps the record naming the same generation (nothing given up); one that
+# does replaces it. Hooks / probes (firmware/src/app.c host_probe): "seqtest K" the edit sequence = K 6-note steps,
+# "seqlen" its steps, "seqgen N" the generation program N's record names, "notice" (ui/controls.h NT_*).
+100 expect 0 seqtest 5
+150 expect 5 seqlen
+# WRITE (BT) to program 0 itself, ENTER (Program screen pad 3)
+200 btn 11
+250 expect 1 wr
+300 pad 3 100
+310 pad 3 0
+700 expect 0 wr
+700 expect 1 writes
+700 expect 1 seqgen 0
+700 expect 5 seqlen
+750 expect 0 seqformat
+# away and back (Program screen K4 = ONES): the record names gen 1, the store has none
+800 enc 3 1
+900 expect 1 prog
+1000 enc 3 -1
+1100 expect 0 prog
+1100 expect 4 notice
+1100 expect 0 seqlen
+1100 shot
+# WRITE unedited: the record still names gen 1
+1200 btn 11
+1300 pad 3 100
+1310 pad 3 0
+1700 expect 2 writes
+1700 expect 1 seqgen 0
+# an edit (a 3-step sequence), WRITE: stored as a new entry, its generation newer than the one the record names (2,
+# though the store's own count started again at 1: a missing generation is never handed out again)
+1800 expect 0 seqtest 3
+1850 btn 11
+1900 pad 3 100
+1910 pad 3 0
+2300 expect 3 writes
+2300 expect 2 seqgen 0
+2300 enc 3 1
+2400 enc 3 -1
+2500 expect 0 notice
+2500 expect 3 seqlen
+2600 end

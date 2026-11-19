@@ -1,6 +1,6 @@
 # Task 9: every screen, drawn and shot (build/host/app-<ms>.png), with its screen id checked. Screens (ui/controls.h):
-# 0 Boot, 1 Play, 2 VCO 1 + 2, 3 Mixer + Filter, 4 Envelopes, 5 LFO + X-Mod, 6 Aftertouch + Misc, 7 Clock, 8 Program,
-# 9 Globals.
+# 0 Boot, 1 Play, 2 VCO 1 + 2, 3 Mixer + Filter, 4 Envelopes, 5 LFO + X-Mod, 6 Aftertouch + Misc, 7 Clock, 8 Sequencer
+# (Phase 3), 9 Program, 10 Globals.
 # Buttons: 3 > (next section), 8 SCALE (the other row), 12 PATCH (Play). "scrcheck": the screens' tables are sound
 # (every encoder widget is the slot bound in BINDINGS, in reading order; every bound pad has its button; every label
 # fits). "scrpx": the pixels the last screen update sent (a whole screen 57600; a knob turned: its cell and the
@@ -139,16 +139,20 @@
 7410 pad 5 100
 7420 pad 5 0
 7430 expect 0 param 82
-# Program, Globals
+# Sequencer (8, Phase 3), Program (9), Globals (10)
+7450 btn 3
+7460 expect 8 screen
+7470 shot
 7500 btn 3
-7510 expect 8 screen
+7510 expect 9 screen
 7600 shot
 8000 btn 3
-8010 expect 9 screen
+8010 expect 10 screen
 8100 enc 1 3
 8110 enc 2 2
 8120 wheel 1 900
 8130 fader 2 64
+8150 expect 3 glob 0
 8200 shot
 # back to Play with PATCH
 9000 btn 12

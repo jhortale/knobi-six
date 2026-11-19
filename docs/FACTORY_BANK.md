@@ -22,7 +22,7 @@ Where to get the file and the steps: README.md, "Importing the OB-6 factory prog
   `-local-mke.fwsc`) instead of `knobi-six.fwsc`, and warns, before and after building, that the package contains your
   own imported bank and must not be shared. Install it on your own keyboard only.
 
-Names in the v1.01 bank that contain "OB" / "Ober": 18 of 500. They are imported as they are; the importer's local
+Names in the v1.01 bank that contain "OB" / "Ober": a few. They are imported as they are; the importer's local
 report (`build/factory_bank_report.txt`) lists them for whoever runs it on their own file.
 
 ## How it behaves
@@ -46,15 +46,44 @@ report (`build/factory_bank_report.txt`) lists them for whoever runs it on their
   expect the init program); `-DKNOBI_FACTORY_H='"file.h"'` takes another bank (the unit tests' synthetic one,
   `tests/unit/factory_test_bank.h`, three made-up programs). `FACTORY=1 tests/run_host.sh SCRIPT` runs the host app
   with the local bank.
-- Size: 500 records x 201 B = 100,500 B of flash (record version 2, `program_pack`'s format; no compression needed:
-  the image stays far below its 619,520 B limit).
+- Size: 500 records x 201 B = 100,500 B of flash (record version 2, `program_pack`'s format), plus the sequences
+  (about 60 KB for v1.01); no compression needed: the image stays below its 619,520 B limit (CI measures it with a
+  500-program synthetic bank with sequences of the same size).
 
 ## The record
 
 The bank's records are `program_pack` records (`params.c`), version 2: version, name[20], 86 values as little-endian
 int16 (the 66 phase-1 parameters, then the 20 reserved phase-2/3 ids of `params.h`: P_DISTORTION .. P_ARP_HOLD),
-chord[6], CRC-16/CCITT-FALSE. Record version 2 is also what WRITE now stores (version-1 records still load: the
-reserved values take their defaults). A firmware older than this one reads version-2 records as empty (init).
+chord[6], CRC-16/CCITT-FALSE. Version-1 records still load (the reserved values take their defaults). Since Phase 3,
+WRITE stores **version 3**: the same plus one more value, P_SEQ_GEN, the generation of the program's sequence in the
+sequence store (0 = none: the factory sequence). A version-2 record (the bank's, or a Phase 2 WRITE) loads with
+generation 0. A firmware older than one record version reads the newer records as broken (init).
+
+## Sequences (Phase 3)
+
+The factory sequences stay in the factory bank, read only, like the programs (`firmware/src/params/prog_seq.h`). The
+header may define, beside `factory_bank[][]`:
+
+```c
+#define FACTORY_SEQ_COUNT N                             /* programs 0..N-1 have an entry (need not be FACTORY_COUNT) */
+static const uint32_t factory_seq_at[N + 1];            /* program p: factory_seq_data[at[p] .. at[p + 1]) */
+static const uint8_t factory_seq_data[];                /* the sequences, back to back */
+```
+
+Each sequence is `seq_pack`'s format exactly (`synth/seq.h`: length, then per step a header byte count | tie << 3 and
+the (note, velocity) pairs; an empty sequence is the one byte `00`). An empty span means "no factory sequence"; a span
+that does not unpack to exactly its own length reads as none. Without `FACTORY_SEQ_COUNT` (no bank, or a bank of
+programs only, as every bank before Phase 3's importer) every factory sequence is empty. `factory_seq(prog, seq_t *)`
+reads them. `tools/ob6_import.py` emits these symbols (when at least one program has a sequence: a bank without any
+stays a bank of programs only), `FACTORY_SEQ_COUNT` = the last program + 1, an empty sequence or a missing program as
+an empty span; `tests/unit/factory_test_seq.h` is a hand-written example, `tests/unit/factory_test_import.h` the
+importer's own output for made-up dumps (`tests/unit/test_factory_import.c` loads every span with `seq_unpack`). With
+the v1.01 file every program carries one: about 60 KB of flash beside the 100.5 KB of programs.
+
+How a program's sequence is chosen: its record names a generation -> that stored entry (an empty one too); it names
+none (a version-1/2 record, a never-written program, or a program written with its factory sequence unedited) -> the
+factory sequence; a broken record -> empty. RESTORE FACTORY puts the factory sequence into the edit buffer with the
+factory program; WRITE after it names no entry and frees the program's stored ones.
 
 ## The OB-6 dump and the conversion (tools/ob6_import.py)
 
@@ -93,9 +122,52 @@ unison, band-pass programs), the envelopes' interleaved order with the OB-6's in
 | 87 BPM, 92 clock division, 91 ARP ON, 89 MODE, 90 RANGE | reserved P_BPM, P_CLK_DIV, P_ARP_* | as is |
 | 88 | reserved P_ARP_HOLD | **inferred** (the P6's arp-hold slot) |
 | 60 (LFO retrigger, 0 / 11), 93..96 (sequencer state), 105, 106, 127 (version, editor, end marker) | not carried | |
-| 128..895 sequencer: 6 lanes of 64 notes and 64 velocities | not carried | no room in a program record |
+| 128..895 sequencer: 6 lanes of 64 notes and 64 velocities | the factory sequence (`factory_seq_data`) | see "The OB-6 sequence" below |
+| 896..1023 | not carried | not the sequence (see below) |
+
+### The OB-6 sequence (bytes 128..895)
+
+The manual's NRPN table gives the per-step notes (12..108) and velocities (0..127) but not how the program dump marks
+a step, a rest or a tie, nor the length. The rules below were found on the v1.01 file and are what `decode_seq`
+implements; they describe the format, and no data from the file is reproduced here (only coarse statements, no counts).
+
+- **Layout, lane-major:** lane L (0..5) of step s (0..63): note byte `128 + 128 L + s`, velocity byte `+ 64`.
+- **Velocity byte bit 7 = the lane holds a note at this step**; its low 7 bits are the velocity. A lane that holds
+  nothing has note 60 and velocity 0 (a filler: 60 is by far the commonest note byte for that reason). In lanes 0..3
+  a velocity byte is always either 0 or has bit 7 set.
+- **Length:** a step exists while lane 0 holds a note; the sequence is the run of such steps from step 1. In the file
+  the steps are contiguous (no lane-0 note after the first step without one), so no separate length is needed; there is
+  none elsewhere either: bytes 93..96 ("seq on / record / mode / play mode") are 0 in every program. All 500 programs
+  carry a sequence, of very different lengths (up to the 64 steps).
+- **Tie: lane 0's note byte with bit 7 set.** Its other bits are the filler (note 60 | 0x80, velocity 0 | 0x80) and
+  the other lanes are empty: the step holds the previous one on. Why a tie and not a rest: it never occurs at step 1
+  nor after a rest (the OB-6's own rule: a tie extends held notes), and after chords it makes long even runs (a chord
+  held for a bar or more), which long rests after a chord would not be. A few steps have all low bits set (note 0xFF,
+  velocity 0xFF) instead of the filler: read by the same bit-7 rule as ties (they too follow a note or a tie); the
+  importer counts those programs as ambiguous.
+  **This decoding is inferred from the data, not documented: confirm it by ear on the device** ([SMOKE_TEST.md](SMOKE_TEST.md) §6).
+- **Rest: lane 0 holds a "note" of velocity 0 and no other lane holds one.** Every such step has the filler note 60,
+  and a played note never has velocity 0 (that is a note-off), so it is the rest marker. A consequence: a real note of velocity 0 alone in a step cannot be told from a rest in this format; the importer
+  reads it as a rest.
+- **A note step:** the lanes that hold a note, from lane 0 up (the OB-6 fills them in order); most steps have one
+  note, chords go up to six.
+- **Bytes 896..1023** are a block of fixed patterns that repeat across programs, unrelated to the steps: not the
+  sequence, not carried.
+
+Into KNOBI-SIX's format (`synth/seq.h`; never anything `seq_unpack` refuses, checked against the firmware's own
+`seq_unpack` on the whole file): a tie step carries a copy of the previous step's notes with the tie flag (a chain of
+ties keeps copying); a note outside 12..108 is dropped (as `seq_rec_step` does when recording), a step left with no
+note is a rest, a tie at step 1 or after a rest becomes a rest; a lane past an empty lane is ignored (the OB-6 does not
+leave gaps). Bytes in a lane without its bit 7, and anything past the length, are ignored.
+
+A few programs of the v1.01 file have oddities (stray bits in lanes past an empty lane, stray velocity bytes without
+bit 7, the 0xFF tie marker above): they are ignored as said, and the importer's report names them per program. No note
+outside 12..108 is left in a kept lane, so nothing else is dropped. Result: all 500 programs carry a sequence, about
+60 KB of flash in all.
 
 The importer clamps (with a warning) any value outside its range; on the v1.01 file there are none. Its report
-(`build/factory_bank_report.txt`) lists every byte's range and distribution, the unmapped bytes, the warnings and the
-"OB" names. `tests/ob6_import_test.py` checks the packing, the layout and every conversion on made-up dumps (and on the
-real file when `OB6_SYX` points at it).
+(`build/factory_bank_report.txt`, local, never committed) lists every byte's range and distribution, the unmapped bytes,
+the warnings and the "OB" names, and the sequences (how many, their bytes, steps, rests, ties, lengths, the oddities
+per program).
+`tests/ob6_import_test.py` checks the packing, the layout, every conversion and the sequence decoding on made-up dumps
+(and on the real file, structure and counts only, when `OB6_SYX` points at it).

@@ -43,6 +43,8 @@ const binding_t BINDINGS[SCR_COUNT] = {
                      {A(PREV), A(NEXT), P_AT_D_VCO1, P_AT_D_VCO2, P_AT_D_LFOAMT, P_AT_D_AMP, P_AT_D_FFREQ, P_AT_D_FMODE}},
     [SCR_CLOCK] = {{P_BPM, P_CLK_DIV, P_ARP_MODE, P_ARP_RANGE, N, N, N}, {N, N, N, N},   /* ARP + CLOCK */
                    {A(PREV), A(NEXT), A(TAP), G(MIDI_CLOCK), G(ARP_SYNC), P_ARP_ON, P_ARP_HOLD, N}},
+    [SCR_SEQ] = {{N, N, N, N, N, N, N}, {N, N, N, N},             /* the Sequencer (Phase 3 Task 5): SEQ PLAY, SEQ REC */
+                 {A(PREV), A(NEXT), A(SEQPLAY), A(SEQREC), N, N, N, N}},
     [SCR_PROGRAM] = {{B_PROG(PRG_BANK), B_PROG(PRG_TENS), B_PROG(PRG_ONES), N, N, N, N}, {N, N, N, N},
                      {A(PREV), A(NEXT), A(WRITE), A(ENTER), A(MANUAL), N, N, N}},
     [SCR_GLOBALS] = {{G(MIDI_CH), G(POT_MODE), G(PARAM_TX), G(PARAM_RX), G(TRANSPOSE), G(TUNE), G(VEL_CURVE)}, {N, N, N, N},
@@ -63,10 +65,10 @@ const binding_t BINDINGS_ROW2[SCR_COUNT] = {
 #undef A
 #undef G
 const uint8_t SCR_ROWS[SCR_COUNT] = {[SCR_BOOT] = 1, [SCR_PLAY] = 1, [SCR_VCO] = 1, [SCR_MIX_FILTER] = 1, [SCR_ENV] = 2,
-                                     [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_CLOCK] = 1, [SCR_PROGRAM] = 1,
-                                     [SCR_GLOBALS] = 1};
+                                     [SCR_LFO_XMOD] = 2, [SCR_AT_MISC] = 2, [SCR_CLOCK] = 1, [SCR_SEQ] = 1,
+                                     [SCR_PROGRAM] = 1, [SCR_GLOBALS] = 1};
 const char *const SCR_NAME[SCR_COUNT] = {"KNOBI-SIX", "PLAY", "VCO 1 + 2", "MIX + FILTER", "ENVELOPES", "LFO + X-MOD",
-                                         "AT + MISC", "ARP + CLOCK", "PROGRAM", "GLOBALS"};
+                                         "AT + MISC", "ARP + CLOCK", "SEQUENCER", "PROGRAM", "GLOBALS"};
 static const char *const CTL_ROW_NAME[3][2] = {{"FILTER ENV", "LOUDNESS ENV"}, {"LFO", "X-MOD"}, {"AFTERTOUCH", "MISC"}};
 
 const binding_t *ctl_binding(int screen, int row)
@@ -206,7 +208,7 @@ static clk_t ctl_tapclk;                               /* TAP's state (clock_tap
 static uint32_t ctl_beat_seen, ctl_beat_ms;            /* TAP's LED: the clock's last beat, when it came */
 #define CTL_BEAT_MS 90u                                /* TAP lit this long on each beat */
 static uint8_t ctl_row[SCR_COUNT];
-static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY;
+static int ctl_last_edit = SCR_VCO, ctl_before_glob = SCR_PLAY, ctl_before_seq = SCR_PLAY;
 static uint8_t ctl_hold, ctl_sustain, ctl_midi_at, ctl_midi_wheel, ctl_midi_vol = 127;
 static int32_t ctl_midi_bend;                          /* MIDI pitch bend - 8192 (added to the wheel's) */
 static uint32_t ctl_pressed, ctl_released;             /* this pass's button edges (the app reads them after) */
@@ -228,7 +230,8 @@ static uint8_t ctl_notice;
 static int32_t ctl_restore_ask = -1;                   /* the program a first GLOBE + BT asked to restore, -1 none */
 static uint32_t ctl_restore_t;
 #define CTL_RESTORE_MS 2000u
-static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, 0 none yet */
+static int8_t ctl_wr_rc;                               /* the last WRITE: 1 stored, -1 failed, -2 SEQ FULL (nothing
+                                                        * stored: the sequence store is full), 0 none yet */
 static uint32_t ctl_wr_t, ctl_writes;
 #define CTL_FADE_WAIT_MS 100u                          /* the fade-out not confirmed (no audio running): save anyway */
 static uint16_t ctl_last_id = B_NONE;                  /* the last edit (screen) */
@@ -267,6 +270,7 @@ static void ctl_goto(int *screen, int s)
     if (s == *screen) return;
     if (s >= SCR_VCO && s <= SCR_CLOCK) ctl_last_edit = s;
     if (s == SCR_GLOBALS) ctl_before_glob = *screen;
+    if (s == SCR_SEQ) ctl_before_seq = *screen;
     *screen = s;
     for (unsigned k = 0; k < 4u; k++) ctl_fader_reset(&ctl_fad[k]);   /* the faders pick up afresh */
     ctl_scr_n++;
@@ -279,6 +283,87 @@ static void ctl_other_row(int screen)
     ctl_scr_n++;
 }
 
+/* ---- the sequencer's buttons (Phase 3 Task 5; docs/CONTROLS.md "Sequencer"): SEQ PLAY, SEQ REC, INC / DEC while
+ * recording (> / <), transpose (SEQ REC held + a key while playing; UNISON on: a key alone). The recorder (ui/seq_rec.h)
+ * edits the edit buffer's sequence (params/prog_seq.h edit_seq_mut): nothing is stored until WRITE; app.c hands every
+ * change to the player. The player (engine.c eng_seq_*) is asked through the queue: a refused request is kept and sent
+ * again on the next pass (ctl_seq_poll) */
+static seqrec_t ctl_rec;
+static int8_t ctl_seq_want = -1;                       /* SEQ PLAY still to send (refused by a full queue), -1 none */
+static uint8_t ctl_rec_arm;                            /* SEQ REC asked: recording starts once the stop is queued */
+static uint8_t ctl_rec_xhold, ctl_rec_xused;           /* SEQ REC pressed while playing (it acts at its release, unless
+                                                        * a key transposed meanwhile: then it was the transpose's hold) */
+static int32_t ctl_xp_want;                            /* the transpose to send (ctl_xp_pend: still owed) */
+static uint8_t ctl_xp_pend;
+static int ctl_seq_on(void) { return ctl_seq_want >= 0 ? ctl_seq_want : eng_seq_playing(); }   /* SEQ PLAY, as asked */
+static void ctl_seq_send(int on)
+{
+    ctl_seq_want = (int8_t)(on != 0);
+    if (eng_seq_play(on) == 0) ctl_seq_want = -1;
+}
+static void ctl_rec_end(void)                          /* recording ends (SEQ REC, SEQ PLAY, WRITE, ARP ON): a chord still
+                                                        * held is recorded */
+{
+    ctl_rec_arm = 0;
+    if (ctl_rec.on) (void)seqrec_stop(&ctl_rec);
+}
+static void ctl_rec_forget(void)                       /* the edit buffer is replaced (a program load, RESTORE FACTORY):
+                                                        * recording ends with nothing more; the load stops the player,
+                                                        * so nothing owed to it survives either */
+{
+    ctl_rec_arm = 0, ctl_rec_xhold = 0;
+    seqrec_abort(&ctl_rec);
+    ctl_seq_want = -1, ctl_xp_pend = 0;
+}
+static void ctl_seq_play_press(void)                   /* SEQ PLAY: play / stop; recording: ends it, then plays */
+{
+    ctl_rec_xhold = 0;                                 /* (SEQ REC held meanwhile: its release no longer records) */
+    if (ctl_rec.on || ctl_rec_arm) { ctl_rec_end(); ctl_seq_send(1); return; }
+    ctl_seq_send(!ctl_seq_on());
+}
+static void ctl_seq_rec_press(int *screen)             /* SEQ REC: arm (the Sequencer screen) / end. Playing: stopped
+                                                        * first (its notes released), then armed */
+{
+    if (ctl_rec.on || ctl_rec_arm) { ctl_rec_end(); return; }
+    if (ctl_wr != 0) return;                           /* (not under a WRITE: it stores the edit as it is) */
+    if (ctl_seq_on()) ctl_seq_send(0);
+    ctl_rec_arm = 1;
+    ctl_goto(screen, SCR_SEQ);
+}
+static void ctl_seq_poll(program_t *edit)              /* every pass: what is owed to the player; arming */
+{
+    if (ctl_seq_want >= 0 && eng_seq_play(ctl_seq_want) == 0) ctl_seq_want = -1;
+    if (ctl_xp_pend && eng_seq_transpose(ctl_xp_want) == 0) ctl_xp_pend = 0;
+    if (ctl_rec_arm && ctl_seq_want < 0) {             /* (the stop queued first: the player never plays a recording) */
+        ctl_rec_arm = 0;
+        if (edit->v[P_ARP_ON]) ctl_set(edit, P_ARP_ON, 0, 1);   /* the arp and the sequencer are exclusive */
+        seqrec_start(&ctl_rec, edit_seq_mut);          /* from step 1, replacing the sequence at its first entry (a
+                                                        * recording with none leaves it as it was, unedited) */
+    } else if (ctl_rec.on && edit->v[P_ARP_ON]) ctl_rec_end();   /* ARP ON while recording: recording ends */
+}
+int controls_seq_key(int note)
+{
+    if (ctl_rec.on || ctl_rec_arm || !ctl_seq_on()) return 0;
+    if (ctl_rec_xhold) ctl_rec_xused = 1;              /* SEQ REC held */
+    else if (!(eng_edit.v[P_UNISON_ON] && ctl_glob[G_LOCAL] && edit_seq()->len)) return 0;   /* UNISON on (OS 1.5.5+): no
+                                                        * hold needed; LOCAL OFF: the keys are a controller's, they go
+                                                        * out; an empty sequence "playing": the keys play */
+    ctl_xp_want = note - SEQ_XP_CENTER, ctl_xp_pend = 1;
+    if (eng_seq_transpose(ctl_xp_want) == 0) ctl_xp_pend = 0;
+    ctl_last_id = B_SEQXP, ctl_last_v = ctl_xp_want, ctl_edits++;
+    return 1;
+}
+void controls_rec_note(int note, int vel)
+{
+    if (ctl_rec.on) (void)seqrec_note(&ctl_rec, note, vel);
+}
+int controls_btn_lit(uint32_t btn)
+{
+    if (btn == BTN_PLAY) return ctl_seq_on();
+    if (btn == BTN_REC) return ctl_rec.on || ctl_rec_arm;
+    return 0;
+}
+
 /* ---- programs (main loop): load, MANUAL, WRITE */
 static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL off); retried while the engine is busy */
 {
@@ -286,10 +371,16 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
     if (ctl_wr != 0) { ctl_prog_want = n; return; }   /* (not under a WRITE, armed or committing: it stores the edit as
                                                        * it is; MIDI program change is ignored then, midi_map.c) */
+    int rc;
+    ctl_rec_forget();                                  /* (recording: the sequence is replaced) */
     ctl_prog = n, ctl_manual = 0, ctl_want_factory = 0, ctl_restore_ask = -1;
-    ctl_notice = prog_load((uint32_t)n, &p) == -2 ? NT_BROKEN : NT_NONE;   /* (never written: the factory program,
-                                                        * else init; broken: init, and the notice says so) */
+    rc = prog_load((uint32_t)n, &p);
+    ctl_notice = rc == -2 ? NT_BROKEN : NT_NONE;       /* (never written: the factory program, else init; broken: init,
+                                                        * and the notice says so) */
     ctl_prog_want = eng_program(&p) ? n : -1;
+    if (ctl_prog_want < 0 && prog_seq_open((uint16_t)n, rc, &p) == -3)   /* its sequence into the edit buffer (the
+                                                        * stored one, else the factory one; params/prog_seq.h) */
+        ctl_notice = NT_SEQ_MISSING;                   /* (named, not found: empty loaded, the panel says so) */
     if (ctl_notice) ctl_last_id = B_NOTICE, ctl_last_v = ctl_notice, ctl_edits++;
 }
 /* restore factory (hold GLOBE, press WRITE / BT): factory program n into the edit buffer (no factory bank: the init
@@ -298,9 +389,11 @@ static void ctl_restore_factory(int32_t n)
 {
     static program_t p;
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
+    ctl_rec_forget();
     ctl_prog = n, ctl_manual = 0;
     prog_factory((uint32_t)n, &p);
     if (eng_program(&p)) { ctl_prog_want = n, ctl_want_factory = 1; return; }   /* busy: again next pass */
+    prog_seq_factory((uint16_t)n);                     /* the factory sequence too */
     ctl_prog_want = -1, ctl_want_factory = 0;
     ctl_restores++;
     ctl_notice = NT_RESTORED, ctl_last_id = B_NOTICE, ctl_last_v = NT_RESTORED, ctl_edits++;
@@ -350,7 +443,12 @@ static void ctl_write_poll(const program_t *edit)      /* faded out (or waited l
 #else
     if (ctl_wr != 2 || (!eng_faded() && fm1_ms - ctl_wr_t < CTL_FADE_WAIT_MS)) return;
 #endif
-    ctl_wr_rc = prog_save((uint32_t)ctl_wr_dest, edit) ? -1 : 1;   /* (blocks: the slot's erase; the sound is silent) */
+    {                                                  /* the program and the edit buffer's sequence, paired (blocks:
+                                                        * the sequence store's put, worst ~3 erases, the slot's 4 and
+                                                        * the release; the sound is silent; params/prog_seq.h) */
+        int rc = prog_write((uint16_t)ctl_wr_dest, edit);
+        ctl_wr_rc = (int8_t)(rc == 0 ? 1 : rc == PROG_ERR_SEQ_FULL ? -2 : -1);
+    }
     store_sliced = 0;
     eng_fade(0);
     if (ctl_wr_rc > 0) ctl_prog = ctl_wr_dest, ctl_manual = 0, ctl_writes++;
@@ -374,6 +472,8 @@ static void ctl_action(int *screen, uint32_t a)
     else if (a == ACT_WRITE) ctl_write_press(screen);
     else if (a == ACT_ENTER) ctl_enter();
     else if (a == ACT_MANUAL) ctl_manual_press(&eng_edit);
+    else if (a == ACT_SEQPLAY) ctl_seq_play_press();
+    else if (a == ACT_SEQREC) ctl_seq_rec_press(screen);
     else if (a == ACT_TAP) {                           /* tap tempo: from the 4th tap the program's BPM (synth/clock.h) */
         int bpm = clock_tap(&ctl_tapclk, fm1_ms);
         if (bpm) ctl_set(&eng_edit, P_BPM, bpm, 1);
@@ -383,7 +483,8 @@ static void ctl_action(int *screen, uint32_t a)
 static void ctl_write_press(int *screen)               /* WRITE (the pad, BT): arm (Program screen, the destination the
                                                         * current program) or cancel */
 {
-    if (ctl_wr == 0) { ctl_wr = 1, ctl_wr_dest = ctl_prog; ctl_goto(screen, SCR_PROGRAM); }
+    if (ctl_wr == 0) { ctl_rec_end(); ctl_wr = 1, ctl_wr_dest = ctl_prog; ctl_goto(screen, SCR_PROGRAM); }   /* (recording
+                                                        * ends: WRITE stores what was recorded) */
     else if (ctl_wr == 1) ctl_wr = 0;
 }
 
@@ -444,6 +545,8 @@ static void ctl_leds(int screen, const program_t *edit)   /* top pads lit when o
             else if (x == B_ACT(ACT_ENTER)) col = ctl_wr == 1 ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_MANUAL)) col = ctl_manual ? 0xFF0000u : 0x180000u;
             else if (x == B_ACT(ACT_TAP)) col = ctl_tap_lit() ? 0xFF0000u : 0x180000u;          /* flashes on the beat */
+            else if (x == B_ACT(ACT_SEQPLAY)) col = ctl_seq_on() ? 0xFF0000u : 0x180000u;
+            else if (x == B_ACT(ACT_SEQREC)) col = ctl_rec.on || ctl_rec_arm ? 0xFF0000u : 0x180000u;
             else if (B_IS_ACT(x)) col = 0x282828u;                                            /* dim white */
             else col = 0;
         } else {
@@ -473,12 +576,30 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
     if (*screen == SCR_BOOT && (ctl_pressed || fm1_ms >= CTL_BOOT_MS)) { *screen = SCR_PLAY; ctl_scr_n++; }
     if (*screen != SCR_BOOT) {
         uint32_t p = ctl_pressed;
-        if (p >> BTN_LEFT & 1u) ctl_goto(screen, *screen - 1);
-        if (p >> BTN_RIGHT & 1u) ctl_goto(screen, *screen + 1);
+        if (ctl_rec.on && *screen == SCR_SEQ) {        /* recording, on the Sequencer screen: < = DEC (back, erase),
+                                                        * > = INC (rest; tie while notes are held). Elsewhere they move
+                                                        * between screens as ever */
+            if (p >> BTN_LEFT & 1u) (void)seqrec_dec(&ctl_rec);
+            if (p >> BTN_RIGHT & 1u) (void)seqrec_inc(&ctl_rec);
+        } else {
+            if (p >> BTN_LEFT & 1u) ctl_goto(screen, *screen - 1);
+            if (p >> BTN_RIGHT & 1u) ctl_goto(screen, *screen + 1);
+        }
         if (p >> BTN_HOME & 1u) ctl_goto(screen, SCR_PLAY);
         if (p >> BTN_EDIT & 1u) ctl_goto(screen, ctl_last_edit);
         if (p >> BTN_GLO & 1u) ctl_goto(screen, *screen == SCR_GLOBALS ? ctl_before_glob : SCR_GLOBALS);
         if (p >> BTN_SEL & 1u) ctl_other_row(*screen);
+        if (p >> BTN_SEQ & 1u) ctl_goto(screen, *screen == SCR_SEQ ? ctl_before_seq : SCR_SEQ);
+        if (p >> BTN_PLAY & 1u) ctl_seq_play_press();
+        if (p >> BTN_REC & 1u) {                       /* playing: it acts at its release (held + a key: transpose) */
+            if (!ctl_rec.on && !ctl_rec_arm && ctl_seq_on()) ctl_rec_xhold = 1, ctl_rec_xused = 0;
+            else ctl_seq_rec_press(screen);
+        }
+        if (ctl_released >> BTN_REC & 1u && ctl_rec_xhold) {
+            ctl_rec_xhold = 0;
+            if (!ctl_rec_xused && ctl_seq_on()) ctl_seq_rec_press(screen);   /* tapped: stop, record (not if it
+                                                        * stopped meanwhile: nothing) */
+        }
     }
     if (*screen != SCR_BOOT && ctl_pressed >> BTN_SAVE & 1u) {
         if (fm1_in.buttons >> BTN_GLO & 1u) {          /* GLOBE held + WRITE: restore factory, asked then confirmed */
@@ -531,6 +652,7 @@ void controls_poll(synth_t *s, program_t *edit, int *screen)
         else ctl_prog_select(ctl_prog_want);
     }
     ctl_write_poll(edit);
+    ctl_seq_poll(edit);
 
     {
         int at = ctl_glob[G_LOCAL] ? controls_aftertouch() : 0;   /* LOCAL OFF: the pads' pressure goes nowhere */

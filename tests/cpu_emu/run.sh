@@ -62,4 +62,25 @@ for p in 0 3 4; do
   tc pi32v2/bin/nm --print-size "$OUT/$n-40.elf" > "$OUT/$n.nm"
   echo "$n done"
 done
+# Phase 3 Task 7: the sequencer's player through the engine (harness ENG=1, SEQ 0 / 1 / 2 / 3: the six keys held / a
+# chord a step with a long release (six voices busy all the time) / a chord and 63 ties / a chord a step with the
+# patch's release; 250 BPM, 1/16), 6 voices. q runs: one core, over 91 and 8 blocks (83 = 8.03 steps) and, on the
+# musical C3..C5 patch, over 11 and 10 blocks (block 10 holds a step); r runs: the dual-core split (DUAL=1)
+seqrun() {   # name, patch, seq, dual, blocks...
+    local n=$1 p=$2 sq=$3 du=$4; shift 4
+    for k in "$@"; do
+        tc pi32v2/bin/clang "${FLAGS[@]}" -DNVOICE=6 -DPATCH=$p -DBLOCKS=$k -DENG=1 -DSEQ=$sq -DDUAL=$du -c $H/harness.c -o "$OUT/$n-$k.o"
+        tc pi32v2/bin/ld -T $H/link.ld --gc-sections -o "$OUT/$n-$k.elf" "$OUT/crt0.o" "$OUT/$n-$k.o"
+        python3 $H/elf2bin.py "$OUT/$n-$k.elf" "$OUT/$n-$k.bin" > /dev/null
+        FM1_SPIKE_COST="$OUT/$n-$k.cost" "$EMU" --bin "$OUT/$n-$k.bin" --steps 1000000000 --dump 0x01C70000 $((4 + du)) \
+          > "$OUT/$n-$k.log" 2>&1 || true
+    done
+    tc pi32v2/bin/nm --print-size "$OUT/$n-$1.elf" > "$OUT/$n.nm"
+    echo "$n done"
+}
+for p in 3 4; do
+  for sq in 0 1 2 3; do seqrun "q$p$sq-v6" $p $sq 0 91 8; done
+done
+for sq in 0 1; do seqrun "q3$sq-v6" 3 $sq 0 11 10; done
+for sq in 0 1 2 3; do seqrun "r3$sq-v6" 3 $sq 1 91 8; done
 python3 $H/analyze.py "$OUT" | tee "$OUT/summary.md"

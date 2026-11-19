@@ -22,11 +22,32 @@
  * adds CPU1's bus. A minimal mailbox, not the HAL's (hal/fm1_cpu1.h: its check word and deadline are a few dozen
  * cycles a period more); the voices, the balance, the bus and the 32-byte alignment are the firmware's. The
  * checksum must equal the one-core run's. RES[4]: the jobs CPU1 ran. patch_emu.py records core 1's pcs with bit 31
- * set; analyze.py splits the cycles by core. */
+ * set; analyze.py splits the cycles by core.
+ *
+ * ENG=1 (Phase 3 Task 7, the sequencer's cost): the harness plays through engine.c (eng_render, the queue, the clock,
+ * eng_render_steps with the arpeggiator's and the player's splits) instead of calling synth_render itself, as app.c's
+ * audio interrupt does. The CPU guard's clock is stubbed (fm1_ticks 0: it never sheds). SEQ (with ENG=1), 250 BPM, 1/16:
+ *   SEQ 0: the six keys of the patch held (eng_note), no sequence: the baseline;
+ *   SEQ 1: no keys; a sequence of 8 steps, each the patch's six notes at velocity 100 (a step every 2646 frames = 10.3
+ *          blocks; the 50 % gate), with the LOUDNESS release at its longest: the released chord is still sounding when
+ *          the next step retriggers it, so six voices are busy all the time: the player's worst case (six note-ons,
+ *          note-offs and retriggers every step, on top of the full six-voice load);
+ *   SEQ 2: step 1 the six notes, steps 2..64 ties: the six notes stay on for the whole run (it never reaches the gate's
+ *          end): a constant six-voice load, so only the player's own per-step work is added to the baseline (a tie
+ *          sends nothing and retriggers nothing; the render is split at each step);
+ *   SEQ 3: as SEQ 1 with the patch's own release: the chord sounds about half of each step, then its release.
+ * run.sh's q runs (one core) and r runs (DUAL=1); analyze.py compares them with SEQ 0 over 83 blocks (8.03 steps), and
+ * the cost of one block that holds a step (the difference of the runs of 10 and 11 blocks). */
 #include <stdint.h>
 #include "libc.c"
 #ifndef DUAL
 #define DUAL 0
+#endif
+#ifndef ENG
+#define ENG 0
+#endif
+#ifndef SEQ
+#define SEQ 0
 #endif
 #if DUAL
 struct synth;
@@ -41,6 +62,14 @@ static void dual_split(struct synth *s, int32_t *bus, uint32_t n);
 #include "synth/mod.c"
 #include "synth/voice.c"
 #include "synth/voices.c"
+#if ENG
+#define FM1_TICKS_PER_US 24                     /* (engine.c's CPU guard clock: stubbed, a block takes no time: no shedding) */
+static uint32_t fm1_ticks(void) { return 0; }
+#include "engine.c"
+#define HS eng_synth
+#else
+#define HS S
+#endif
 
 #define RES ((volatile uint32_t *)0x01C70000u)
 #define FRAMES 256
@@ -51,7 +80,9 @@ static void dual_split(struct synth *s, int32_t *bus, uint32_t n);
 #define BLOCKS 40
 #endif
 
+#if !ENG
 static synth_t S;
+#endif
 static program_t P;
 static int32_t OUT[2 * FRAMES];
 
@@ -66,7 +97,7 @@ static void __attribute__((noinline)) cpu1_job_voices(void)   /* on CPU1 */
 {
     uint32_t n = mb0.n;
     for (uint32_t i = 0; i < 2u * n; i++) mb1.bus[i] = 0;
-    synth_render_set(&S, mb0.mask, mb1.bus, n);
+    synth_render_set(&HS, mb0.mask, mb1.bus, n);
 }
 void __attribute__((noreturn, used)) c1_main(void)            /* _c1_entry below */
 {
@@ -149,12 +180,52 @@ static const uint8_t NOTES[6] = {48, 55, 60, 64, 67, 72};
 static const uint8_t NOTES[6] = {72, 79, 84, 88, 91, 96};
 #endif
 
+#if ENG && SEQ
+static seq_t SQ;
+#endif
 int main(void)
 {
     uint32_t sum = 0;
 #if DUAL
     c1_start();
 #endif
+#if ENG
+    program_init(&P);
+#if PATCH != 0
+    for (unsigned i = 0; i < sizeof WORST / sizeof WORST[0]; i++) P.v[WORST[i][0]] = WORST[i][1];
+#endif
+    P.v[P_BPM] = 250, P.v[P_CLK_DIV] = CLK_DIV_16TH;
+#if SEQ == 1
+    P.v[P_LENV_R] = 127;
+#endif
+    eng_init();
+    (void)eng_program(&P);
+#ifdef DIST
+    (void)eng_param(P_DISTORTION, DIST);
+#endif
+#if PATCH >= 3
+    (void)eng_pressure(100);
+#endif
+#if SEQ
+    {
+        static const uint8_t vel[6] = {100, 100, 100, 100, 100, 100};
+        seq_clear(&SQ);
+        for (unsigned i = 0; i < (SEQ == 2 ? 64u : 8u); i++)
+            (void)(i && SEQ == 2 ? seq_rec_tie(&SQ) : seq_rec_step(&SQ, NOTES, vel, 6));
+        (void)eng_seq_load(&SQ);
+        (void)eng_seq_play(1);
+    }
+#else
+    for (unsigned i = 0; i < 6; i++) (void)eng_note(NOTES[i], 100);
+#endif
+    for (unsigned b = 0; b < BLOCKS; ++b) {
+        for (unsigned i = 0; i < 2 * FRAMES; i++) OUT[i] = 0;
+        eng_render(OUT, FRAMES);
+        for (unsigned i = 0; i < 2 * FRAMES; i++) sum = (sum << 1 | sum >> 31) ^ (uint32_t)OUT[i];
+    }
+    RES[1] = (uint32_t)synth_active(&eng_synth);
+    RES[2] = (uint32_t)sizeof eng_synth;
+#else
     synth_init(&S);
     program_init(&P);
 #if PATCH != 0
@@ -178,6 +249,7 @@ int main(void)
     }
     RES[1] = (uint32_t)synth_active(&S);
     RES[2] = (uint32_t)sizeof S;
+#endif
     RES[3] = sum;
 #if DUAL
     RES[4] = mb1.jobs;

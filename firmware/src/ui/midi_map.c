@@ -21,7 +21,14 @@
  * ON: the keys feed the arp) the keys played do not (app.c: their notes stay home, so a receiver does not play the chord under the arp; a key's
  * note-off goes out only if its note-on did; a change of ARP ON, PARAM TX or LOCAL with keys held
  * sends their note-offs, or late note-ons, so the receiver's picture stays right: app.c). A note-off
- * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver). */
+ * goes out for every arp note-on sent, whatever PARAM TX has become since (nothing left hanging on the receiver).
+ * Sequence notes out: the sequencer's player (synth/seq.h) writes the same ring (the arp and the sequencer never play
+ * together), so its notes go out here under the same rules and pairing (PARAM TX and LOCAL ON for a note-on; every
+ * note-off sent on its note-on's channel). The keys played with a sequence go out as played (ctl_keys_out: only ARP ON
+ * keeps them home).
+ * Sequencer recording (Phase 3 Task 5): MIDI notes in (the MIDI CH heard) are recorded as the keys are (controls_rec_note;
+ * the keys only under LOCAL ON, so a DAW echoing them back under LOCAL OFF records them once). They never transpose: only
+ * the keys do (SEQ REC held, or UNISON on). */
 #include "controls.h"
 
 #define MIDI_CC_NONE 0xFFu
@@ -88,6 +95,7 @@ static uint8_t ctl_arp_ch[128];            /* the channel each one's note-on wen
 static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe "arpout") */
 static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
 static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
+static uint32_t ctl_arp_overruns;          /* ring overruns (host probe "arpoverrun") */
 /* the arp's note-ons go out with PARAM TX on and LOCAL ON only (final review 2): under LOCAL OFF the arp is fed by MIDI
  * in alone, and a DAW echoing our notes back would feed the arp its own notes (with a latch on, a loop that sustains
  * itself). Every note-on sent gets its note-off, whatever PARAM TX or LOCAL have become since (ctl_arp_sent) */
@@ -95,7 +103,18 @@ static void ctl_arp_out(void)
 {
     uint32_t w = eng_arp.out_w, ch = controls_tx_ch();
     __asm__ volatile("" ::: "memory");     /* (the entries before the index: arp.c writes them first) */
-    if (w - ctl_arp_r > ARP_OUT_N) ctl_arp_r = w - ARP_OUT_N;   /* (a long stall: the oldest are gone) */
+    if (w - ctl_arp_r > ARP_OUT_N) {       /* a long stall: the oldest are gone, note-offs maybe among them: every note on
+                                            * at the receiver gets its note-off now (on its channel), then the ring goes on
+                                            * from what it still holds (an off there for a note already off: not sent) */
+        for (uint32_t n = 0; n < 128u; n++)
+            if (ctl_arp_sent[n >> 5] >> (n & 31u) & 1u) {
+                midi_send(0x80u | ctl_arp_ch[n], n, 0);
+                ctl_arp_offs++, ctl_arp_offch = ctl_arp_ch[n];
+            }
+        for (uint32_t i = 0; i < 4u; i++) ctl_arp_sent[i] = 0;
+        ctl_arp_r = w - ARP_OUT_N;
+        ctl_arp_overruns++;
+    }
     for (; ctl_arp_r != w; ctl_arp_r++) {
         uint32_t note = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][0] & 127u, vel = eng_arp.out[ctl_arp_r & (ARP_OUT_N - 1u)][1];
         uint32_t bit = 1u << (note & 31u), *m = &ctl_arp_sent[note >> 5];
@@ -146,8 +165,9 @@ void controls_midi(uint32_t st, uint32_t d1, uint32_t d2)
     case 0x90u:
         if (d2) { eng_note((int)d1, (int)d2); controls_key((int)d1); }
         else eng_note((int)d1, 0);                    /* (velocity 0: a note-off) */
+        controls_rec_note((int)d1, (int)d2);           /* (the sequencer's recorder, when recording) */
         break;
-    case 0x80u: eng_note((int)d1, 0); break;
+    case 0x80u: eng_note((int)d1, 0); controls_rec_note((int)d1, 0); break;
     case 0xD0u: ctl_midi_at = (uint8_t)d1; break;
     case 0xE0u: ctl_midi_bend = (int32_t)(d2 << 7 | d1) - 8192; break;
     case 0xC0u: ctl_program_change(ctl_bank_sel, (int32_t)d1); break;
