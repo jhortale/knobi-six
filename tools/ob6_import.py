@@ -151,7 +151,7 @@ LAYOUT = [
     (85, "UNISON_VOICES", "=", (0, 6), "0..5 = 1..6 voices, 6 = chord memory"),
     (86, "KEY_MODE", "=", (0, 5), "low, low-R, high, high-R, last, last-R"),
     (87, "BPM", "=", (30, 250), ""),
-    (88, "ARP_HOLD", "=", (0, 1), "INFERRED: the Prophet-6's arp HOLD slot"),
+    (88, "ARP_HOLD", "off", (0, 1), "INFERRED slot, unverified: always imported as 0 (off)"),
     (89, "ARP_MODE", "=", (0, 4), ""),
     (90, "ARP_RANGE", "=", (0, 2), "1..3 octaves"),
     (91, "ARP_ON", "=", (0, 1), "the Prophet-6's arp on/off slot"),
@@ -220,6 +220,8 @@ def parse_syx(blob):
 def _conv(kind, x):
     if kind == "=":
         return x
+    if kind == "off":                   # read and reported, never carried (ARP_HOLD: the slot is unverified)
+        return 0
     if kind == "bi":
         return x - 127
     if kind == "cents":
@@ -415,6 +417,8 @@ def verify(progs):
             anomalies.append(f"byte {byte} {pname}: {lo}..{hi} outside {blo}..{bhi}")
         lines.append(f"  {byte:3d} -> {pname:14s} {kind:5s} range {blo}..{bhi}: holds {lo}..{hi}, {len(c)} values,"
                      f" commonest {c.most_common(3)}{flag}{'  (' + note + ')' if note else ''}")
+    nh = sum(1 for _b, _p, d in progs if d[88])
+    lines.append(f"ARP HOLD bytes set: {nh} of {len(progs)} programs - imported as off")
     lines.append("Unmapped bytes:")
     for byte, what in sorted(UNMAPPED.items()):
         vals = [d[byte] for _b, _p, d in progs]

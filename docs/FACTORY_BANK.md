@@ -120,7 +120,7 @@ unison, band-pass programs), the envelopes' interleaved order with the OB-6's in
 | 97..102 chord memory: semitones from the root, 127 empty | chord[6], absolute notes | 60 + offset (only the intervals count); all 0 / 127 = none captured: empty |
 | 58 distortion, 46 FX on, 44..57 FX A / B (type, mix, P1, P2, sync, sync division) | reserved P_DISTORTION, P_FX_* | as is (FX B has 14 types, 0..13; the NRPN table's 0-5 / 0-9 are wrong) |
 | 87 BPM, 92 clock division, 91 ARP ON, 89 MODE, 90 RANGE | reserved P_BPM, P_CLK_DIV, P_ARP_* | as is |
-| 88 | reserved P_ARP_HOLD | **inferred** (the P6's arp-hold slot) |
+| 88 | reserved P_ARP_HOLD | **inferred** (the P6's arp-hold slot), unverified: read and counted in the report but always imported as off (0), so a factory program never latches the arpeggiator unexpectedly; programs saved by the user are unaffected |
 | 60 (LFO retrigger, 0 / 11), 93..96 (sequencer state), 105, 106, 127 (version, editor, end marker) | not carried | |
 | 128..895 sequencer: 6 lanes of 64 notes and 64 velocities | the factory sequence (`factory_seq_data`) | see "The OB-6 sequence" below |
 | 896..1023 | not carried | not the sequence (see below) |

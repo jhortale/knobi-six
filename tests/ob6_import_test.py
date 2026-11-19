@@ -85,8 +85,10 @@ def test_convert():
     check(g("UNISON_ON") == 1 and g("UNISON_VOICES") == 6, "unison on, chord")
     check(chord == [60, 63, 67, 70, 0, 0], f"chord offsets 0 3 7 10 -> notes from 60 ({chord})")
     check(g("FLT_BP") == 1 and g("XM_D_BP") == 1, "BP (26), x-mod norm-BP (25)")
-    check(g("DISTORTION") == 99 and g("BPM") == 250 and g("ARP_ON") == 1 and g("ARP_HOLD") == 1 and g("FXB_TYPE") == 13,
-          "reserved: distortion, BPM, arp on, hold, FX B type")
+    check(g("DISTORTION") == 99 and g("BPM") == 250 and g("ARP_ON") == 1 and g("ARP_HOLD") == 0 and g("FXB_TYPE") == 13,
+          "reserved: distortion, BPM, arp on, FX B type; byte 88 = 1 imported as ARP_HOLD 0 (unverified slot)")
+    vl, _an = m.verify([(0, 0, P0), (0, 1, P1)])
+    check(any("ARP HOLD bytes set: 1 of 2 programs - imported as off" in x for x in vl), "report counts ARP HOLD bytes")
     name, v, chord, w = m.convert(P1)
     g = lambda n: v[m.IDS[n]]  # noqa: E731
     check(g("VCO2_FINE") == 50, f"fine 253 -> +50 ({g('VCO2_FINE')})")
