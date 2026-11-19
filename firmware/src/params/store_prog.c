@@ -24,16 +24,7 @@
  * prog_factory reads it for "restore factory". -DKNOBI_NO_FACTORY builds without it (the host tests, which expect the
  * init program); -DKNOBI_FACTORY_H='"file.h"' takes another bank (the unit tests' synthetic one). */
 #include "store_prog.h"
-#if defined KNOBI_FACTORY_H
-#include KNOBI_FACTORY_H
-#elif !defined KNOBI_NO_FACTORY && defined __has_include
-#if __has_include("factory_bank.h")
-#include "factory_bank.h"
-#endif
-#endif
-#ifndef FACTORY_COUNT
-#define FACTORY_COUNT 0u                               /* no factory bank: the init program everywhere */
-#endif
+#include "factory.h"                                   /* the factory bank (or none): FACTORY_COUNT */
 
 #define PROG_DATA_BYTES (PROG_PER_SLOT * PROG_STRIDE)  /* 16354 B of records */
 #define PROG_SLOT_BYTES SLOT_MAX                       /* the image: records, spare, the tag at the end */
@@ -87,23 +78,7 @@ static void prog_fetch(uint32_t l)
     prog_buf_slot = (int32_t)l;
 }
 
-uint32_t prog_factory_count(void) { return FACTORY_COUNT; }
-
-int prog_factory(uint32_t n, program_t *p)
-{
-#if FACTORY_COUNT
-    if (n < FACTORY_COUNT && program_packed_size(factory_bank[n][0]) == FACTORY_SIZE &&
-        program_unpack(p, factory_bank[n], FACTORY_SIZE) == 0) {
-        program_set_seq_gen(p, 0);                     /* (a factory program names no stored sequence: its own is the
-                                                        * bank's, prog_seq.c factory_seq) */
-        return 0;
-    }
-#else
-    (void)n;
-#endif
-    program_init(p);
-    return -1;
-}
+#include "factory.c"                                   /* prog_factory_count, prog_factory */
 
 int prog_load(uint32_t n, program_t *p)
 {
