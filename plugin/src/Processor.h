@@ -58,8 +58,10 @@ public:
     Params& params() { return params_; }
     // the core's changes to the host (Params.h), the message thread: its timer calls it; tests call it
     void syncHost();
-    // the 30 Hz timer that calls syncHost (on by default). Tests that count allocations process-wide switch it off:
-    // JUCE's timer thread posts to the message queue (it allocates and locks, on its own thread, never the audio's)
+    // the 30 Hz timer that calls syncHost: started by the constructor unless startHostSyncTimer is false (process-wide). The tests set it
+    // false before making any processor: JUCE's timer thread (made by the first timer, alive after stopTimer) posts
+    // to the message queue -- it allocates and locks on its own thread, which the tests' process-wide counter counts
+    static inline std::atomic<bool> startHostSyncTimer{true};
     void hostSyncTimer(bool on) { if (on) startTimerHz(30); else stopTimer(); }
     // the user layer of the bank (plan Task 6's library; nullptr: none): to the playing instance and the bank view. The
     // caller keeps it alive while it may be in use (knobi_core.h kc_bank_set / kc_bank_in_use). false: refused

@@ -339,7 +339,6 @@ static void rt_no_alloc()
 
     for (double rate : {44100.0, 48000.0, 96000.0}) {
         Processor p;
-        p.hostSyncTimer(false);                   // (JUCE's timer thread: not processBlock, but counted process-wide)
         const int block = 256;
         p.setPlayConfigDetails(0, 2, rate, block);
         p.prepareToPlay(rate, block);
@@ -479,7 +478,6 @@ static void silent_block()
     const double rate = 44100;
     const auto period = std::chrono::microseconds((int64_t)(1e6 * block / rate));   // 46.4 ms
     Processor p;
-    p.hostSyncTimer(false);                       // (JUCE's timer thread: not processBlock, but counted process-wide)
     p.setPlayConfigDetails(0, 2, rate, block);
     p.prepareToPlay(rate, block);
     juce::AudioBuffer<float> buf(2, block);
@@ -1108,7 +1106,6 @@ static void rt_params()
         bank->used[i] = 1;
     }
     Processor p;
-    p.hostSyncTimer(false);                       // (JUCE's timer thread: not processBlock, but counted process-wide)
     p.setBank(bank.get());
     const int block = 128;
     p.setPlayConfigDetails(0, 2, 48000, block);
@@ -1159,6 +1156,7 @@ int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     juce::ScopedJuceInitialiser_GUI juce;           // (JUCE's statics; no window is opened)
+    Processor::startHostSyncTimer = false;              // (no JUCE timer thread in this process: the tests call syncHost)
     std::map<std::string, std::function<void()>> tests = {
         {"render_44k_bitexact", render_44k_bitexact}, {"render_48k", render_48k},
         {"midi_sample_accurate", midi_sample_accurate}, {"rt_no_alloc", rt_no_alloc}, {"seam", seam},

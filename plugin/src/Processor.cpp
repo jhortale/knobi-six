@@ -15,7 +15,7 @@ Processor::Processor()
     lastCore_.fill(Params::kNone);
     if (runner_.ok()) scanCore();                // (no thread has the instance yet: the init program's values)
     params_.discardToHost();                      // (they are the defaults, as the parameters were made)
-    startTimerHz(30);                             // the core's changes to the host (syncHost), the message thread
+    if (startHostSyncTimer.load()) startTimerHz(30);  // the core's changes to the host (syncHost), the message thread
 }
 
 Processor::~Processor() { stopTimer(); }
