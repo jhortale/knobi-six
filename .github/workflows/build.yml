@@ -222,7 +222,7 @@ jobs:
       - name: No factory bank here
         run: test ! -e firmware/gen/factory_bank.h
 
-      - name: Core host tests (macOS: make -C tests unit)
+      - name: Core host tests on macOS (make -C tests unit)
         run: make -C tests unit
 
       - name: Build (AU + VST3, default, no factory bank)
