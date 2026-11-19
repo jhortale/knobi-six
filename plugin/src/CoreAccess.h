@@ -4,15 +4,19 @@
 // processBlock; any other thread (the message thread: state get / set, later the panel's edits) asks for a call on it:
 //   run(fn, ctx): posts fn; the audio thread runs it at the start of its next block, before that block's events (so
 //   it acts at the block's first sample, in order with everything else the audio thread does). If no block comes (the
-//   host is not processing: not prepared, stopped, offline), the asking thread takes the instance itself once the
-//   audio thread has been idle for kIdleMs, and runs fn there. Either way fn runs once, alone with the instance.
+//   host is genuinely not processing: not prepared, stopped, offline), the asking thread takes the instance itself
+//   once the audio thread has been idle for idleMs() -- max(kIdleMs, 3 block periods), set from prepareToPlay
+//   (setIdle), so a host with long blocks (2048 at 44.1 kHz: 46 ms apart) is never taken for idle between its
+//   callbacks -- and runs fn there. Either way fn runs once, alone with the instance.
 // The audio side is wait-free (atomics only): audioEnter / audioServe / audioExit never block, allocate or lock.
-// audioEnter fails only while another thread is running fn itself (the audio thread was idle for kIdleMs and then a
-// block came): that block is silent. fn must itself be real-time safe (it may run on the audio thread): copies only.
+// audioEnter fails only while another thread is running fn itself (the host was idle for idleMs() and resumed during
+// fn): Processor then outputs that block faded to silence, keeps its MIDI for the next block and keeps the timeline
+// (Processor.cpp, test silent_block). fn must itself be real-time safe (it may run on the audio thread): copies only.
 // The asking side takes a mutex (several non-audio threads queue up there), never the audio thread.
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -22,7 +26,15 @@ namespace knobi {
 class CoreAccess {
 public:
     using Fn = void (*)(void* ctx);
-    static constexpr int kIdleMs = 20;            // no block for this long: the host is not processing
+    static constexpr int kIdleMs = 20;            // the least idle time taken as "the host is not processing"
+
+    // the host's block period (prepareToPlay): idle = no block for max(kIdleMs, 3 block periods)
+    void setIdle(double sampleRate, int maxBlock)
+    {
+        int ms = sampleRate > 0 && maxBlock > 0 ? (int)std::ceil(3000.0 * maxBlock / sampleRate) : kIdleMs;
+        idleMs_.store(ms > kIdleMs ? ms : kIdleMs, std::memory_order_relaxed);
+    }
+    int idleMs() const { return idleMs_.load(std::memory_order_relaxed); }
 
     // ---- the audio thread, around each block
     bool audioEnter()                             // false: another thread holds the instance (output silence)
@@ -59,7 +71,7 @@ public:
             auto now = std::chrono::steady_clock::now();
             uint64_t b = blocks_.load(std::memory_order_relaxed);
             if (b != last) last = b, seen = now;
-            if (r == kPosted && now - seen >= std::chrono::milliseconds(kIdleMs)) {   // the host is not processing
+            if (r == kPosted && now - seen >= std::chrono::milliseconds(idleMs())) {   // the host is not processing
                 int idle = kFree;
                 if (owner_.compare_exchange_strong(idle, kOther, std::memory_order_acquire)) {
                     int posted = kPosted;
@@ -84,6 +96,7 @@ private:
     enum { kIdle, kPosted, kTaken, kDone };       // req_
     std::atomic<int> owner_{kFree}, req_{kIdle};
     std::atomic<uint64_t> blocks_{0};
+    std::atomic<int> idleMs_{kIdleMs};
     Fn fn_ = nullptr;
     void* ctx_ = nullptr;
     std::mutex side_;

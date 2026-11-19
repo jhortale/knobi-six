@@ -13,6 +13,8 @@
 // so the output does not depend on the host's block sizes, and an event at s sounds at s + latency() (+ less than one
 // internal frame at other rates, the 44.1 kHz grid).
 //
+// Re-prepare (a rate or block-size change): the core is kept (its voices sound on); events still waiting for their
+// frame are given to the core then, not dropped (no stuck note).
 // Real time: prepare() allocates (not on the audio thread); process() allocates nothing, takes no lock, does no I/O.
 // Threads: process() and every use of core() on one thread at a time (plugin/src/CoreAccess.h: the seam).
 #pragma once
@@ -49,11 +51,17 @@ public:
 
     // n frames into L and R (floats, -1..1); ev: this block's MIDI, by offset (0..n-1, in order)
     void process(float* L, float* R, uint32_t n, const MidiEvent* ev, uint32_t nev);
-    // a parameter change at a sample offset of the coming process() block (plan Task 4's automation; same timing as MIDI)
+    // a parameter change at a sample offset of the coming process() block (plan Task 4's automation; same timing as
+    // MIDI). The queue is kept in frame order (stable), so paramAt calls made before process() and that block's MIDI
+    // act in offset order, whatever order they were given in
     void paramAt(uint32_t offset, uint16_t id, int32_t value);
+    // n session samples the host had but the plugin could not render (Processor's silent block, CoreAccess.h): the
+    // core renders them (output dropped) so the timeline stays the host's; ev (that stretch's MIDI) acts at its start
+    void skip(uint32_t n, const MidiEvent* ev, uint32_t nev);
 
     uint64_t dropped() const { return dropped_; } // events the queue had no room for
     int64_t rendered() const { return front_; }   // internal frames rendered so far (tests)
+    int64_t sessionSamples() const { return session_; }   // session samples taken since prepare (tests)
 
 private:
     struct Ev { int64_t at; uint8_t kind, len; uint8_t data[3]; uint16_t id; int32_t value; };
@@ -75,6 +83,8 @@ private:
     uint32_t qr_ = 0, qw_ = 0;
     uint64_t dropped_ = 0;
     int16_t tmp_[2 * KC_BLOCK];
+    static constexpr uint32_t kScratch = 256;
+    float scratchL_[kScratch], scratchR_[kScratch];   // (skip's dropped output)
 };
 
 } // namespace knobi

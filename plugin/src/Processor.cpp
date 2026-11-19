@@ -21,7 +21,9 @@ bool Processor::isBusesLayoutSupported(const BusesLayout& layouts) const
 void Processor::prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     runner_.prepare(sampleRate, maximumExpectedSamplesPerBlock);   // (allocates: never on the audio thread)
+    access_.setIdle(sampleRate, maximumExpectedSamplesPerBlock);
     setLatencySamples(runner_.latency());
+    skipped_ = 0, fadeIn_ = false, lastL_ = lastR_ = 0.0f;   // (a new timeline; kept MIDI still goes in, next block)
 }
 
 void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -29,12 +31,43 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     if (n <= 0) return;
-    if (!access_.audioEnter()) {                 // (another thread holds the instance: CoreAccess.h)
-        buffer.clear();
+    if (!access_.audioEnter()) {                 // another thread holds the instance (CoreAccess.h: the host resumed
+        silentBlocks_++;                         // during a call it ran itself after a real idle): this block silent,
+        for (const auto meta : midi) {           // its MIDI kept for the next block (in order; overflow: all notes off)
+            const int len = meta.numBytes;
+            if (len < 1 || len > 3) continue;
+            if (pendingN_ == (uint32_t)kPending) { pendingOverflow_ = true; continue; }
+            MidiEvent& e = pending_[pendingN_++];
+            e.offset = 0, e.len = (uint8_t)len;
+            e.data[0] = meta.data[0], e.data[1] = len > 1 ? meta.data[1] : 0, e.data[2] = len > 2 ? meta.data[2] : 0;
+        }
         midi.clear();
+        skipped_ += (uint64_t)n;                 // (rendered later, output dropped: the timeline stays the host's)
+        for (int c = 0; c < buffer.getNumChannels(); c++) {   // no hard cut: the last output faded out over kFade
+            float* o = buffer.getWritePointer(c);
+            const float v = c == 0 ? lastL_ : c == 1 ? lastR_ : 0.0f;
+            for (int i = 0; i < n; i++) o[i] = i < kFade ? v * (float)(kFade - 1 - i) / (float)kFade : 0.0f;
+        }
+        lastL_ = lastR_ = 0.0f;
+        fadeIn_ = true;
         return;
     }
     access_.audioServe();                        // a call posted by another thread: at this block's first sample
+    if (skipped_ || pendingN_ || pendingOverflow_) {   // after silent blocks: their frames, their MIDI at their start
+        if (pendingOverflow_)
+            for (uint8_t ch = 0; ch < 16; ch++) {
+                MidiEvent& e = pending_[pendingN_++];
+                e.offset = 0, e.len = 3, e.data[0] = (uint8_t)(0xB0u | ch), e.data[1] = 123, e.data[2] = 0;
+            }
+        uint64_t left = skipped_;
+        while (left) {                           // (in parts: skip takes a uint32_t)
+            uint32_t part = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
+            runner_.skip(part, pending_.data(), left == skipped_ ? pendingN_ : 0u);
+            left -= part;
+        }
+        if (!skipped_) runner_.skip(0, pending_.data(), pendingN_);
+        skipped_ = 0, pendingN_ = 0, pendingOverflow_ = false;
+    }
     uint32_t nev = 0;
     for (const auto meta : midi) {
         const int len = meta.numBytes;
@@ -56,6 +89,16 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         buffer.clear();
     }
     for (int c = 2; c < buffer.getNumChannels(); c++) buffer.clear(c, 0, n);
+    if (R) {
+        if (fadeIn_) {                           // (after a silent block: in over kFade, no hard step)
+            for (int i = 0; i < n && i < kFade; i++) {
+                const float g = (float)(i + 1) / (float)kFade;
+                L[i] *= g, R[i] *= g;
+            }
+            fadeIn_ = false;
+        }
+        lastL_ = L[n - 1], lastR_ = R[n - 1];
+    }
     access_.audioExit();
 }
 

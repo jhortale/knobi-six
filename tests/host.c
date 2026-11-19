@@ -461,7 +461,9 @@ static void platform_poll(void)                 /* one call = one millisecond (a
         if (split_at) {                         /* "split": F frames now, the rest after two passes */
             app_audio(blk, split_at);
             split_stage = 1u;
-            return;
+            return;                             /* (returns inside the owed loop: this millisecond's film frame, perf
+                                                 * count and end check are skipped; the end check runs on the next
+                                                 * millisecond. Only split scripts take this path, none films) */
         }
         app_audio(blk, HALF_FRAMES);
 #ifdef __linux__

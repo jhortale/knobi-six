@@ -29,6 +29,14 @@ bool CoreRunner::prepare(double sampleRate, int maxBlock)
     ringL_.assign(size, 0.0f);
     ringR_.assign(size, 0.0f);
     mask_ = size - 1u;
+    // events still waiting for their frame (a note-off up to a block ahead): to the core now, in order, not lost (the
+    // core keeps sounding across a re-prepare; they act at its next block)
+    if (core_)
+        for (; qr_ != qw_; qr_++) {
+            const Ev& e = queue_[qr_ % kQueue];
+            if (e.kind == kMidi) kc_midi(core_, e.data, e.len);
+            else kc_param_set(core_, e.id, e.value);
+        }
     session_ = 0, front_ = 0, qr_ = qw_ = 0;
     return true;
 }
@@ -40,10 +48,17 @@ int64_t CoreRunner::internalAt(int64_t s) const   // ceil(s x 44100 / rate)
     return num >= 0 ? (num + o - 1) / o : -((-num) / o);
 }
 
+// in frame order, stable (an event goes after those at its frame or earlier): renderTo reads only the head, so
+// parameter changes queued before a block (paramAt) and that block's MIDI interleave by offset
 void CoreRunner::push(const Ev& e)
 {
     if (qw_ - qr_ >= kQueue) { dropped_++; return; }
-    queue_[qw_ % kQueue] = e;
+    uint32_t i = qw_;
+    while (i != qr_ && queue_[(i - 1u) % kQueue].at > e.at) {
+        queue_[i % kQueue] = queue_[(i - 1u) % kQueue];
+        i--;
+    }
+    queue_[i % kQueue] = e;
     qw_++;
 }
 
@@ -113,6 +128,18 @@ void CoreRunner::processPart(float* L, float* R, uint32_t n)
         }
     }
     session_ = end;
+}
+
+void CoreRunner::skip(uint32_t n, const MidiEvent* ev, uint32_t nev)
+{
+    if (!core_) return;
+    for (uint32_t i = 0; i < nev; i++) queueMidi(ev[i], 0);   // (at the stretch's first sample, in order)
+    while (n) {                                   // (the stretch rendered, its output dropped: the timeline kept)
+        uint32_t part = n < kScratch ? n : kScratch;
+        if (part > maxPart_) part = maxPart_;
+        processPart(scratchL_, scratchR_, part);
+        n -= part;
+    }
 }
 
 void CoreRunner::process(float* L, float* R, uint32_t n, const MidiEvent* ev, uint32_t nev)

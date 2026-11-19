@@ -58,7 +58,14 @@ ditto build/plugin/KnobiSix_artefacts/Release/VST3/KNOBI-SIX.vst3 ~/Library/Audi
 killall -9 AudioComponentRegistrar 2>/dev/null; auval -v aumu Kn6x Jhrt | tail -3   # the AU registered and valid
 ```
 
-To update, copy again (quit Live first, or rescan). To remove, delete the two bundles.
+To update, copy again (quit Live first, or rescan). To remove both:
+
+```sh
+rm -rf ~/Library/Audio/Plug-Ins/Components/KNOBI-SIX.component ~/Library/Audio/Plug-Ins/VST3/KNOBI-SIX.vst3
+killall -9 AudioComponentRegistrar
+```
+
+(The local build's bundles are `KNOBI-SIX-local.component` / `.vst3`, removed the same way.)
 
 In Live 12: Settings → Plug-Ins → turn on "Use Audio Units v2" and "Use VST3 Plug-in System Folders" (or "Custom
 Folder" pointing at `~/Library/Audio/Plug-Ins/VST3`), then **Rescan** (hold Option while clicking it for a full
@@ -78,6 +85,8 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 ## auval
 
 `auval -v aumu Kn6x Jhrt` validates the installed AU (it needs the copy in `~/Library/Audio/Plug-Ins/Components`).
+The auval runs in development (and CI's, on its runner) install the **default** (non-factory) AU there, never the
+local one; on this Mac it is installed since Task 3 (remove it as above).
 `cmake -DKNOBI_TEST_AUVAL=ON` adds it to `ctest` (CI's `plugin-macos` job installs the AU on the runner and runs it).
 
 ## How it works
@@ -92,7 +101,16 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
   call, served by the audio thread at the start of its next block (or run directly when the host is not processing).
 - `src/Processor.*`: the JUCE `AudioProcessor` (stereo out, MIDI in, no MIDI out).
 - `tests/`: CTest — `render_44k_bitexact`, `render_48k`, `midi_sample_accurate`, `rt_no_alloc` (an allocation and
-  lock counter around `processBlock`), `seam`, `bundle_exports` (the bundles export none of the firmware's symbols).
+  lock counter around `processBlock`), `seam`, `silent_block`, `prepare_keeps_pending`, `events_ordered`,
+  `bundle_exports` (the bundles export none of the firmware's symbols).
+- What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
+  audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone
+  allocators, so `operator new`) and pthread mutexes / rwlocks / `os_unfair_lock`. Not covered: what JUCE's AU / VST3
+  wrapper does around `processBlock` in a real host (its own locks), condition variables, semaphores, dispatch calls.
+- A collision (rare: the host resumes while another thread runs a call it took after a real idle of 3 block periods):
+  that block fades out to silence over 64 samples, its MIDI is replayed at the start of the next block (in order;
+  more than 256 messages: all notes off), the missed samples are rendered then (output dropped) so the timeline stays
+  the host's, and the next block fades in over 64 samples. A note shorter than the missed block collapses to its start.
 
 ## Licence
 

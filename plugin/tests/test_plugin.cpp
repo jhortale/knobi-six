@@ -17,6 +17,21 @@
 //                         served from another thread (CoreAccess): zero allocations, zero locks
 //   seam                  CoreAccess: with no audio running, run() takes the instance itself; with an audio thread
 //                         rendering, run() is served by it between blocks; never two at once (the processor's too)
+// Fix round 1:
+//   silent_block          blocks of 2048 at 44.1 kHz (46 ms apart, paced like a host): run() calls are served by the
+//                         audio thread (the idle threshold follows the block period: 3 blocks), no block is silent;
+//                         then a collision forced (a call running on the asking thread after a real idle while the
+//                         host resumes): that block is faded out from the last output (no hard cut), its note-off
+//                         and note-on replayed at the start of the next block that enters (60 released, 67 sounds:
+//                         a control without the 67 is silent by then), no note stuck, the timeline kept
+//   prepare_keeps_pending a note-off still waiting for its frame when the host re-prepares (rate / block change) is
+//                         given to the core, not lost: no stuck note
+//   events_ordered        parameter changes (paramAt, queued before the block) and MIDI at offsets in between act in
+//                         offset order: the same samples as the core driven directly in that order
+// rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
+// processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
+// mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
+// processBlock in a real host, condition variables, semaphores and dispatch calls (not counted).
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -432,6 +447,193 @@ static void seam()
     CHECK(ok && byAudio == n && overlaps == 0 && got == 20 && snap.num == 0);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+static bool silentTail(const juce::AudioBuffer<float>& b)
+{
+    for (int c = 0; c < 2; c++)
+        for (int i = 0; i < b.getNumSamples(); i++)
+            if (b.getSample(c, i) != 0.0f) return false;
+    return true;
+}
+static void silent_block()
+{
+    const int block = 2048;
+    const double rate = 44100;
+    const auto period = std::chrono::microseconds((int64_t)(1e6 * block / rate));   // 46.4 ms
+    Processor p;
+    p.setPlayConfigDetails(0, 2, rate, block);
+    p.prepareToPlay(rate, block);
+    juce::AudioBuffer<float> buf(2, block);
+    juce::MidiBuffer midi;
+    midi.ensureSize(1024);
+    int64_t hostSamples = 0;
+    auto host = [&](std::initializer_list<std::pair<int, juce::MidiMessage>> evs) {
+        midi.clear();
+        for (auto& e : evs) midi.addEvent(e.second, e.first);
+        p.processBlock(buf, midi);
+        hostSamples += block;
+    };
+    // 1. a host with long blocks, paced in real time; calls from another thread meanwhile: all served by the audio thread
+    std::atomic<bool> stop{false};
+    std::atomic<int> served{0};
+    struct Snap { kc_t* k; int32_t num; } snap{p.runner().core(), -1};
+    auto get = [](void* c) { auto* s = (Snap*)c; kc_program_get(s->k, &s->num, nullptr, nullptr, nullptr); };
+    std::thread asker([&] { for (int i = 0; i < 6; i++) served += p.access().run(get, &snap); stop = true; });
+    int blocks = 0;
+    while (!stop && blocks < 200) { host({}); blocks++; std::this_thread::sleep_for(period); }
+    asker.join();
+    uint64_t here1 = p.access().ranHere(), silent1 = p.silentBlocks();
+    std::printf("silent_block: blocks of %d at %.0f Hz paced %lld ms: %d / 6 calls served, %llu run on the asking "
+                "thread, %llu silent blocks\n", block, rate, (long long)(period.count() / 1000), served.load(),
+                (unsigned long long)here1, (unsigned long long)silent1);
+    CHECK(served == 6 && here1 == 0 && silent1 == 0);
+    // 2. a collision: the host idle, a call taken by the asking thread (it holds the instance), the host resumes
+    host({{10, juce::MidiMessage::noteOn(1, 60, (juce::uint8)110)}});   // a held note
+    for (int i = 0; i < 4; i++) host({});
+    float last = buf.getSample(0, block - 1);
+    std::atomic<bool> holding{false}, release{false};
+    struct Hold { std::atomic<bool>* holding; std::atomic<bool>* release; } h{&holding, &release};
+    std::thread taker([&] {
+        p.access().run([](void* c) {
+            auto* x = (Hold*)c;
+            *x->holding = true;
+            while (!*x->release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }, &h);
+    });
+    while (!holding) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    midi.clear();                                 // (the colliding block, counted: the silent path allocates nothing)
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 100);
+    midi.addEvent(juce::MidiMessage::noteOn(1, 67, (juce::uint8)100), 200);
+    long a0 = alloc_hook_allocs(), l0 = alloc_hook_locks();
+    alloc_hook_arm(1);
+    p.processBlock(buf, midi);
+    alloc_hook_arm(0);
+    long silentAllocs = alloc_hook_allocs() - a0, silentLocks = alloc_hook_locks() - l0;
+    hostSamples += block;
+    float first = buf.getSample(0, 0), jump = std::fabs(first - last);   // (collides: the call still holds it)
+    bool tailSilent = true;
+    for (int i = 64; i < block; i++) tailSilent = tailSilent && buf.getSample(0, i) == 0.0f && buf.getSample(1, i) == 0.0f;
+    uint64_t silent2 = p.silentBlocks();
+    release = true;
+    taker.join();
+    midi.clear();                                 // (the block that replays it, counted too)
+    a0 = alloc_hook_allocs(), l0 = alloc_hook_locks();
+    alloc_hook_arm(1);
+    p.processBlock(buf, midi);
+    alloc_hook_arm(0);
+    silentAllocs += alloc_hook_allocs() - a0, silentLocks += alloc_hook_locks() - l0;
+    hostSamples += block;
+    // after it: 60 released, 67 held (replayed). A control without the 67: 60's release alone is over by block 20
+    for (int i = 0; i < 19; i++) host({});
+    bool heldAt20 = !silentTail(buf);
+    Processor ctl;
+    ctl.setPlayConfigDetails(0, 2, rate, block);
+    ctl.prepareToPlay(rate, block);
+    juce::AudioBuffer<float> cb(2, block);
+    for (int i = 0; i < 26; i++) {
+        midi.clear();
+        if (i == 0) midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)110), 10);
+        if (i == 5) midi.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+        ctl.processBlock(cb, midi);
+    }
+    bool controlSilent = silentTail(cb);
+    host({{0, juce::MidiMessage::noteOff(1, 67)}});
+    for (int i = 0; i < 70; i++) host({});        // (3.25 s)
+    bool endsSilent = silentTail(buf);
+    int64_t session = p.runner().sessionSamples();
+    std::printf("silent_block: collision: %llu silent block(s); its first sample %.4f after %.4f (step %.4f), silent "
+                "after 64: %s; 20 blocks later the replayed note sounds: %s (control without it silent: %s); after its "
+                "note-off the last block silent: %s; timeline %lld of %lld host samples; the silent block and the replay: %ld "
+                "allocations, %ld locks\n",
+                (unsigned long long)(silent2 - silent1), first, last, jump, tailSilent ? "yes" : "no",
+                heldAt20 ? "yes" : "NO", controlSilent ? "yes" : "no", endsSilent ? "yes" : "NO (a stuck note)",
+                (long long)session, (long long)hostSamples, silentAllocs, silentLocks);
+    CHECK(silentAllocs == 0 && silentLocks == 0 && silent2 - silent1 == 1 && std::fabs(last) > 1e-4f && jump < std::fabs(last) * 0.1f + 1e-4f && tailSilent &&
+          heldAt20 && controlSilent && endsSilent && session == hostSamples);
+}
+
+static void prepare_keeps_pending()
+{
+    Processor p;
+    p.setPlayConfigDetails(0, 2, 44100, 100);
+    p.prepareToPlay(44100, 100);
+    juce::AudioBuffer<float> buf(2, 100);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)110), 0);
+    p.processBlock(buf, midi);
+    for (int i = 0; i < 20; i++) { midi.clear(); p.processBlock(buf, midi); }   // (2000 samples: sounding)
+    midi.clear();
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 90);   // (frame 2090: past the core's frontier, 2048: waiting)
+    p.processBlock(buf, midi);
+    p.setPlayConfigDetails(0, 2, 48000, 512);
+    p.prepareToPlay(48000, 512);                  // (the host changes rate and block size)
+    juce::AudioBuffer<float> b2(2, 512);
+    for (int i = 0; i < 300; i++) { midi.clear(); p.processBlock(b2, midi); }   // (3.2 s)
+    bool silent = silentTail(b2);
+    std::printf("prepare_keeps_pending: a note-off waiting at re-prepare (44.1 kHz / 100 -> 48 kHz / 512): the last "
+                "block %s\n", silent ? "silent" : "NOT silent (a stuck note)");
+    CHECK(silent);
+}
+
+static void events_ordered()
+{
+    uint16_t id = 0;                              // a knob: the filter's cut-off if it is there, else the first knob
+    for (uint16_t i = 0; i < KC_PARAM_ID_LIMIT; i++) {
+        kc_param_info_t in;
+        if (kc_param_info(i, &in) || in.kind != KC_KIND_KNOB) continue;
+        if (!id) id = i;
+        if (std::strstr(in.name, "FREQ")) { id = i; break; }
+    }
+    kc_param_info_t info;
+    kc_param_info(id, &info);
+    const int32_t lo = info.min + (info.max - info.min) / 8, hi = info.max - (info.max - info.min) / 8;
+    // one host block of 2048: params at 900 and 1500 queued first, MIDI at 100, 1200, 1800
+    Processor p;
+    p.setPlayConfigDetails(0, 2, 44100, 2048);
+    p.prepareToPlay(44100, 2048);
+    juce::AudioBuffer<float> buf(2, 2048);
+    juce::MidiBuffer midi;
+    std::vector<float> out;
+    for (int b = 0; b < 4; b++) {
+        midi.clear();
+        if (b == 0) {
+            p.runner().paramAt(900, id, lo);
+            p.runner().paramAt(1500, id, hi);
+            midi.addEvent(juce::MidiMessage::noteOn(1, 48, (juce::uint8)110), 100);
+            midi.addEvent(juce::MidiMessage::noteOn(1, 55, (juce::uint8)110), 1200);
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)110), 1800);
+        }
+        p.processBlock(buf, midi);
+        for (int i = 0; i < 2048; i++) out.push_back(buf.getSample(0, i)), out.push_back(buf.getSample(1, i));
+    }
+    // the reference: the core directly, in offset order, split at each
+    kc_t* k = kc_create();
+    struct E { int64_t at; int kind; uint8_t m[3]; int32_t v; };
+    std::vector<E> ev = {{100, 0, {0x90, 48, 110}, 0}, {900, 1, {0, 0, 0}, lo}, {1200, 0, {0x90, 55, 110}, 0},
+                         {1500, 1, {0, 0, 0}, hi}, {1800, 0, {0x90, 60, 110}, 0}};
+    std::vector<int16_t> x(2 * 8192, 0);
+    int64_t done = 0;
+    size_t e = 0;
+    while (done < 8192) {
+        int64_t end = (done / KC_BLOCK + 1) * KC_BLOCK;
+        for (; e < ev.size() && ev[e].at <= done; e++)
+            if (ev[e].kind == 0) kc_midi(k, ev[e].m, 3); else kc_param_set(k, id, ev[e].v);
+        if (e < ev.size() && ev[e].at < end) end = ev[e].at;
+        kc_render_exact(k, &x[(size_t)(2 * done)], (uint32_t)(end - done));
+        done = end;
+    }
+    kc_destroy(k);
+    long diff = 0;
+    for (int64_t s = 0; s < 8192; s++)
+        for (int c = 0; c < 2; c++) {
+            float want = s >= 256 ? (float)x[(size_t)(2 * (s - 256) + c)] * (1.0f / 32768.0f) : 0.0f;
+            diff += out[(size_t)(2 * s + c)] != want;
+        }
+    std::printf("events_ordered: %s (id %u) at 900 and 1500 queued before MIDI at 100, 1200, 1800: %ld samples differ "
+                "from the core in offset order\n", info.name, id, diff);
+    CHECK(diff == 0);
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -439,6 +641,7 @@ int main(int argc, char** argv)
     std::map<std::string, std::function<void()>> tests = {
         {"render_44k_bitexact", render_44k_bitexact}, {"render_48k", render_48k},
         {"midi_sample_accurate", midi_sample_accurate}, {"rt_no_alloc", rt_no_alloc}, {"seam", seam},
+        {"silent_block", silent_block}, {"prepare_keeps_pending", prepare_keeps_pending}, {"events_ordered", events_ordered},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

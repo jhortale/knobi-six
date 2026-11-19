@@ -13,6 +13,8 @@ namespace knobi {
 class Processor : public juce::AudioProcessor {
 public:
     static constexpr int kMaxEvents = 2048;      // MIDI messages a block (beyond: the rest of that block dropped)
+    static constexpr int kPending = 256;         // MIDI kept from silent blocks (beyond: all notes off at the replay)
+    static constexpr int kFade = 64;             // samples: a silent block fades out, the next block fades in
 
     Processor();
     ~Processor() override;
@@ -44,12 +46,19 @@ public:
     CoreAccess& access() { return access_; }
     CoreRunner& runner() { return runner_; }     // (the audio thread, or inside access().run)
     uint64_t midiDropped() const { return midiDropped_; }
+    uint64_t silentBlocks() const { return silentBlocks_; }   // blocks output silent (CoreAccess.h)
 
 private:
     CoreRunner runner_;
     CoreAccess access_;
     std::array<MidiEvent, kMaxEvents> events_{};
-    uint64_t midiDropped_ = 0;
+    uint64_t midiDropped_ = 0, silentBlocks_ = 0;
+    // the silent path (CoreAccess.h): this processor's own, never CoreRunner's (a call may be using the instance)
+    std::array<MidiEvent, kPending + 16> pending_{};
+    uint32_t pendingN_ = 0;
+    bool pendingOverflow_ = false, fadeIn_ = false;
+    uint64_t skipped_ = 0;                       // session samples output silent, not yet rendered
+    float lastL_ = 0.0f, lastR_ = 0.0f;          // the last sample output
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Processor)
 };
