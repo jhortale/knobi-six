@@ -36,7 +36,9 @@ bool CoreRunner::prepare(double sampleRate, int maxBlock)
             const Ev& e = queue_[qr_ % kQueue];
             if (e.kind == kMidi) kc_midi(core_, e.data, e.len);
             else kc_param_set(core_, e.id, e.value);
+            applied(e);
         }
+    std::memset(paramQueued_, 0, sizeof paramQueued_);
     session_ = 0, front_ = 0, qr_ = qw_ = 0;
     return true;
 }
@@ -60,6 +62,12 @@ void CoreRunner::push(const Ev& e)
     }
     queue_[i % kQueue] = e;
     qw_++;
+    if (e.kind == kParam && e.id < KC_PARAM_ID_LIMIT) paramQueued_[e.id]++;
+}
+
+void CoreRunner::applied(const Ev& e)
+{
+    if (e.kind == kParam && e.id < KC_PARAM_ID_LIMIT && paramQueued_[e.id]) paramQueued_[e.id]--;
 }
 
 void CoreRunner::paramAt(uint32_t offset, uint16_t id, int32_t value)
@@ -78,6 +86,7 @@ void CoreRunner::renderTo(int64_t target)
             const Ev& e = queue_[qr_ % kQueue];
             if (e.kind == kMidi) kc_midi(core_, e.data, e.len);
             else kc_param_set(core_, e.id, e.value);
+            applied(e);
             qr_++;
         }
         int64_t end = (front_ / KC_BLOCK + 1) * KC_BLOCK;

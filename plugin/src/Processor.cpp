@@ -3,14 +3,165 @@
 
 namespace knobi {
 
+namespace {
+thread_local bool tlInProcess = false;          // inside processBlock on this thread (it owns the instance)
+}
+
 Processor::Processor()
     : juce::AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
     runner_.prepare(44100.0, 512);               // (until the host prepares: the latency of 44.1 kHz)
     setLatencySamples(runner_.latency());
+    lastCore_.fill(Params::kNone);
+    if (runner_.ok()) scanCore();                // (no thread has the instance yet: the init program's values)
+    params_.discardToHost();                      // (they are the defaults, as the parameters were made)
+    startTimerHz(30);                             // the core's changes to the host (syncHost), the message thread
 }
 
-Processor::~Processor() = default;
+Processor::~Processor() { stopTimer(); }
+
+// ---- parameters (Params.h)
+void Processor::scanCore()
+{
+    kc_t* k = runner_.core();
+    if (!k) return;
+    for (int i = 0; i < params_.size(); i++) {
+        const uint16_t id = params_.entry(i).id;
+        if (runner_.paramPending(id)) continue;   // (a host value on its way: the core's is not the news)
+        const int32_t v = kc_param_get(k, id);
+        if (v != lastCore_[id]) lastCore_[id] = v, params_.coreChanged(id, v);
+    }
+    int32_t num = 0;
+    int ed = 0;
+    kc_program_get(k, &num, nullptr, nullptr, &ed);
+    if (program_.exchange(num, std::memory_order_acq_rel) != num) programMoved_.store(true);
+    edited_.store(ed != 0, std::memory_order_release);
+}
+
+void Processor::applyHostChanges()
+{
+    params_.takeHostChanges([this](uint16_t id, int32_t v) {
+        lastCore_[id] = v;                        // (the core gets the host's value: not reported back)
+        runner_.paramAt(0, id, v);
+    });
+}
+
+void Processor::syncHost()
+{
+    params_.syncToHost();
+    // a program load the host did not ask for (MIDI program change): AU hosts refresh the preset shown
+    // (kAudioUnitProperty_PresentPreset). Not on VST3: JUCE reports it there as a gesture on its "Program" parameter
+    // (an automation write), which this plugin never sends for a core change
+    if (programMoved_.exchange(false) && wrapperType == wrapperType_AudioUnit)
+        updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
+}
+
+// ---- programs
+void Processor::setCurrentProgram(int index)
+{
+    if (index < 0 || index >= (int)KC_PROGRAMS || !runner_.ok()) return;
+    // the bank's program + sequence, as a program change loads it (ProgramBank: the same bank, the firmware's loading),
+    // read here (not the audio thread) and handed to the core as a load (kc_program_set, not edited): the core reports
+    // the new program at once (kc_program_get), even while the engine still takes an earlier load
+    struct Ctx { Processor* p; int n; bool have; program_t prog; seq_t seq; } c{this, index, false, {}, {}};
+    if (!tlInProcess) c.have = bank_.program(index, &c.prog, &c.seq);
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        if (!x->have || kc_program_set(x->p->runner_.core(), x->n, &x->prog, &x->seq, 0))
+            kc_program_select(x->p->runner_.core(), x->n);   // (in a host's processBlock: as a program change)
+        x->p->scanCore();
+        x->p->programMoved_.store(false);         // (the host asked for it)
+    };
+    if (tlInProcess) fn(&c);                      // (a host calling it from its processBlock: the instance is ours)
+    else access_.run(fn, &c);
+    if (juce::MessageManager::existsAndIsCurrentThread()) params_.syncToHost();
+}
+
+const juce::String Processor::getProgramName(int index)
+{
+    if (index < 0 || index >= (int)KC_PROGRAMS) return {};
+    std::lock_guard<std::mutex> g(namesLock_);
+    if (!namesValid_) {
+        for (int i = 0; i < (int)KC_PROGRAMS; i++)
+            names_[(size_t)i] = juce::String(i).paddedLeft('0', 3) + " " + juce::String(bank_.name(i));
+        namesValid_ = true;
+    }
+    return names_[(size_t)index];
+}
+
+bool Processor::setBank(const kc_bank_t* bank)
+{
+    if (!bank_.setBank(bank)) return false;
+    if (runner_.ok()) kc_bank_set(runner_.core(), bank);   // (any thread, any time: knobi_core.h)
+    std::lock_guard<std::mutex> g(namesLock_);
+    namesValid_ = false;
+    return true;
+}
+
+// ---- state (StateCodec.h): the message thread, through access()
+void Processor::snapshot(Snapshot& s)
+{
+    struct Ctx { kc_t* k; Snapshot* s; } c{runner_.core(), &s};
+    s.number = 0, s.edited = 0;
+    program_init(&s.program);
+    seq_clear(&s.seq);
+    if (!c.k) return;
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        kc_program_get(x->k, &x->s->number, &x->s->program, &x->s->seq, &x->s->edited);
+    };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+}
+
+bool Processor::differsFromBank()
+{
+    Snapshot s;
+    snapshot(s);
+    program_t p;
+    seq_t q;
+    if (!bank_.program(s.number, &p, &q)) return false;
+    return !ProgramBank::same(s.program, s.seq, p, q);
+}
+
+void Processor::getStateInformation(juce::MemoryBlock& dest)
+{
+    Snapshot s;
+    snapshot(s);
+    SetState st;
+    st.number = s.number, st.program = s.program, st.seq = s.seq, st.edited = s.edited != 0;
+    program_t p;
+    seq_t q;
+    st.differs = bank_.program(s.number, &p, &q) && !ProgramBank::same(s.program, s.seq, p, q);
+    const auto bytes = StateCodec::encode(st);
+    dest.replaceAll(bytes.data(), bytes.size());
+}
+
+void Processor::setStateInformation(const void* data, int size)
+{
+    SetState st;
+    if (size <= 0 || StateCodec::decode(data, (size_t)size, st) != StateCodec::kOk || !runner_.ok())
+        return;                                   // (no state, a broken one or a newer format: nothing changes)
+    // differs from the bank as it is now (the bank may have changed since the set was saved); no bank answer: as saved
+    program_t p;
+    seq_t q;
+    const bool differs = bank_.program(st.number, &p, &q) ? !ProgramBank::same(st.program, st.seq, p, q) : st.differs;
+    struct Ctx { Processor* p; SetState* st; int rc; } c{this, &st, -1};
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        x->p->params_.dropHostChanges();          // (host changes made before the load are older than it)
+        x->rc = kc_program_set(x->p->runner_.core(), x->st->number, &x->st->program, &x->st->seq, x->st->edited ? 1 : 0);
+        x->p->scanCore();
+        x->p->programMoved_.store(false);
+    };
+    if (tlInProcess) fn(&c);
+    else if (!access_.run(fn, &c)) return;
+    if (c.rc != 0) return;
+    stateDiffers_.store(differs);
+    // the parameters show the loaded program now (the wrappers are restoring state: JUCE's AU and VST3 wrappers send
+    // no automation for this and re-read every value afterwards -- VST3 setComponentState: kParamValuesChanged)
+    if (!tlInProcess) params_.syncToHost();
+}
 
 bool Processor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
@@ -31,6 +182,7 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     if (n <= 0) return;
+    const juce::ScopedValueSetter<bool> inProcess(tlInProcess, true);
     if (!access_.audioEnter()) {                 // another thread holds the instance (CoreAccess.h: the host resumed
         silentBlocks_++;                         // during a call it ran itself after a real idle): this block silent,
         for (const auto meta : midi) {           // its MIDI kept for the next block (in order; overflow: all notes off)
@@ -68,6 +220,7 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         if (!skipped_) runner_.skip(0, pending_.data(), pendingN_);
         skipped_ = 0, pendingN_ = 0, pendingOverflow_ = false;
     }
+    applyHostChanges();                          // automation etc.: at this block's first sample, before its MIDI
     uint32_t nev = 0;
     for (const auto meta : midi) {
         const int len = meta.numBytes;
@@ -89,6 +242,7 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         buffer.clear();
     }
     for (int c = 2; c < buffer.getNumChannels(); c++) buffer.clear(c, 0, n);
+    scanCore();                                   // CC, program change: the host is told later (syncHost)
     if (R) {
         if (fadeIn_) {                           // (after a silent block: in over kFade, no hard step)
             for (int i = 0; i < n && i < kFade; i++) {

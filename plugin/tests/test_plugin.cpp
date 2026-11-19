@@ -28,6 +28,23 @@
 //                         given to the core, not lost: no stuck note
 //   events_ordered        parameter changes (paramAt, queued before the block) and MIDI at offsets in between act in
 //                         offset order: the same samples as the core driven directly in that order
+// Plan Task 4:
+//   params_layout         every id the core exposes is a parameter "p<id>" (in id order, nothing else: not the effect
+//                         ids, not P_SEQ_GEN), its kind (bool / choice / int), range, default, labels and name the
+//                         firmware's, every value converting both ways (a bipolar knob centred at 0.5)
+//   automation_to_core    host changes (knob, bipolar, switch, select) before blocks of 300: the core's output equals
+//                         the core driven directly with each change at its block's first sample; nothing reported back
+//   core_to_host          a CC, a MIDI program change, the host's program list: the host's values follow (after the
+//                         message thread's syncHost), with no gesture; the host's echo of an old report after the core
+//                         moved on does not pull the core back; no loop; a real host change still applies; names
+//   state_roundtrip       program number, program + sequence, edited flag restored exactly (as loaded / edited); the
+//                         parameters follow; saved again: the same bytes
+//   state_bank_changed    the bank's program changed since the set was saved: the stored copy wins, "differs from bank"
+//   state_versioned       a later writer's state (unknown records and flag bits) loads; an older one (a version-1
+//                         program record, no sequence, no flags) loads; the empty Task-3 state changes nothing; a newer
+//                         format (minReader), a cut or broken state, a bad number: refused, nothing changed
+//   rt_params             every parameter set every block (setValue: what the wrappers call), CCs, MIDI program
+//                         changes and setCurrentProgram from another thread: no allocation, no lock in processBlock
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
@@ -322,6 +339,7 @@ static void rt_no_alloc()
 
     for (double rate : {44100.0, 48000.0, 96000.0}) {
         Processor p;
+        p.hostSyncTimer(false);                   // (JUCE's timer thread: not processBlock, but counted process-wide)
         const int block = 256;
         p.setPlayConfigDetails(0, 2, rate, block);
         p.prepareToPlay(rate, block);
@@ -461,6 +479,7 @@ static void silent_block()
     const double rate = 44100;
     const auto period = std::chrono::microseconds((int64_t)(1e6 * block / rate));   // 46.4 ms
     Processor p;
+    p.hostSyncTimer(false);                       // (JUCE's timer thread: not processBlock, but counted process-wide)
     p.setPlayConfigDetails(0, 2, rate, block);
     p.prepareToPlay(rate, block);
     juce::AudioBuffer<float> buf(2, block);
@@ -634,6 +653,508 @@ static void events_ordered()
     CHECK(diff == 0);
 }
 
+// ===============================================================================================================
+// plan Task 4: parameters, automation, set state
+// ===============================================================================================================
+static const juce::RangedAudioParameter* paramById(juce::AudioProcessor& p, const juce::String& pid)
+{
+    for (auto* q : p.getParameters())
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(q))
+            if (r->getParameterID() == pid) return r;
+    return nullptr;
+}
+
+// a program unlike init (values per a seed, a name) and a sequence of a few steps, as the firmware stores them
+static void makeProgram(int seed, program_t& p, seq_t& s, const char* name)
+{
+    program_init(&p);
+    std::memset(p.name, 0, sizeof p.name);
+    std::strncpy(p.name, name, sizeof p.name);
+    for (uint16_t id = 0; id < KC_PARAM_ID_LIMIT; id++) {
+        kc_param_info_t in;
+        if (kc_param_info(id, &in) || id == P_ARP_ON || id == P_PRG_VOL || id == P_LENV_S) continue;   // (it plays)
+        const int32_t span = in.max - in.min + 1;
+        p.v[id] = param_clamp(id, in.min + (int32_t)((uint32_t)(seed * 131 + id * 17) % (uint32_t)span));
+    }
+    seq_clear(&s);
+    const uint8_t a[2] = {(uint8_t)(48 + seed % 12), (uint8_t)(55 + seed % 12)}, va[2] = {100, (uint8_t)(60 + seed)};
+    seq_rec_step(&s, a, va, 2);
+    seq_rec_tie(&s);
+    seq_rec_rest(&s);
+    const uint8_t b[1] = {(uint8_t)(60 + seed % 7)}, vb[1] = {90};
+    seq_rec_step(&s, b, vb, 1);
+}
+
+static std::unique_ptr<kc_bank_t> makeBank()
+{
+    auto b = std::make_unique<kc_bank_t>();
+    std::memset(b.get(), 0, sizeof *b);
+    return b;
+}
+
+static void blocks(Processor& p, int count, int n = 256, juce::MidiBuffer* first = nullptr)
+{
+    juce::AudioBuffer<float> buf(2, n);
+    juce::MidiBuffer midi;
+    for (int b = 0; b < count; b++) {
+        midi.clear();
+        if (b == 0 && first) midi.addEvents(*first, 0, -1, 0);
+        p.processBlock(buf, midi);
+    }
+}
+
+static bool sameRecords(const program_t& a, const seq_t& as, const program_t& b, const seq_t& bs)
+{
+    return ProgramBank::same(a, as, b, bs);
+}
+
+// counts what the processor tells the host (the wrappers listen the same way)
+struct HostSpy : juce::AudioProcessorListener {
+    std::atomic<int> changed{0}, gestures{0}, programChanged{0};
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { changed++; }
+    void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& d) override { programChanged += d.programChanged; }
+    void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int) override { gestures++; }
+    void audioProcessorParameterChangeGestureEnd(juce::AudioProcessor*, int) override { gestures++; }
+};
+
+static void params_layout()
+{
+    Processor p;
+    int exposed = 0, ok = 0, bad = 0;
+    for (uint16_t id = 0; id < KC_PARAM_ID_LIMIT + 8; id++) {
+        kc_param_info_t in;
+        const bool ex = id < KC_PARAM_ID_LIMIT && kc_param_info(id, &in) == 0;
+        auto* q = paramById(p, "p" + juce::String(id));
+        if (!ex) { if (q) { std::printf("params_layout: id %u not exposed by the core but a parameter\n", id); bad++; } continue; }
+        exposed++;
+        if (!q) { std::printf("params_layout: id %u (%s) missing\n", id, in.name); bad++; continue; }
+        bool good = q->getName(64) == juce::String(in.name) && q->isAutomatable();
+        if (in.kind == KC_KIND_SWITCH) {
+            auto* b = dynamic_cast<const juce::AudioParameterBool*>(q);
+            good = good && b && b->get() == (in.def != 0) && in.min == 0 && in.max == 1;
+        } else if (in.kind == KC_KIND_SELECT) {
+            auto* c = dynamic_cast<const juce::AudioParameterChoice*>(q);
+            good = good && c && c->choices.size() == in.max - in.min + 1 && c->getIndex() == in.def - in.min;
+            for (int32_t v = in.min; good && v <= in.max; v++) good = c->choices[v - in.min] == juce::String(in.labels[v - in.min]);
+        } else {
+            auto* k = dynamic_cast<const juce::AudioParameterInt*>(q);
+            good = good && k && k->getRange().getStart() == in.min && k->getRange().getEnd() == in.max && k->get() == in.def;
+            if (in.bipolar) good = good && in.min == -in.max && std::fabs(q->convertTo0to1(0.0f) - 0.5f) < 1e-6f;
+        }
+        good = good && Params::toCore(in, q->getDefaultValue()) == in.def;
+        // every value of the range: the parameter's own conversion and the core's agree both ways
+        auto* qq = const_cast<juce::RangedAudioParameter*>(q);
+        for (int32_t v = in.min; good && v <= in.max; v++) {
+            const float x = Params::toNormalised(in, v);
+            static_cast<juce::AudioProcessorParameter*>(qq)->setValue(x);
+            good = Params::toCore(in, qq->getValue()) == v && (int32_t)std::lround(qq->convertFrom0to1(x)) ==
+                   (in.kind == KC_KIND_SELECT ? v - in.min : v);
+        }
+        static_cast<juce::AudioProcessorParameter*>(qq)->setValue(q->getDefaultValue());
+        if (good) ok++;
+        else { std::printf("params_layout: id %u (%s) kind / range / default / labels do not match\n", id, in.name); bad++; }
+    }
+    // the ones never exposed: the stored-only effect ids, P_SEQ_GEN (also no name, no chord: not ids)
+    int hidden = 0;
+    for (uint16_t id : {(uint16_t)P_FX_ON, (uint16_t)P_FXA_TYPE, (uint16_t)P_FXB_DIV, (uint16_t)P_SEQ_GEN})
+        hidden += paramById(p, "p" + juce::String(id)) == nullptr;
+    // in id order, nothing else
+    int order = 1, prev = -1;
+    for (auto* q : p.getParameters()) {
+        auto* r = dynamic_cast<juce::RangedAudioParameter*>(q);
+        const int id = r ? r->getParameterID().substring(1).getIntValue() : -1;
+        order &= r && id > prev;
+        prev = id;
+    }
+    std::printf("params_layout: %d exposed ids, %d parameters (%d match kind / range / default / labels, %d bad); "
+                "effect ids and P_SEQ_GEN not parameters: %d of 4; in id order: %s\n", exposed,
+                p.getParameters().size(), ok, bad, hidden, order ? "yes" : "NO");
+    CHECK(exposed > 70 && ok == exposed && bad == 0 && p.getParameters().size() == exposed && hidden == 4 && order);
+}
+
+static void automation_to_core()
+{
+    const uint16_t knob = P_FLT_FREQ, sw = P_VCO1_SYNC, sel = P_LFO_SHAPE, bip = P_FLT_ENV_AMT;
+    const int n = 300;                            // (host blocks not on the 256 grid)
+    struct Change { int block; uint16_t id; int32_t v; };
+    const std::vector<Change> changes = {{5, knob, 60}, {5, bip, 90}, {9, knob, 120}, {12, sw, 1}, {12, sel, 3},
+                                         {15, knob, 30}, {15, bip, -70}};
+    Processor p;
+    p.setPlayConfigDetails(0, 2, 44100, n);
+    p.prepareToPlay(44100, n);
+    juce::AudioBuffer<float> buf(2, n);
+    juce::MidiBuffer midi;
+    std::vector<float> out;
+    const int nb = 24;
+    for (int b = 0; b < nb; b++) {
+        midi.clear();
+        if (b == 0) midi.addEvent(juce::MidiMessage::noteOn(1, 48, (juce::uint8)110), 0),
+                    midi.addEvent(juce::MidiMessage::noteOn(1, 55, (juce::uint8)110), 0);
+        for (auto& c : changes)                   // the host: before the block (as the wrappers deliver it)
+            if (c.block == b) {
+                auto* q = const_cast<juce::RangedAudioParameter*>(paramById(p, "p" + juce::String(c.id)));
+                if (!q) { std::printf("automation_to_core: no parameter p%u\n", c.id); CHECK(q); return; }
+                kc_param_info_t in;
+                kc_param_info(c.id, &in);
+                q->setValueNotifyingHost(Params::toNormalised(in, c.v));
+            }
+        p.processBlock(buf, midi);
+        for (int i = 0; i < n; i++) out.push_back(buf.getSample(0, i)), out.push_back(buf.getSample(1, i));
+    }
+    // the reference: the core directly, each change at its block's first sample (split there)
+    kc_t* k = kc_create();
+    const int64_t total = (int64_t)nb * n;
+    std::vector<int16_t> x((size_t)(2 * total), 0);
+    int64_t done = 0;
+    const uint8_t on1[3] = {0x90, 48, 110}, on2[3] = {0x90, 55, 110};
+    kc_midi(k, on1, 3), kc_midi(k, on2, 3);
+    while (done < total) {
+        int64_t end = (done / KC_BLOCK + 1) * KC_BLOCK;
+        for (auto& c : changes) {
+            const int64_t at = (int64_t)c.block * n;
+            if (at == done) kc_param_set(k, c.id, c.v);
+            if (at > done && at < end) end = at;
+        }
+        if (end > total) end = total;
+        kc_render_exact(k, &x[(size_t)(2 * done)], (uint32_t)(end - done));
+        done = end;
+    }
+    long diff = 0;
+    for (int64_t s = 0; s < total; s++)
+        for (int c = 0; c < 2; c++) {
+            const float want = s >= 256 ? (float)x[(size_t)(2 * (s - 256) + c)] * (1.0f / 32768.0f) : 0.0f;
+            diff += out[(size_t)(2 * s + c)] != want;
+        }
+    const int32_t kv = kc_param_get(p.runner().core(), knob), bv = kc_param_get(p.runner().core(), bip),
+                  sv = kc_param_get(p.runner().core(), sw), lv = kc_param_get(p.runner().core(), sel);
+    kc_destroy(k);
+    // a change the host made is not reported back to it (no echo, no automation written by us)
+    const int told = p.params().syncToHost();
+    std::printf("automation_to_core: 7 host changes before blocks 5, 9, 12, 15 (300-sample blocks): %ld samples differ "
+                "from the core with each change at its block's first sample; core values %d %d %d %d (want 30 -70 1 3); "
+                "reported back to the host: %d\n", diff, kv, bv, sv, lv, told);
+    CHECK(diff == 0 && kv == 30 && bv == -70 && sv == 1 && lv == 3 && told == 0);
+}
+
+static void core_to_host()
+{
+    auto bank = makeBank();
+    program_t p3;
+    seq_t s3;
+    makeProgram(3, p3, s3, "CORE TEST");
+    bank->used[3] = 1, bank->program[3] = p3, bank->seq[3] = s3;
+    Processor p;
+    CHECK(p.setBank(bank.get()));
+    p.setPlayConfigDetails(0, 2, 44100, 256);
+    p.prepareToPlay(44100, 256);
+    HostSpy spy;
+    p.addListener(&spy);
+    auto* flt = const_cast<juce::RangedAudioParameter*>(paramById(p, "p" + juce::String((int)P_FLT_FREQ)));
+    if (!flt) { std::printf("core_to_host: no parameter p%d\n", (int)P_FLT_FREQ); CHECK(flt); p.removeListener(&spy); return; }
+    kc_param_info_t fin;
+    kc_param_info(P_FLT_FREQ, &fin);
+    auto allMatch = [&] {
+        int bad = 0;
+        for (int i = 0; i < p.params().size(); i++) {
+            const auto& e = p.params().entry(i);
+            bad += Params::toCore(e.info, e.param->getValue()) != kc_param_get(p.runner().core(), e.id);
+        }
+        return bad;
+    };
+    // 1. a CC (the firmware's map: CC 74 = FILTER FREQ)
+    juce::MidiBuffer m;
+    m.addEvent(juce::MidiMessage::controllerEvent(1, 74, 20), 10);
+    blocks(p, 3, 256, &m);
+    const int32_t cc = kc_param_get(p.runner().core(), P_FLT_FREQ);
+    const bool before = Params::toCore(fin, flt->getValue()) == fin.def;   // (not told yet: the message thread does)
+    const int told1 = (p.syncHost(), spy.changed.load());
+    const bool hostHasCc = Params::toCore(fin, flt->getValue()) == cc;
+    // 2. the host echoes the value back (VST3: performEdit comes back to the processor) after the core moved on: the
+    //    echo must not pull the core back
+    m.clear();
+    m.addEvent(juce::MidiMessage::controllerEvent(1, 74, 110), 0);
+    blocks(p, 2, 256, &m);
+    const int32_t cc2 = kc_param_get(p.runner().core(), P_FLT_FREQ);
+    flt->setValueNotifyingHost(Params::toNormalised(fin, cc));   // (the echo of the first report)
+    blocks(p, 2);
+    const bool echoIgnored = kc_param_get(p.runner().core(), P_FLT_FREQ) == cc2;
+    p.syncHost();
+    const bool hostHasCc2 = Params::toCore(fin, flt->getValue()) == cc2;
+    // our own report did not come back as a host change
+    const bool noLoop = !p.params().hostPending();
+    // a genuine host change after that still goes to the core
+    flt->setValueNotifyingHost(Params::toNormalised(fin, 77));
+    blocks(p, 2);
+    const bool hostWins = kc_param_get(p.runner().core(), P_FLT_FREQ) == 77;
+    // 3. a MIDI program change: every parameter follows, the program list too
+    m.clear();
+    m.addEvent(juce::MidiMessage::programChange(1, 3), 5);
+    blocks(p, 3, 256, &m);
+    const int programAfterPc = p.getCurrentProgram();
+    p.syncHost();
+    const int badPc = allMatch();
+    program_t now;
+    seq_t nowS;
+    kc_program_get(p.runner().core(), nullptr, &now, &nowS, nullptr);
+    const bool isBank3 = sameRecords(now, nowS, p3, s3);
+    // 4. the host's program list: setCurrentProgram (message thread)
+    p.setCurrentProgram(0);
+    const int badSel = allMatch();
+    const int programAfterSel = p.getCurrentProgram();
+    p.setCurrentProgram(3);
+    const int badSel3 = allMatch();
+    const bool nameOk = p.getProgramName(3) == "003 CORE TEST" && p.getProgramName(0) == "000 INIT" &&
+                        p.getNumPrograms() == 500;
+    blocks(p, 3);
+    p.syncHost();                                 // (what the core did after the load, if anything)
+    blocks(p, 3);
+    const bool noLoop2 = !p.params().hostPending() && p.params().syncToHost() == 0;
+    p.removeListener(&spy);
+    std::printf("core_to_host: CC 74 -> FILTER FREQ %d: host before sync %s, after %s (%d told); echo of the old "
+                "value after the core moved on (%d): ignored %s, host then %s; no loop %s; host change after: %s. "
+                "Program change 3: current %d, %d parameters differ, the bank's program %s. setCurrentProgram 0 / 3: "
+                "%d / %d differ, current %d; names %s; no loop %s; gestures %d (want 0)\n",
+                cc, before ? "default" : "MOVED", hostHasCc ? "follows" : "NOT", told1, cc2, echoIgnored ? "yes" : "NO",
+                hostHasCc2 ? "follows" : "NOT", noLoop ? "yes" : "NO", hostWins ? "applied" : "NOT applied",
+                programAfterPc, badPc, isBank3 ? "yes" : "NO", badSel, badSel3, programAfterSel,
+                nameOk ? "ok" : (p.getProgramName(3) + " / " + p.getProgramName(0)).toRawUTF8(), noLoop2 ? "yes" : "NO",
+                spy.gestures.load());
+    CHECK(before && hostHasCc && told1 > 0 && echoIgnored && hostHasCc2 && noLoop && hostWins);
+    CHECK(programAfterPc == 3 && badPc == 0 && isBank3 && badSel == 0 && badSel3 == 0 && programAfterSel == 0);
+    CHECK(nameOk && noLoop2 && spy.gestures == 0);
+}
+
+struct Snap { int32_t num; program_t p; seq_t s; int edited; };
+static Snap snapOf(Processor& p)
+{
+    Snap s{};
+    kc_program_get(p.runner().core(), &s.num, &s.p, &s.s, &s.edited);   // (no audio running: this thread has it)
+    return s;
+}
+
+static void state_roundtrip()
+{
+    auto bank = makeBank();
+    for (int i : {7, 8}) {
+        makeProgram(i, bank->program[i], bank->seq[i], i == 7 ? "SEVEN" : "EIGHT");
+        bank->used[i] = 1;
+    }
+    int good = 0;
+    for (int edited = 0; edited < 2; edited++) {
+        Processor a;
+        a.setBank(bank.get());
+        a.setPlayConfigDetails(0, 2, 44100, 256);
+        a.prepareToPlay(44100, 256);
+        a.setCurrentProgram(edited ? 7 : 8);
+        blocks(a, 2);
+        if (edited) {                             // an edit (automation) and a different sequence step-entered
+            auto* q = const_cast<juce::RangedAudioParameter*>(paramById(a, "p" + juce::String((int)P_FLT_RESO)));
+            if (q) q->setValueNotifyingHost(0.25f);
+            blocks(a, 2);
+            Snap s = snapOf(a);
+            const uint8_t nn[1] = {72}, vv[1] = {33};
+            seq_rec_step(&s.s, nn, vv, 1);
+            kc_program_set(a.runner().core(), s.num, &s.p, &s.s, 1);
+            blocks(a, 2);
+        }
+        Snap sa = snapOf(a);
+        juce::MemoryBlock st;
+        a.getStateInformation(st);
+        Processor b;                              // a new instance, the same bank (a set reopened)
+        b.setBank(bank.get());
+        b.setStateInformation(st.getData(), (int)st.getSize());
+        Snap sb = snapOf(b);
+        int badParams = 0;
+        for (int i = 0; i < b.params().size(); i++) {
+            const auto& e = b.params().entry(i);
+            badParams += Params::toCore(e.info, e.param->getValue()) != kc_param_get(b.runner().core(), e.id);
+        }
+        juce::MemoryBlock st2;
+        b.getStateInformation(st2);
+        const bool ok = sa.num == sb.num && sameRecords(sa.p, sa.s, sb.p, sb.s) && sa.edited == edited &&
+                        sb.edited == edited && b.getCurrentProgram() == sa.num && badParams == 0 && st == st2 &&
+                        b.lastStateDiffered() == (edited != 0);
+        std::printf("state_roundtrip: program %d, %s, sequence of %u steps: %zu bytes; restored: number %d, program + "
+                    "sequence %s, edited %d, parameters differing %d, differs from bank %d, saved again identical %s\n",
+                    sa.num, edited ? "edited" : "as loaded", sa.s.len, st.getSize(), sb.num,
+                    sameRecords(sa.p, sa.s, sb.p, sb.s) ? "identical" : "DIFFERENT", sb.edited, badParams,
+                    (int)b.lastStateDiffered(), st == st2 ? "yes" : "NO");
+        good += ok;
+    }
+    CHECK(good == 2);
+}
+
+static void state_bank_changed()
+{
+    auto bank1 = makeBank(), bank2 = makeBank();
+    makeProgram(5, bank1->program[5], bank1->seq[5], "FIRST");
+    makeProgram(9, bank2->program[5], bank2->seq[5], "CHANGED");
+    bank1->used[5] = bank2->used[5] = 1;
+    Processor a;
+    a.setBank(bank1.get());
+    a.setCurrentProgram(5);
+    juce::MemoryBlock st;
+    a.getStateInformation(st);
+    SetState dec;
+    CHECK(StateCodec::decode(st.getData(), st.getSize(), dec) == StateCodec::kOk);
+    Processor b;                                  // the bank changed since the set was saved
+    b.setBank(bank2.get());
+    b.setStateInformation(st.getData(), (int)st.getSize());
+    Snap sb = snapOf(b);
+    const bool storedWins = sb.num == 5 && sameRecords(sb.p, sb.s, bank1->program[5], bank1->seq[5]);
+    Processor c;                                  // the same bank: no difference
+    c.setBank(bank1.get());
+    c.setStateInformation(st.getData(), (int)st.getSize());
+    std::printf("state_bank_changed: saved program 5 \"FIRST\" (edited %d, differs %d); loaded with a bank whose 5 is "
+                "\"CHANGED\": the stored copy %s, edited %d, differs from bank %d (now %d); with the same bank: differs %d\n",
+                (int)dec.edited, (int)dec.differs, storedWins ? "wins" : "LOST", sb.edited, (int)b.lastStateDiffered(),
+                (int)b.differsFromBank(), (int)c.lastStateDiffered());
+    CHECK(!dec.edited && !dec.differs && storedWins && sb.edited == 0 && b.lastStateDiffered() && b.differsFromBank() &&
+          !c.lastStateDiffered() && !c.differsFromBank());
+}
+
+static void state_versioned()
+{
+    program_t p;
+    seq_t s;
+    makeProgram(4, p, s, "VERSIONED");
+    uint8_t rec[PROGRAM_PACKED_MAX], sq[SEQ_PACKED_MAX];
+    const int nrec = program_pack(&p, rec, sizeof rec), nsq = seq_pack(&s, sq, sizeof sq);
+    const uint8_t num12[4] = {12, 0, 0, 0};
+    // 1. a later writer: version 9 (minReader 1), records this build does not know, an unknown flag bit
+    std::vector<uint8_t> later;
+    StateCodec::header(later, 9, 1);
+    const uint8_t junk[17] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17};
+    StateCodec::put(later, "XTRA", junk, sizeof junk);
+    StateCodec::put(later, "PNUM", num12, 4);
+    const uint8_t flags = 0x01 | 0x80;
+    StateCodec::put(later, "FLAG", &flags, 1);
+    StateCodec::put(later, "ZZZZ", junk, 0);
+    StateCodec::put(later, "PROG", rec, (uint32_t)nrec);
+    StateCodec::put(later, "SEQ ", sq, (uint32_t)nsq);
+    StateCodec::put(later, "MORE", junk, 5);
+    Processor a;
+    a.setStateInformation(later.data(), (int)later.size());
+    Snap sa = snapOf(a);
+    const bool laterOk = sa.num == 12 && sameRecords(sa.p, sa.s, p, s) && sa.edited == 1;
+    // 2. an older state: a version-1 program record (Phase 1's values only), no sequence, no flags
+    std::vector<uint8_t> v1rec;
+    v1rec.push_back(1);
+    v1rec.insert(v1rec.end(), p.name, p.name + PROGRAM_NAME_LEN);
+    for (int i = 0; i < P_COUNT_PHASE1; i++) v1rec.push_back((uint8_t)p.v[i]), v1rec.push_back((uint8_t)((uint16_t)p.v[i] >> 8));
+    v1rec.insert(v1rec.end(), p.chord, p.chord + 6);
+    const uint16_t crc = program_crc16(v1rec.data(), (uint32_t)v1rec.size());
+    v1rec.push_back((uint8_t)crc), v1rec.push_back((uint8_t)(crc >> 8));
+    CHECK(v1rec.size() == program_packed_size(1));
+    std::vector<uint8_t> older;
+    StateCodec::header(older, 1, 1);
+    const uint8_t num40[4] = {40, 0, 0, 0};
+    StateCodec::put(older, "PNUM", num40, 4);
+    StateCodec::put(older, "PROG", v1rec.data(), (uint32_t)v1rec.size());
+    Processor b;
+    b.setStateInformation(older.data(), (int)older.size());
+    Snap sb = snapOf(b);
+    bool olderOk = sb.num == 40 && sb.s.len == 0 && sb.edited == 0 && std::memcmp(sb.p.name, p.name, PROGRAM_NAME_LEN) == 0;
+    for (int i = 0; i < P_COUNT_PHASE1; i++) olderOk = olderOk && sb.p.v[i] == p.v[i];
+    kc_param_info_t bpm, arp;
+    kc_param_info(P_BPM, &bpm), kc_param_info(P_ARP_ON, &arp);
+    olderOk = olderOk && sb.p.v[P_BPM] == bpm.def && sb.p.v[P_ARP_ON] == arp.def;   // (what v1 lacks: the defaults)
+    // 3. the plan-Task-3 build's state (it saved nothing): nothing changes
+    Processor c;
+    c.setCurrentProgram(33);
+    c.setStateInformation(nullptr, 0);
+    const bool emptyOk = snapOf(c).num == 33;
+    // 4. refused, nothing changes: a format this build may not read, a cut state, a broken record, a bad number
+    int refused = 0;
+    auto tryBad = [&](std::vector<uint8_t> st, const char* what) {
+        Processor d;
+        d.setCurrentProgram(21);
+        Snap before = snapOf(d);
+        d.setStateInformation(st.data(), (int)st.size());
+        Snap after = snapOf(d);
+        const bool same = after.num == 21 && sameRecords(before.p, before.s, after.p, after.s);
+        if (!same) std::printf("state_versioned: %s CHANGED the instance\n", what);
+        refused += same;
+    };
+    std::vector<uint8_t> tooNew;
+    StateCodec::header(tooNew, 3, 2);
+    tooNew.insert(tooNew.end(), later.begin() + 8, later.end());
+    tryBad(tooNew, "minReader 2");
+    tryBad(std::vector<uint8_t>(later.begin(), later.end() - 3), "a cut state");
+    std::vector<uint8_t> badCrc = later;
+    for (size_t i = 8; i + 4 < badCrc.size(); i++)
+        if (!std::memcmp(&badCrc[i], "PROG", 4)) { badCrc[i + 8 + 30] ^= 0x55; break; }
+    tryBad(badCrc, "a broken program record");
+    std::vector<uint8_t> badNum;
+    StateCodec::header(badNum, 1, 1);
+    const uint8_t num500[4] = {0xF4, 0x01, 0, 0};
+    StateCodec::put(badNum, "PNUM", num500, 4);
+    StateCodec::put(badNum, "PROG", rec, (uint32_t)nrec);
+    tryBad(badNum, "program 500");
+    tryBad({'X', 'X', 'X', 'X', 1, 0, 1, 0}, "another magic");
+    std::printf("state_versioned: a later writer's state (version 9, 3 unknown records, an unknown flag bit) loads: %s; "
+                "an older one (a version-1 program record, no sequence, no flags) loads: %s; the Task-3 build's empty "
+                "state: nothing changes %s; refused with nothing changed: %d of 5\n",
+                laterOk ? "yes" : "NO", olderOk ? "yes" : "NO", emptyOk ? "yes" : "NO", refused);
+    CHECK(laterOk && olderOk && emptyOk && refused == 5);
+}
+
+// the real-time part of Task 4: automation storms and program loads in processBlock: no allocation, no lock
+static void rt_params()
+{
+    auto bank = makeBank();
+    for (int i = 0; i < 20; i++) {
+        makeProgram(i + 1, bank->program[i], bank->seq[i], "RT");
+        bank->used[i] = 1;
+    }
+    Processor p;
+    p.hostSyncTimer(false);                       // (JUCE's timer thread: not processBlock, but counted process-wide)
+    p.setBank(bank.get());
+    const int block = 128;
+    p.setPlayConfigDetails(0, 2, 48000, block);
+    p.prepareToPlay(48000, block);
+    juce::AudioBuffer<float> buf(2, block);
+    juce::MidiBuffer midi;
+    midi.ensureSize(8192);
+    std::vector<juce::AudioProcessorParameter*> ps;
+    for (auto* q : p.getParameters()) ps.push_back(q);
+    long allocs = 0, locks = 0;
+    int served = 0, loads = 0;
+    for (int b = 0; b < 600; b++) {
+        midi.clear();
+        midi.addEvent(juce::MidiMessage::noteOn(1, 48 + b % 24, (juce::uint8)100), b % block);
+        if (b % 2) midi.addEvent(juce::MidiMessage::noteOff(1, 48 + (b - 1) % 24), 3);
+        midi.addEvent(juce::MidiMessage::controllerEvent(1, 74, (b * 5) % 128), 7);
+        if (b % 30 == 11) midi.addEvent(juce::MidiMessage::programChange(1, b % 20), 40), loads++;
+        std::thread asker;
+        std::atomic<bool> release{false};
+        if (b % 50 == 25) {                       // the host's program list, from another thread (served by us); the
+            asker = std::thread([&] {             // asking thread's own work (the bank view, its mutex, thread exit)
+                p.setCurrentProgram(b % 20);      // stays outside the counted part
+                while (!release) std::this_thread::yield();
+            });
+            while (!p.access().posted()) std::this_thread::yield();
+        }
+        long a = alloc_hook_allocs(), l = alloc_hook_locks();
+        alloc_hook_arm(1);
+        for (size_t i = 0; i < ps.size(); i++)    // the storm: every parameter, every block (what the wrapper calls)
+            ps[i]->setValue((float)((b * 37 + (int)i * 11) % 101) / 100.0f);
+        p.processBlock(buf, midi);
+        alloc_hook_arm(0);
+        if (alloc_hook_allocs() - a || alloc_hook_locks() - l)
+            std::printf("rt_params: block %d: %ld allocations, %ld locks%s\n", b, alloc_hook_allocs() - a,
+                        alloc_hook_locks() - l, asker.joinable() ? " (a setCurrentProgram served)" : "");
+        allocs += alloc_hook_allocs() - a, locks += alloc_hook_locks() - l;
+        release = true;
+        if (asker.joinable()) asker.join(), served++;
+        if (b % 10 == 0) p.syncHost();            // (the message thread's part, outside the counted part)
+    }
+    std::printf("rt_params: 600 blocks at 48 kHz, %zu parameters set every block, %d MIDI program changes, %d "
+                "setCurrentProgram calls served: %ld allocations, %ld locks in processBlock (ran on the asking thread: "
+                "%llu)\n", ps.size(), loads, served, allocs, locks, (unsigned long long)p.access().ranHere());
+    CHECK(allocs == 0 && locks == 0 && served == 12 && p.access().ranHere() == 0);
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -642,6 +1163,9 @@ int main(int argc, char** argv)
         {"render_44k_bitexact", render_44k_bitexact}, {"render_48k", render_48k},
         {"midi_sample_accurate", midi_sample_accurate}, {"rt_no_alloc", rt_no_alloc}, {"seam", seam},
         {"silent_block", silent_block}, {"prepare_keeps_pending", prepare_keeps_pending}, {"events_ordered", events_ordered},
+        {"params_layout", params_layout}, {"automation_to_core", automation_to_core}, {"core_to_host", core_to_host},
+        {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
+        {"state_versioned", state_versioned}, {"rt_params", rt_params},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

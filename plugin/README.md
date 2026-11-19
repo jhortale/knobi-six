@@ -4,9 +4,11 @@ KNOBI-SIX as an instrument plugin for Ableton Live 12 on a Mac (Apple Silicon): 
 sequencer (`firmware/src/core/knobi_core.h`) inside a [JUCE](https://juce.com) 8 plugin. Design:
 `docs/superpowers/specs/2026-11-19-plugin-design.md`; plan: `docs/superpowers/plans/2026-11-19-plugin.md`.
 
-Status (plan Task 3): the skeleton. It plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the
-firmware's CC map, bank select + program change) with the init program; no parameters, set state, program bank, host
-clock or panel yet (Tasks 4–8). The window is a placeholder.
+Status (plan Task 4): it plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the firmware's CC map,
+bank select + program change); every sound parameter is a Live parameter (73: automatable, MIDI-mappable); the host's
+program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
+edited, differs from bank). Not yet: the shared bank library (until Task 6 the bank is the core's own: "INIT" in the
+default build), host clock (Task 5), panel (Task 7; the window is a placeholder), sequencer grid (Task 8).
 
 ## Build
 
@@ -81,6 +83,17 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
    (Live compensates the plugin's latency: 256 samples at 44.1 kHz, 332 at 48 kHz, 610 at 88.2, 664 at 96 — 5.8 to
    6.9 ms; Live shows it in the device's context menu → "Delay Compensation").
 5. Two instances on two tracks play at once without affecting each other.
+6. Parameters: the device's parameter list (Configure, or the automation lane chooser) shows the 73 parameters by the
+   firmware's names. Draw automation for FILTER FREQ: the sound follows. Send CC 74 from a clip or a controller: the
+   parameter's value in Live follows; with the arrangement not recording, no automation appears.
+7. Programs: the device's program menu lists `000 INIT` … `499 INIT` (the default build); choosing one loads it. A MIDI
+   program change in a clip changes it too.
+8. Save the set with an edited sound, close, reopen: the same sound (program number, values, sequence) comes back.
+9. To check (not known yet, please report): with the arrangement **recording** and automation armed, does a program
+   change or a CC into KNOBI-SIX write automation for the parameters it changes? JUCE tells the host with a plain value
+   change and no gesture; for AU, JUCE's notification is the one Live and Logic are reported not to record; for VST3 it
+   is a `performEdit` without `beginEdit`, which Live is reported to record while recording. If it does, prefer the AU
+   in Live.
 
 ## auval
 
@@ -100,9 +113,24 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
 - `src/CoreAccess.h`: the threading seam. The audio thread owns the instance in `processBlock`; other threads ask for a
   call, served by the audio thread at the start of its next block (or run directly when the host is not processing).
 - `src/Processor.*`: the JUCE `AudioProcessor` (stereo out, MIDI in, no MIDI out).
+- `src/Params.*`: the parameters. Every id the core exposes (`kc_param_info`) is a parameter with the stable ID
+  `p<id>` and the firmware's name: switches → on/off, selects → a choice (the firmware's labels), knobs → integer steps
+  over the firmware's range (bipolar knobs centred). Not parameters: the stored-only effect ids, the sequence
+  generation, the chord, the name. Automation reaches the core at the first sample of the block the host delivers it
+  in (JUCE 8 hands a plugin one value per parameter per block). Changes the core makes itself (a MIDI CC, a program
+  change, a program load, a set state) are shown in Live's parameters within ~33 ms (a 30 Hz timer on the message
+  thread), with no begin / end gesture; the host's echo of such a change never pulls the core back.
+- `src/ProgramBank.*`: the bank as the plugin reads it (program + sequence of any number, names for the program list),
+  through a private scratch core instance with the same bank, so loading is the firmware's own. `Processor::setBank` is
+  where Task 6's library plugs in.
+- `src/StateCodec.*`: the set state: `KN6S`, version, minimum reader version, then tagged records (program number,
+  flags, the firmware's packed program record, its packed sequence record); unknown records are skipped, older program
+  record versions load. The stored copy wins over the bank on load.
 - `tests/`: CTest — `render_44k_bitexact`, `render_48k`, `midi_sample_accurate`, `rt_no_alloc` (an allocation and
   lock counter around `processBlock`), `seam`, `silent_block`, `prepare_keeps_pending`, `events_ordered`,
-  `bundle_exports` (the bundles export none of the firmware's symbols).
+  `params_layout`, `automation_to_core`, `core_to_host`, `state_roundtrip`, `state_bank_changed`, `state_versioned`,
+  `rt_params` (automation storms and program loads: no allocation, no lock), `bundle_exports` (the bundles export none
+  of the firmware's symbols).
 - What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
   audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone
   allocators, so `operator new`) and pthread mutexes / rwlocks / `os_unfair_lock`. Not covered: what JUCE's AU / VST3

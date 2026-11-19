@@ -64,7 +64,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(knobi_core PUBLIC Threads::Threads)
 
 # ---- the DSP around it, no JUCE (tested on its own): timeline, sample-accurate events, resampler, the threading seam
-add_library(knobi_dsp STATIC src/CoreRunner.cpp src/Resampler.cpp)
+add_library(knobi_dsp STATIC src/CoreRunner.cpp src/Resampler.cpp src/ProgramBank.cpp src/StateCodec.cpp)
 target_include_directories(knobi_dsp PUBLIC src)
 target_link_libraries(knobi_dsp PUBLIC knobi_core)
 target_compile_options(knobi_dsp PRIVATE -O2 -Wall -Wextra)
@@ -89,7 +89,7 @@ juce_add_plugin(KnobiSix
     VST3_CATEGORIES Instrument Synth
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-target_sources(KnobiSix PRIVATE src/Processor.cpp)
+target_sources(KnobiSix PRIVATE src/Processor.cpp src/Params.cpp)
 target_compile_definitions(KnobiSix PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0
     KNOBI_PLUGIN_LOCAL=$<BOOL:${KNOBI_FACTORY_LOCAL}>)

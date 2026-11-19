@@ -90,6 +90,7 @@ public:
     }
 
     uint64_t ranHere() const { return ranHere_; } // (tests) calls the asking thread ran itself
+    bool posted() const { return req_.load(std::memory_order_acquire) == kPosted; }   // (tests) a call waits
 
 private:
     enum { kFree, kAudio, kOther };               // owner_

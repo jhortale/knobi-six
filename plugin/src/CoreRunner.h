@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <vector>
 #include "Resampler.h"
-#include "core/knobi_core.h"
+#include "CoreC.h"
 
 namespace knobi {
 
@@ -55,6 +55,9 @@ public:
     // MIDI). The queue is kept in frame order (stable), so paramAt calls made before process() and that block's MIDI
     // act in offset order, whatever order they were given in
     void paramAt(uint32_t offset, uint16_t id, int32_t value);
+    // a paramAt for id still waiting for its frame (the core's value is not the host's yet: Processor's core -> host
+    // scan leaves id alone until it is applied)
+    bool paramPending(uint16_t id) const { return id < KC_PARAM_ID_LIMIT && paramQueued_[id] != 0; }
     // n session samples the host had but the plugin could not render (Processor's silent block, CoreAccess.h): the
     // core renders them (output dropped) so the timeline stays the host's; ev (that stretch's MIDI) acts at its start
     void skip(uint32_t n, const MidiEvent* ev, uint32_t nev);
@@ -82,6 +85,8 @@ private:
     Ev queue_[kQueue];
     uint32_t qr_ = 0, qw_ = 0;
     uint64_t dropped_ = 0;
+    uint16_t paramQueued_[KC_PARAM_ID_LIMIT] = {};   // paramAt events queued, by id
+    void applied(const Ev& e);                    // (an event given to the core)
     int16_t tmp_[2 * KC_BLOCK];
     static constexpr uint32_t kScratch = 256;
     float scratchL_[kScratch], scratchR_[kScratch];   // (skip's dropped output)

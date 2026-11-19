@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // KNOBI-SIX plugin: the AudioProcessor. One core instance per plugin instance (CoreRunner), driven on the audio thread;
 // MIDI at its sample offsets; 44.1 kHz inside, resampled to the session's rate; the latency reported to the host.
-// Other threads reach the instance only through access() (CoreAccess.h). Parameters, state and programs: plan Task 4.
+// Other threads reach the instance only through access() (CoreAccess.h).
+// Plan Task 4: the parameters (Params.h: layout, host <-> core sync, no loop), the host's program list (500 programs,
+// following MIDI program change + bank select: the core's), the bank as the plugin sees it (ProgramBank.h: the seam
+// plan Task 6's library plugs into, setBank) and the set state (StateCodec.h; through access(), never kc_* directly).
 #pragma once
 #include <array>
+#include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "CoreAccess.h"
 #include "CoreRunner.h"
+#include "Params.h"
+#include "ProgramBank.h"
+#include "StateCodec.h"
 
 namespace knobi {
 
-class Processor : public juce::AudioProcessor {
+class Processor : public juce::AudioProcessor, private juce::Timer {
 public:
     static constexpr int kMaxEvents = 2048;      // MIDI messages a block (beyond: the rest of that block dropped)
     static constexpr int kPending = 256;         // MIDI kept from silent blocks (beyond: all notes off at the replay)
@@ -34,14 +41,34 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override { return 1; }  // (the 500-program bank: plan Task 4 / 6)
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return "INIT"; }
+    // the host's program list: the bank's 500 programs ("000 INIT" .. "499 ..."); the current one follows MIDI program
+    // change + bank select too (the core's). setCurrentProgram loads it as a program change does (the edit is lost,
+    // as on the keyboard: WRITE is the library's, plan Task 6)
+    int getNumPrograms() override { return (int)KC_PROGRAMS; }
+    int getCurrentProgram() override { return program_.load(std::memory_order_acquire); }
+    void setCurrentProgram(int index) override;
+    const juce::String getProgramName(int index) override;
     void changeProgramName(int, const juce::String&) override {}
 
-    void getStateInformation(juce::MemoryBlock&) override {}   // (plan Task 4, through access())
-    void setStateInformation(const void*, int) override {}
+    // the set state (StateCodec.h): the program number, the program + sequence in play, edited, differs from bank.
+    // Loading it: the stored copy wins over the bank's program (spec "Set state"); the parameters follow
+    void getStateInformation(juce::MemoryBlock& dest) override;
+    void setStateInformation(const void* data, int size) override;
+
+    Params& params() { return params_; }
+    // the core's changes to the host (Params.h), the message thread: its timer calls it; tests call it
+    void syncHost();
+    // the 30 Hz timer that calls syncHost (on by default). Tests that count allocations process-wide switch it off:
+    // JUCE's timer thread posts to the message queue (it allocates and locks, on its own thread, never the audio's)
+    void hostSyncTimer(bool on) { if (on) startTimerHz(30); else stopTimer(); }
+    // the user layer of the bank (plan Task 6's library; nullptr: none): to the playing instance and the bank view. The
+    // caller keeps it alive while it may be in use (knobi_core.h kc_bank_set / kc_bank_in_use). false: refused
+    bool setBank(const kc_bank_t* bank);
+    ProgramBank& bank() { return bank_; }
+    bool edited() const { return edited_.load(std::memory_order_acquire); }   // the program in play changed since loaded
+    // the program in play is not the bank's program of its number (computed now: the message thread)
+    bool differsFromBank();
+    bool lastStateDiffered() const { return stateDiffers_.load(); }   // (the panel, Task 7) as of the last set state load
 
     CoreAccess& access() { return access_; }
     CoreRunner& runner() { return runner_; }     // (the audio thread, or inside access().run)
@@ -49,8 +76,22 @@ public:
     uint64_t silentBlocks() const { return silentBlocks_; }   // blocks output silent (CoreAccess.h)
 
 private:
+    void timerCallback() override { syncHost(); }
+    void scanCore();                              // the core's values -> Params (alone with the core)
+    void applyHostChanges();                      // Params -> the core at the block's first sample (the audio thread)
+    struct Snapshot { int32_t number; program_t program; seq_t seq; int edited; };
+    void snapshot(Snapshot& s);                   // the program in play (through access())
+
     CoreRunner runner_;
     CoreAccess access_;
+    Params params_{*this};
+    ProgramBank bank_;
+    std::array<int32_t, Params::kLimit> lastCore_{};   // the core's values as last scanned (alone with the core)
+    std::atomic<int> program_{0};
+    std::atomic<bool> programMoved_{false}, edited_{false}, stateDiffers_{false};
+    std::array<juce::String, KC_PROGRAMS> names_;    // (the message thread; filled on first use, cleared by setBank)
+    bool namesValid_ = false;
+    std::mutex namesLock_;
     std::array<MidiEvent, kMaxEvents> events_{};
     uint64_t midiDropped_ = 0, silentBlocks_ = 0;
     // the silent path (CoreAccess.h): this processor's own, never CoreRunner's (a call may be using the instance)

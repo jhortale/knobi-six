@@ -13,7 +13,8 @@ target_compile_definitions(test_plugin PRIVATE $<TARGET_PROPERTY:KnobiSix,COMPIL
 target_compile_options(test_plugin PRIVATE -O2 -Wno-float-equal -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-conversion)
 
 foreach(t render_44k_bitexact render_48k midi_sample_accurate rt_no_alloc seam silent_block prepare_keeps_pending
-        events_ordered)
+        events_ordered params_layout automation_to_core core_to_host state_roundtrip state_bank_changed
+        state_versioned rt_params)
     add_test(NAME ${t} COMMAND test_plugin ${t})
 endforeach()
 
