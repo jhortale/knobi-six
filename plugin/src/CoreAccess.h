@@ -13,6 +13,9 @@
 // fn): Processor then outputs that block faded to silence, keeps its MIDI for the next block and keeps the timeline
 // (Processor.cpp, test silent_block). fn must itself be real-time safe (it may run on the audio thread): copies only.
 // The asking side takes a mutex (several non-audio threads queue up there), never the audio thread.
+// Time: the asking side's idle and timeout measures read a Clock (production: the monotonic clock, polled every
+// 500 us; tests: a clock they advance themselves, setClock, so the idle rule is exercised without real sleeps). The
+// audio side reads no clock.
 #pragma once
 #include <atomic>
 #include <chrono>
@@ -26,6 +29,21 @@ namespace knobi {
 class CoreAccess {
 public:
     using Fn = void (*)(void* ctx);
+    struct Clock {                                // the asking side's time
+        virtual ~Clock() = default;
+        virtual int64_t nowUs() = 0;              // monotonic, microseconds
+        virtual void pause() = 0;                 // between two looks at the request
+    };
+    struct SteadyClock final : Clock {            // production
+        int64_t nowUs() override
+        {
+            return std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+        void pause() override { std::this_thread::sleep_for(std::chrono::microseconds(500)); }
+    };
+    // (tests) the clock run() reads; nullptr: the steady clock. Set it while no run() is waiting
+    void setClock(Clock* c) { clock_ = c ? c : &steady_; }
     static constexpr int kIdleMs = 20;            // the least idle time taken as "the host is not processing"
 
     // the host's block period (prepareToPlay): idle = no block for max(kIdleMs, 3 block periods)
@@ -63,15 +81,16 @@ public:
         std::lock_guard<std::mutex> side(side_);
         fn_ = fn, ctx_ = ctx;
         req_.store(kPosted, std::memory_order_release);
-        auto t0 = std::chrono::steady_clock::now(), seen = t0;
+        const int64_t t0 = clock_->nowUs();
+        int64_t seen = t0;
         uint64_t last = blocks_.load(std::memory_order_relaxed);
         for (;;) {
             int r = req_.load(std::memory_order_acquire);
             if (r == kDone) { req_.store(kIdle, std::memory_order_relaxed); return true; }
-            auto now = std::chrono::steady_clock::now();
+            const int64_t now = clock_->nowUs();
             uint64_t b = blocks_.load(std::memory_order_relaxed);
             if (b != last) last = b, seen = now;
-            if (r == kPosted && now - seen >= std::chrono::milliseconds(idleMs())) {   // the host is not processing
+            if (r == kPosted && now - seen >= (int64_t)idleMs() * 1000) {   // the host is not processing
                 int idle = kFree;
                 if (owner_.compare_exchange_strong(idle, kOther, std::memory_order_acquire)) {
                     int posted = kPosted;
@@ -81,11 +100,11 @@ public:
                     if (mine) { req_.store(kIdle, std::memory_order_relaxed); ranHere_++; return true; }
                 }
             }
-            if (r == kPosted && now - t0 >= std::chrono::milliseconds(timeoutMs)) {
+            if (r == kPosted && now - t0 >= (int64_t)timeoutMs * 1000) {
                 int posted = kPosted;
                 if (req_.compare_exchange_strong(posted, kIdle, std::memory_order_acq_rel)) return false;
             }
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            clock_->pause();
         }
     }
 
@@ -102,6 +121,8 @@ private:
     void* ctx_ = nullptr;
     std::mutex side_;
     uint64_t ranHere_ = 0;
+    SteadyClock steady_;
+    Clock* clock_ = &steady_;
 };
 
 } // namespace knobi
