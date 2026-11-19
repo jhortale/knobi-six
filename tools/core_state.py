@@ -16,9 +16,10 @@ unchanged: its preprocessed tokens are the same). Each block of it is wrapped li
 
 and this script writes firmware/src/core/state/<name>.h from the lines after #else: the #define lines as they are, a
 struct kc_st_<name> with one field per variable (type, array size), kc_st_<name>_init (the initial values, all else
-zero, as a static's), the thread's binding kc_tls_<name> (a _Thread_local pointer: the instance this thread runs,
-set by knobi_core.c on every call) and a macro per variable, `#define eng_synth (kc_tls_engine->eng_synth)`, so the
-firmware's code, unchanged, reads and writes the instance's field. state/list.h lists the blocks for knobi_core.c.
+zero, as a static's), the block's slot KC_IX_<name> and a macro per variable,
+`#define eng_synth (KC_ST(engine)->eng_synth)`: KC_ST (knobi_core.c) is the block of the instance this thread runs
+(kc_slots(): a pthread key's value, set by knobi_core.c on every call), so the firmware's code, unchanged, reads and
+writes the instance's field. state/list.h lists the blocks for knobi_core.c.
 Inside a block: static declarations (any number of declarators, an initializer each, array sizes, __attribute__s),
 #define lines, comments, and #ifdef DINGHY_HOST / #else / #endif (the core is a host build: the first branch).
 
@@ -132,6 +133,8 @@ def parse_block(lines, src):
         typ, name, dims, init = parse_declarator(decls[0], src)
         if not typ:
             fail(f"{src}: no type in '{stmt}'")
+        if len(decls) > 1 and typ.rstrip().endswith("*"):   # (static T *a, b: b is a T, not a T *)
+            fail(f"{src}: '{stmt}': a pointer declarator with others: one declaration each")
         variables.append((typ, name, dims, init))
         for d in decls[1:]:
             t2, name, dims, init = parse_declarator(d, src)
@@ -174,19 +177,19 @@ def find_blocks():
     return blocks
 
 
-def header(rel, name, line, defines, variables):
-    st, tls = f"kc_st_{name}", f"kc_tls_{name}"
+def header(rel, name, ix, defines, variables):
+    st = f"kc_st_{name}"
     o = ["/* SPDX-License-Identifier: GPL-3.0-only */",
          f"/* Written by tools/core_state.py from firmware/src/{rel} (a state block): do not edit. The",
-         " * firmware's state there, per knobi_core instance: the struct, the initial values, the thread's binding (the",
-         " * instance it runs: knobi_core.c kc_bind) and a macro per variable. Not for the device build. */",
+         " * firmware's state there, per knobi_core instance: the struct, the initial values, its slot and a macro per",
+         " * variable (KC_ST: the block of the instance this thread runs, knobi_core.c kc_bind). Not for the device build. */",
          f"#ifndef KC_STATE_{name.upper()}_H", f"#define KC_STATE_{name.upper()}_H"]
     o += defines
     o.append(f"struct {st} {{")
     for t, n, d, _ in variables:
         o.append(f"    {t} {n}{d};")
     o.append("};")
-    o.append(f"static _Thread_local struct {st} *{tls};")
+    o.append(f"#define KC_IX_{name} {ix}")
     o.append(f"static void {st}_init(struct {st} *s)")
     o.append("{")
     o.append("    memset((void *)s, 0, sizeof *s);")
@@ -200,7 +203,7 @@ def header(rel, name, line, defines, variables):
             o.append(f"    s->{n} = {init};")
     o.append("}")
     for t, n, d, _ in variables:
-        o.append(f"#define {n} ({tls}->{n})")
+        o.append(f"#define {n} (KC_ST({name})->{n})")
     o.append("#endif")
     return "\n".join(o) + "\n"
 
@@ -211,15 +214,16 @@ def main():
     blocks = find_blocks()
     if not blocks:
         fail("no blocks found")
-    for rel, name, line, body in blocks:
+    for ix, (rel, name, line, body) in enumerate(blocks, 1):   # (slot 0: knobi_core.c's own kc_st_core)
         defines, variables = parse_block(body, rel)
         if not variables:
             fail(f"{rel}: block {name}: no variables")
-        want[f"{name}.h"] = header(rel, name, line, defines, variables)
+        want[f"{name}.h"] = header(rel, name, ix, defines, variables)
     want["list.h"] = "\n".join([
         "/* SPDX-License-Identifier: GPL-3.0-only */",
         "/* Written by tools/core_state.py: the per-instance state blocks (core/state/<block>.h), in knobi_core.c's order */",
-        "#define KC_STATE_BLOCKS(X) " + " ".join(f"X({b[1]})" for b in blocks), ""])
+        "#define KC_STATE_BLOCKS(X) " + " ".join(f"X({b[1]})" for b in blocks),
+        f"#define KC_SLOTS {len(blocks) + 1}", ""])
     have = set(f for f in os.listdir(OUT) if f.endswith(".h")) if os.path.isdir(OUT) else set()
     stale = sorted(have - set(want))
     wrong = sorted(f for f in want if not os.path.exists(os.path.join(OUT, f)) or open(os.path.join(OUT, f)).read() != want[f])

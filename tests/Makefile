@@ -7,6 +7,7 @@
 # with firmware/src/app.c as tests/run_host.sh does and plays tests/scripts/core_ref.txt into $(OUT)/core_ref.wav. Both
 # with FP_EXACT: no fused multiply-add (the filter's float path; a compiler fuses differently in different files).
 # test_core's no_mutable_globals reads $(OUT)/knobi_core.o (the core alone, -O0: nothing folded away) with nm / objdump;
+# On macOS also $(OUT)/libknobi_core.dylib: test_core's first_render_no_alloc loads it as the plugin bundle would (dlopen).
 # tools/core_state.py --check: the core's per-instance state headers (firmware/src/core/state/) match the firmware.
 #   make -C tests tsan    test_split.c's split_threads_tsan: set B on a second thread, and test_core's threads (two
 #                         instances at once, a bank swapped from another thread), under ThreadSanitizer (skipped, not
@@ -36,6 +37,8 @@ core-obj:
 	@mkdir -p $(OUT)
 	@python3 ../tools/core_state.py --check
 	@$(CC) $(CFLAGS) -O0 $(FP_EXACT) -c -o $(OUT)/knobi_core.o ../firmware/src/core/knobi_core.c
+	@if [ "$$(uname -s)" = Darwin ]; then \
+	  $(CC) $(CFLAGS) $(FP_EXACT) -fPIC -shared -o $(OUT)/libknobi_core.dylib ../firmware/src/core/knobi_core.c; fi
 
 tsan:
 	@mkdir -p $(OUT)

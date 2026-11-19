@@ -19,11 +19,16 @@
  *                         on one thread: each gives the samples it gives alone
  *   two_instances_parallel     the same two on two threads at once (make -C tests tsan: under ThreadSanitizer)
  *   bank_swap_threads     kc_bank_set from another thread while an instance renders and loads programs (tsan too)
+ *   bank_free_rule        a thread sets banks from a pool and "frees" (overwrites with FREED) each replaced bank as soon
+ *                         as kc_bank_in_use, asked after the replacing set, returns another bank (knobi_core.h); the
+ *                         instance, rendering and loading on another thread, never loads a FREED program (tsan too)
  *   create_recreate       create / destroy / create any number of times, several alive at once: each a fresh instance
- *   no_mutable_globals    the core's object (../build/unit/knobi_core.o, -O0) has no writable data but the threads'
- *                         instance bindings (kc_tls_*): nm / objdump
+ *   no_mutable_globals    the core's object (../build/unit/knobi_core.o, -O0) has no writable data but the binding's
+ *                         pthread key (kc_key*: made once, read-only after): nm / objdump
  *   param_while_pending   kc_param_set after a kc_program_set the engine could not take yet edits the program set
  *   bank_validated        kc_bank_set refuses a bank with an entry the firmware would not store; kc_bank_in_use
+ *   first_render_no_alloc (macOS) the core as a dylib (dlopen'd, as in the plugin bundle): a thread's first kc_render
+ *                         allocates nothing (malloc zone statistics; a lazily allocated thread-local would)
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
 #include <stdio.h>
@@ -488,6 +493,76 @@ static void bank_swap_threads(void)
     kc_destroy(k);
 }
 
+/* the free rule of knobi_core.h kc_bank_set: banks from a pool; a replaced bank is overwritten ("FREED", as a free
+ * would leave it) once kc_bank_in_use, asked after the set that replaced it, returns another bank */
+#define FREE_POOL 6
+static kc_bank_t free_pool[FREE_POOL];
+static atomic_int free_state[FREE_POOL];        /* 0 free, 1 set or in use, 2 replaced: waiting */
+static atomic_int free_stop, free_done;
+static void free_fill(int i, const char *name)
+{
+    program_init(&free_pool[i].program[105]);
+    strcpy(free_pool[i].program[105].name, name);
+    seq_clear(&free_pool[i].seq[105]);
+    free_pool[i].used[105] = 1;
+}
+static void *free_thread(void *arg)
+{
+    kc_t *k = arg;
+    int cur = 0, sets = 0;
+    while (!atomic_load(&free_stop)) {
+        int next = -1;
+        for (int i = 0; i < FREE_POOL; i++)
+            if (atomic_load(&free_state[i]) == 0) { next = i; break; }
+        if (next >= 0) {
+            free_fill(next, "LIVE");
+            atomic_store(&free_state[next], 1);
+            kc_bank_set(k, &free_pool[next]);
+            atomic_store(&free_state[cur], 2);
+            cur = next, sets++;
+        }
+        for (int i = 0; i < FREE_POOL; i++) {
+            const kc_bank_t *u = kc_bank_in_use(k);
+            if (atomic_load(&free_state[i]) == 2 && u != &free_pool[i]) {
+                free_fill(i, "FREED");
+                atomic_store(&free_state[i], 0);
+            }
+        }
+    }
+    atomic_store(&free_done, sets);
+    return NULL;
+}
+static void bank_free_rule(void)
+{
+    kc_t *k = kc_create();
+    pthread_t th;
+    int16_t buf[2 * 32];
+    int freed = 0, live = 0;
+    if (!k) { printf("bank_free_rule: no instance\n"); CHECK(0); return; }
+    for (int i = 0; i < FREE_POOL; i++) atomic_store(&free_state[i], 0);
+    free_fill(0, "LIVE");
+    atomic_store(&free_state[0], 1);
+    kc_bank_set(k, &free_pool[0]);
+    atomic_store(&free_stop, 0);
+    pthread_create(&th, NULL, free_thread, k);
+    for (int i = 0; i < 4000; i++) {
+        program_t p;
+        kc_program_select(k, i & 1 ? 105 : 3);
+        kc_render(k, buf, 32);
+        kc_program_get(k, NULL, &p, NULL, NULL);
+        if (i & 1) {
+            if (!strcmp(p.name, "LIVE")) live++;
+            else freed++;
+        }
+    }
+    atomic_store(&free_stop, 1);
+    pthread_join(th, NULL);
+    printf("bank_free_rule: %d banks set while rendering; program 105 loaded live %d times, from a freed bank %d\n",
+           atomic_load(&free_done), live, freed);
+    CHECK(freed == 0 && live == 2000 && atomic_load(&free_done) > 10);
+    kc_destroy(k);
+}
+
 static void create_recreate(void)
 {
     int16_t *o = calloc(2u * SC_FRAMES, 2);
@@ -511,7 +586,7 @@ static void create_recreate(void)
 static void no_mutable_globals(void)
 {
     char line[512], bad_names[2048] = "";
-    int bad = 0, tls = 0, lines = 0;
+    int bad = 0, keys = 0, lines = 0;
 #ifdef __APPLE__
     FILE *f = popen("nm -m " CORE_OBJ " 2>&1", "r");   /* addr (seg,sect) kind name */
 #else
@@ -532,26 +607,29 @@ static void no_mutable_globals(void)
         if (!strncmp(name, "ltmp", 4) || (name[0] == 'l' && name[1] == '_')) continue;   /* (the assembler's labels) */
 #else
         {
-            char *tab = strchr(line, '\t'), *sec;   /* "addr flags(7) section\tsize name" */
-            char flags[8];
-            if (!tab || strlen(line) < 26) continue;
-            memcpy(flags, line + 17, 7), flags[7] = 0;
-            if (strpbrk(flags, "FfdD")) continue;     /* (functions, files, sections, debug: not data) */
+            /* "addr flags section<TAB>size name": addr any width, flags up to 7 columns (some blank), the section
+             * the last word before the tab */
+            char *tab = strchr(line, '\t'), *sec, *flags = line;
+            if (!tab) continue;
             *tab = 0;
-            sec = line + 25;
+            while (*flags && *flags != ' ') flags++;  /* (past the address) */
+            sec = strrchr(line, ' ');
+            if (!sec || sec < flags) continue;
+            *sec++ = 0;
+            if (strpbrk(flags, "FfdD")) continue;     /* (functions, files, sections, debug: not data) */
             writable = (!strncmp(sec, ".data", 5) && strncmp(sec, ".data.rel.ro", 12)) || !strncmp(sec, ".bss", 4) ||
                        !strncmp(sec, ".tbss", 5) || !strncmp(sec, ".tdata", 6) || !strcmp(sec, "*COM*");
         }
 #endif
         if (!writable) continue;
-        if (!strncmp(name, "kc_tls_", 7)) { tls++; continue; }
+        if (!strncmp(name, "kc_key", 6)) { keys++; continue; }
         bad++;
         if (strlen(bad_names) + strlen(name) + 2 < sizeof bad_names) strcat(bad_names, " "), strcat(bad_names, name);
     }
     pclose(f);
-    printf("no_mutable_globals: %s: %d symbols, %d thread bindings (kc_tls_*), %d other writable:%s\n", CORE_OBJ, lines, tls,
-           bad, bad_names);
-    CHECK(lines > 100 && tls > 0 && bad == 0);
+    printf("no_mutable_globals: %s: %d symbols, %d for the binding's key (kc_key*), %d other writable:%s\n", CORE_OBJ, lines,
+           keys, bad, bad_names);
+    CHECK(lines > 100 && keys > 0 && bad == 0);
 }
 
 static void param_while_pending(void)
@@ -618,12 +696,56 @@ static void bank_validated(void)
     kc_destroy(k);
 }
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <malloc/malloc.h>
+#ifndef CORE_DYLIB
+#define CORE_DYLIB "../build/unit/libknobi_core.dylib"
+#endif
+static size_t blocks_used(void) { malloc_statistics_t st; malloc_zone_statistics(NULL, &st); return st.blocks_in_use; }
+typedef struct { void (*render)(kc_t *, int16_t *, uint32_t); kc_t *k; long delta[2]; } alloc_t;
+static void *alloc_thread(void *arg)
+{
+    alloc_t *a = arg;
+    static int16_t buf[2 * KC_BLOCK * 4];
+    for (int i = 0; i < 2; i++) {               /* the first render on this thread, then the next */
+        size_t u0 = blocks_used();
+        a->render(a->k, buf, KC_BLOCK * 4u);
+        a->delta[i] = (long)(blocks_used() - u0);
+    }
+    return NULL;
+}
+static void first_render_no_alloc(void)
+{
+    void *h = dlopen(CORE_DYLIB, RTLD_NOW | RTLD_LOCAL);
+    kc_t *(*create)(void) = h ? (kc_t *(*)(void))dlsym(h, "kc_create") : NULL;
+    void (*destroy)(kc_t *) = h ? (void (*)(kc_t *))dlsym(h, "kc_destroy") : NULL;
+    alloc_t a = {h ? (void (*)(kc_t *, int16_t *, uint32_t))dlsym(h, "kc_render") : NULL, NULL, {-1, -1}};
+    int bad = 0;
+    if (!create || !destroy || !a.render) { printf("first_render_no_alloc: %s: %s\n", CORE_DYLIB, dlerror()); CHECK(0); return; }
+    a.k = create();
+    for (int t = 0; t < 3; t++) {               /* three fresh threads, as a host's audio workers */
+        pthread_t th;
+        pthread_create(&th, NULL, alloc_thread, &a);
+        pthread_join(th, NULL);
+        printf("first_render_no_alloc: thread %d: blocks allocated by the first kc_render %ld, the second %ld\n", t,
+               a.delta[0], a.delta[1]);
+        bad += a.delta[0] != 0 || a.delta[1] != 0;
+    }
+    destroy(a.k);
+    CHECK(bad == 0);
+}
+#else
+static void first_render_no_alloc(void) { printf("first_render_no_alloc: macOS only: skipped\n"); }
+#endif
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifdef KC_TSAN                                  /* (make -C tests tsan: the threads only) */
     two_instances_parallel();
     bank_swap_threads();
+    bank_free_rule();
 #else
     core_matches_host();
     param_roundtrip();
@@ -633,10 +755,12 @@ int main(void)
     two_instances_interleaved();
     two_instances_parallel();
     bank_swap_threads();
+    bank_free_rule();
     create_recreate();
     no_mutable_globals();
     param_while_pending();
     bank_validated();
+    first_render_no_alloc();
 #endif
     if (fails) { printf("test_core: %d FAILED\n", fails); return 1; }
     printf("test_core: all passed\n");

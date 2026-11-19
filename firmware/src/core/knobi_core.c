@@ -23,10 +23,12 @@
  * declared where it is (the device build unchanged), in blocks wrapped "#ifdef KNOBI_CORE / #include
  * core/state/<block>.h / #else / the declarations / #endif": tools/core_state.py writes each header from the
  * declarations (a struct per block, its initial values, a macro per variable naming the field of the instance this
- * thread runs: kc_tls_<block>, a _Thread_local pointer). The core's own (the platform stubs' state, the bank in use) is
- * kc_st_core below, the same way. Every kc_* call binds its instance to the calling thread (kc_bind: the pointers set,
- * the previous ones put back at the end), so instances on different threads never meet, and one thread may run several
- * in turn. Function statics in the shared code are scratch copies there (locals under KNOBI_CORE); voice_c4_q16 is a
+ * thread runs: KC_ST(block), through the instance's slot table). The core's own (the platform stubs' state, the bank in
+ * use) is kc_st_core below, slot 0, the same way. Every kc_* call binds its instance to the calling thread (kc_bind: a
+ * pthread key's value set to the instance's slots, the previous value put back at the end), so instances on different
+ * threads never meet, and one thread may run several in turn. A pthread key, not _Thread_local: on macOS a thread-local
+ * in a loaded bundle is allocated (malloc) on its first use by each thread, i.e. in the host's audio callback;
+ * pthread_setspecific / getspecific never allocate (tests/unit/test_core.c first_render_no_alloc). Function statics in the shared code are scratch copies there (locals under KNOBI_CORE); voice_c4_q16 is a
  * constant. tests/unit/test_core.c no_mutable_globals checks the object has no other writable data.
  *
  * Not for the device: built with DINGHY_HOST (the firmware's host paths: no .pool sections, the CPU guard's clock is
@@ -47,7 +49,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <pthread.h>
 #include "knobi_core.h"
+#include "state/list.h"                         /* (the blocks: KC_STATE_BLOCKS, KC_SLOTS) */
 
 #if defined __GNUC__
 #pragma GCC diagnostic ignored "-Wunused-function"   /* (the panel's and the stores' helpers the core never calls) */
@@ -71,14 +75,22 @@ struct kc_st_core {                             /* the core's own state, per ins
     uint32_t eng_fake_ticks, eng_fake_per_voice;   /* (engine.c's host CPU guard clock: never advanced here) */
     const kc_bank_t *bank;                      /* kc_bank: the bank this call reads (kc_bind: the newest kc_bank_set) */
 };
-static _Thread_local struct kc_st_core *kc_tls_core;
-#define fm1_ms (kc_tls_core->fm1_ms)
-#define fm1_in (kc_tls_core->fm1_in)
-#define smk_pad_events (kc_tls_core->smk_pad_events)
-#define store_sliced (kc_tls_core->store_sliced)
-#define eng_fake_ticks (kc_tls_core->eng_fake_ticks)
-#define eng_fake_per_voice (kc_tls_core->eng_fake_per_voice)
-#define kc_bank (kc_tls_core->bank)
+/* the binding: kc_key's value on a thread is the slot table of the instance it runs (kc_bind), slot KC_IX_<block> the
+ * instance's block. kc_key*: written once (pthread_once, kc_create), read-only after: no per-instance state */
+static pthread_key_t kc_key;
+static pthread_once_t kc_key_once = PTHREAD_ONCE_INIT;
+static int kc_key_err;
+static void kc_key_make(void) { kc_key_err = pthread_key_create(&kc_key, NULL); }
+static inline void **kc_slots(void) { return (void **)pthread_getspecific(kc_key); }
+#define KC_ST(b) ((struct kc_st_##b *)kc_slots()[KC_IX_##b])
+#define KC_IX_core 0
+#define fm1_ms (KC_ST(core)->fm1_ms)
+#define fm1_in (KC_ST(core)->fm1_in)
+#define smk_pad_events (KC_ST(core)->smk_pad_events)
+#define store_sliced (KC_ST(core)->store_sliced)
+#define eng_fake_ticks (KC_ST(core)->eng_fake_ticks)
+#define eng_fake_per_voice (KC_ST(core)->eng_fake_per_voice)
+#define kc_bank (KC_ST(core)->bank)
 static uint32_t fm1_input_edges(uint32_t *released) { *released = 0; return 0; }
 static int32_t fm1_enc_take(uint32_t e) { (void)e; return 0; }
 static int32_t smk_pad_take(void) { return -1; }
@@ -152,10 +164,9 @@ uint32_t seqst_total(void) { return 0; }
 #include "../ui/midi_map.c"
 
 /* ---- the instance */
-#include "state/list.h"
 #define KC_ST_FIELD(b) struct kc_st_##b b;
-#define KC_ST_PTR(b) struct kc_st_##b *b;
 struct kc {
+    void *slots[KC_SLOTS];                      /* kc_key's value while it runs: &core, then each block's */
     struct kc_st_core core;                     /* all the state the shared code reads and writes, this instance's */
     KC_STATE_BLOCKS(KC_ST_FIELD)
     _Atomic(const kc_bank_t *) bank_next;       /* kc_bank_set's (any thread) */
@@ -177,28 +188,25 @@ struct kc {
     seq_t pend_s;
 };
 
-/* the instance k runs on this thread until kc_unbind (every kc_* call: bound on entry, the previous binding put back on
- * return); it reads the newest bank set */
-typedef struct { struct kc_st_core *core; KC_STATE_BLOCKS(KC_ST_PTR) } kc_binding_t;
+/* the instance k runs on this thread until kc_unbind (every kc_* call that touches the shared code: bound on entry,
+ * the previous binding put back on return); it takes the newest bank set. The bank: the one published in bank_used is
+ * the one read; the loop republishes until bank_next has not moved meanwhile (all seq_cst), so a bank replaced before
+ * kc_bank_in_use returned something else is never read again (knobi_core.h kc_bank_in_use) */
+typedef void *kc_binding_t;
 static kc_binding_t kc_bind(const kc_t *kk)
 {
     kc_t *k = (kc_t *)kk;                       /* (a const call binds too: the shared code's reads are macros) */
-    kc_binding_t was;
-    was.core = kc_tls_core, kc_tls_core = &k->core;
-#define KC_BIND(b) was.b = kc_tls_##b, kc_tls_##b = &k->b;
-    KC_STATE_BLOCKS(KC_BIND)
-#undef KC_BIND
-    k->core.bank = atomic_load_explicit(&k->bank_next, memory_order_acquire);
-    atomic_store_explicit(&k->bank_used, k->core.bank, memory_order_release);
+    kc_binding_t was = pthread_getspecific(kc_key);
+    const kc_bank_t *b;
+    pthread_setspecific(kc_key, k->slots);
+    do {
+        b = atomic_load(&k->bank_next);
+        atomic_store(&k->bank_used, b);
+    } while (atomic_load(&k->bank_next) != b);
+    k->core.bank = b;
     return was;
 }
-static void kc_unbind(kc_binding_t was)
-{
-    kc_tls_core = was.core;
-#define KC_UNBIND(b) kc_tls_##b = was.b;
-    KC_STATE_BLOCKS(KC_UNBIND)
-#undef KC_UNBIND
-}
+static void kc_unbind(kc_binding_t was) { pthread_setspecific(kc_key, was); }
 
 static void kc_track_load(kc_t *k)             /* a program load queued since: it is the new base */
 {
@@ -263,11 +271,11 @@ static void kc_block(kc_t *k)
 
 kc_t *kc_create(void)
 {
-    kc_t *k = calloc(1, sizeof *k);
+    kc_t *k;
     kc_binding_t was;
-    if (!k) return NULL;
-    memset(&k->core, 0, sizeof k->core);        /* (every block at its declarations' values: zero unless given) */
-#define KC_INIT(b) kc_st_##b##_init(&k->b);
+    if (pthread_once(&kc_key_once, kc_key_make) || kc_key_err || !(k = calloc(1, sizeof *k))) return NULL;
+    k->slots[KC_IX_core] = &k->core;            /* (calloc: the core's state zero) */
+#define KC_INIT(b) kc_st_##b##_init(&k->b), k->slots[KC_IX_##b] = &k->b;   /* (each block at its declarations' values) */
     KC_STATE_BLOCKS(KC_INIT)
 #undef KC_INIT
     atomic_init(&k->bank_next, NULL);
@@ -400,12 +408,12 @@ int kc_bank_set(kc_t *k, const kc_bank_t *bank)
     if (bank)
         for (uint32_t i = 0; i < KC_PROGRAMS; i++)
             if (bank->used[i] && kc_program_valid(&bank->program[i], &bank->seq[i])) return -1;
-    atomic_store_explicit(&k->bank_next, bank, memory_order_release);
+    atomic_store(&k->bank_next, bank);
     return 0;
 }
 const kc_bank_t *kc_bank_in_use(const kc_t *k)
 {
-    return atomic_load_explicit(&((kc_t *)k)->bank_used, memory_order_acquire);
+    return atomic_load(&((kc_t *)k)->bank_used);
 }
 
 void kc_global_set(kc_t *k, int g, int32_t v)

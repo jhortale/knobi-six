@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Written by tools/core_state.py from firmware/src/ui/controls.c (a state block): do not edit. The
- * firmware's state there, per knobi_core instance: the struct, the initial values, the thread's binding (the
- * instance it runs: knobi_core.c kc_bind) and a macro per variable. Not for the device build. */
+ * firmware's state there, per knobi_core instance: the struct, the initial values, its slot and a macro per
+ * variable (KC_ST: the block of the instance this thread runs, knobi_core.c kc_bind). Not for the device build. */
 #ifndef KC_STATE_CONTROLS_SEQ_H
 #define KC_STATE_CONTROLS_SEQ_H
 struct kc_st_controls_seq {
@@ -13,17 +13,17 @@ struct kc_st_controls_seq {
     int32_t ctl_xp_want;
     uint8_t ctl_xp_pend;
 };
-static _Thread_local struct kc_st_controls_seq *kc_tls_controls_seq;
+#define KC_IX_controls_seq 4
 static void kc_st_controls_seq_init(struct kc_st_controls_seq *s)
 {
     memset((void *)s, 0, sizeof *s);
     s->ctl_seq_want = -1;
 }
-#define ctl_rec (kc_tls_controls_seq->ctl_rec)
-#define ctl_seq_want (kc_tls_controls_seq->ctl_seq_want)
-#define ctl_rec_arm (kc_tls_controls_seq->ctl_rec_arm)
-#define ctl_rec_xhold (kc_tls_controls_seq->ctl_rec_xhold)
-#define ctl_rec_xused (kc_tls_controls_seq->ctl_rec_xused)
-#define ctl_xp_want (kc_tls_controls_seq->ctl_xp_want)
-#define ctl_xp_pend (kc_tls_controls_seq->ctl_xp_pend)
+#define ctl_rec (KC_ST(controls_seq)->ctl_rec)
+#define ctl_seq_want (KC_ST(controls_seq)->ctl_seq_want)
+#define ctl_rec_arm (KC_ST(controls_seq)->ctl_rec_arm)
+#define ctl_rec_xhold (KC_ST(controls_seq)->ctl_rec_xhold)
+#define ctl_rec_xused (KC_ST(controls_seq)->ctl_rec_xused)
+#define ctl_xp_want (KC_ST(controls_seq)->ctl_xp_want)
+#define ctl_xp_pend (KC_ST(controls_seq)->ctl_xp_pend)
 #endif

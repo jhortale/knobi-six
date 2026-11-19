@@ -84,10 +84,13 @@ int kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none
                                            * refused (the previous one stays): a used entry is not a program + sequence
                                            * the firmware would store (kc_program_valid). Any thread, at any time, also
                                            * while another thread renders: the instance takes the newest bank set at the
-                                           * start of each of its calls (kc_render, kc_midi, ...). The caller keeps a bank
-                                           * unchanged and alive while it may be in use: until kc_bank_in_use no longer
-                                           * returns it (after a later kc_bank_set, once the instance's next call has
-                                           * started), or the instance is destroyed */
+                                           * start of each of its calls that run the shared code (kc_create, kc_render,
+                                           * kc_param_*, kc_program_*, kc_global_*; not kc_midi, which only queues).
+                                           * The caller keeps a bank unchanged and alive while it may be in use: a bank
+                                           * B replaced by a later kc_bank_set may be freed once kc_bank_in_use, called
+                                           * after that kc_bank_set, returns a bank other than B (the instance has moved
+                                           * on and never reads B again), or once the instance is destroyed. An instance
+                                           * that makes no call (idle, not rendering) keeps its bank in use as long */
 const kc_bank_t *kc_bank_in_use(const kc_t *k);   /* the bank the instance's calls read now (any thread) */
 int kc_program_valid(const program_t *p, const seq_t *s);   /* 0: a program + sequence the firmware would store (its
                                            * record formats: program_pack / unpack, seq_pack / unpack); -1 not */
