@@ -246,7 +246,8 @@ static void kc_pass(kc_t *k)                   /* app.c app_main's pass, without
     eng_wheel(ctl_midi_wheel);                  /* (its mod wheel at rest: 0; the higher of the two) */
 }
 
-static void kc_block(kc_t *k)
+/* one internal block of n frames (KC_BLOCK; kc_render_exact: 1..KC_BLOCK) into to[] */
+static void kc_block_n(kc_t *k, int16_t *to, uint32_t n)
 {
     int32_t out[2u * KC_BLOCK];
     while (k->mq_r != k->mq_w) {                /* app.c midi_in */
@@ -257,16 +258,20 @@ static void kc_block(kc_t *k)
     }
     kc_pass(k);
     memset(out, 0, sizeof out);
-    eng_render(out, KC_BLOCK);
+    eng_render(out, n);
     if (ctl_glob[G_STEREO])                     /* app.c app_audio: MONO, both sides the sum */
-        for (uint32_t i = 0; i < KC_BLOCK; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
-    for (uint32_t i = 0; i < 2u * KC_BLOCK; i++) {   /* (tests/host.c's clip) */
+        for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
+    for (uint32_t i = 0; i < 2u * n; i++) {     /* (tests/host.c's clip) */
         int32_t v = out[i];
-        k->fifo[i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+        to[i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
     }
-    k->fifo_at = 0;
-    k->frames += KC_BLOCK;
+    k->frames += n;
     fm1_ms = (uint32_t)(k->frames * 1000u / KC_RATE);
+}
+static void kc_block(kc_t *k)                  /* kc_render's: a whole block into the FIFO */
+{
+    kc_block_n(k, k->fifo, KC_BLOCK);
+    k->fifo_at = 0;
 }
 
 kc_t *kc_create(void)
@@ -305,6 +310,24 @@ void kc_render(kc_t *k, int16_t *lr, uint32_t frames)
         if (n > frames) n = frames;
         memcpy(lr, &k->fifo[2u * k->fifo_at], n * 4u);
         lr += 2u * n, frames -= n, k->fifo_at += n;
+    }
+    kc_unbind(was);
+}
+
+/* the FIFO's frames first (rendered already), then blocks of exactly what is asked for: the split render of
+ * tests/host.c's "split" (two passes between the parts there; here the next part's kc_block_n takes the MIDI queued and
+ * runs the pass: the same, as for whole blocks) */
+void kc_render_exact(kc_t *k, int16_t *lr, uint32_t frames)
+{
+    kc_binding_t was = kc_bind(k);
+    uint32_t n = KC_BLOCK - k->fifo_at;
+    if (n > frames) n = frames;
+    memcpy(lr, &k->fifo[2u * k->fifo_at], n * 4u);
+    lr += 2u * n, frames -= n, k->fifo_at += n;
+    while (frames) {
+        n = frames < KC_BLOCK ? frames : KC_BLOCK;
+        kc_block_n(k, lr, n);
+        lr += 2u * n, frames -= n;
     }
     kc_unbind(was);
 }

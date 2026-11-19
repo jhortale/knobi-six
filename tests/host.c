@@ -219,8 +219,11 @@ typedef struct { uint32_t t, keys; int btn; uint8_t st, d1, d2; int8_t enc, encn
  * P hit at velocity V, V 0 = let go), "T fader F V" (0..127), "T wheel W RAW" (0 pitch, 1 mod; raw ADC 0..1023),
  * "T xkey K V" (keybed key K 0..36 at V, 0 = let go: the outer keys 0..4, 32..36), "T press P V" (a held pad's
  * pressure now V; "T pad P V" holds it at V, its release at 0); any build: "T shot" (the screen at T -> OUT-T.ppm),
- * "T cpu TICKS" (the CPU guard's fake clock, engine.c: each block costs TICKS a voice sounding; 0, the default, none) */
-enum { HS_NONE, HS_VEL, HS_PAD, HS_FADER, HS_WHEEL, HS_XKEY, HS_SHOT, HS_EXPECT, HS_PRESS, HS_CPU };
+ * "T cpu TICKS" (the CPU guard's fake clock, engine.c: each block costs TICKS a voice sounding; 0, the default, none);
+ * "T split F" (the plugin's sample-accurate events, knobi_core.h kc_render_exact: the next block that renders, at T or
+ * later, renders as F frames (1..255), then the main loop runs two passes with no time passing (the MIDI scripted at
+ * that block's millisecond goes in, its levels go to the engine), then the block's other 256 - F frames) */
+enum { HS_NONE, HS_VEL, HS_PAD, HS_FADER, HS_WHEEL, HS_XKEY, HS_SHOT, HS_EXPECT, HS_PRESS, HS_CPU, HS_SPLIT };
 extern uint32_t eng_fake_per_voice;             /* (engine.c, after this file) */
 static const host_ev_t SCRIPT0[] = {
     {200, 1u << 7, -1, 0, 0, 0, -1, 0},                         /* C4 */
@@ -262,6 +265,7 @@ static void read_script(const char *path)
         else if (!strcmp(what, "wheel")) { sscanf(line, "%*u %*s %u %u", &a, &b); e.smk = HS_WHEEL; e.sa = (uint8_t)a; e.sb = (uint16_t)b; }
         else if (!strcmp(what, "xkey")) { sscanf(line, "%*u %*s %u %u", &a, &b); e.smk = HS_XKEY; e.sa = (uint8_t)a; e.sb = (uint16_t)b; }
         else if (!strcmp(what, "cpu")) { sscanf(line, "%*u %*s %u", &a); e.smk = HS_CPU; e.keys = a; }
+        else if (!strcmp(what, "split")) { sscanf(line, "%*u %*s %u", &a); e.smk = HS_SPLIT; e.keys = a; }
         else if (!strcmp(what, "shot")) e.smk = HS_SHOT;   /* (any board: the screen now -> OUT-<ms>.ppm) */
         else if (!strcmp(what, "expect")) {    /* expect V NAME [A B C D]; a line it cannot read fails the run */
             int *x = host_xarg[host_xn < 4096 ? host_xn : 0], k;
@@ -371,10 +375,27 @@ static void perf_report(void)
                (unsigned long long)(perf_insns / perf_frames), (unsigned long long)perf_frames);
 }
 
-static void platform_poll(void)                 /* one call = one millisecond */
+static uint32_t split_at, split_stage;        /* "split": the frames before the split; 1 / 2: the passes between */
+static void block_done(const int32_t *blk)
+{
+    wav = realloc(wav, (wav_n + HALF_FRAMES) * 4u);
+    for (uint32_t i = 0; i < 2u * HALF_FRAMES; i++) {
+        int32_t v = blk[i];                     /* (USB audio at the MASTER knob all the way up) */
+        wav[2u * wav_n + i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+    }
+    wav_n += HALF_FRAMES;
+}
+static void platform_poll(void)                 /* one call = one millisecond (a split block's passes: none) */
 {
     static uint32_t step, shot, owed, frame;
     static int32_t blk[2u * HALF_FRAMES];
+    if (split_stage == 1u) { split_stage = 2u; return; }   /* (the second pass: the levels to the engine) */
+    if (split_stage == 2u) {                    /* the split block's other frames, then a pass (still no time) */
+        app_audio(blk + 2u * split_at, HALF_FRAMES - split_at);
+        block_done(blk);
+        split_stage = 0, split_at = 0;
+        return;
+    }
     fm1_ms++;
 #if BOARD_SMK37
     fm1_in.frames++;                            /* (the SMK scans ~625 frames a second; enough for "settled") */
@@ -392,6 +413,8 @@ static void platform_poll(void)                 /* one call = one millisecond */
             write_ppm(fm1_ms);
         } else if (script[step].smk == HS_CPU) {
             eng_fake_per_voice = script[step].keys;
+        } else if (script[step].smk == HS_SPLIT) {
+            split_at = script[step].keys > 0u && script[step].keys < HALF_FRAMES ? script[step].keys : 0u;
         } else if (script[step].smk) {
 #if BOARD_SMK37
             static uint32_t vel = 100;
@@ -430,12 +453,16 @@ static void platform_poll(void)                 /* one call = one millisecond */
     }
     owed += FS;                                 /* the frames this millisecond is worth, in blocks as the ISR renders */
     while (owed >= 1000u * HALF_FRAMES) {
-        uint32_t i;
         owed -= 1000u * HALF_FRAMES;
         memset(blk, 0, sizeof blk);
 #ifdef __linux__
         if (perf_fd >= 0) { ioctl(perf_fd, PERF_EVENT_IOC_RESET, 0); ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 0); }
 #endif
+        if (split_at) {                         /* "split": F frames now, the rest after two passes */
+            app_audio(blk, split_at);
+            split_stage = 1u;
+            return;
+        }
         app_audio(blk, HALF_FRAMES);
 #ifdef __linux__
         if (perf_fd >= 0) {
@@ -444,12 +471,7 @@ static void platform_poll(void)                 /* one call = one millisecond */
             if (read(perf_fd, &c, sizeof c) == sizeof c && fm1_ms > 1000u) { perf_insns += (uint64_t)c; perf_frames += HALF_FRAMES; }
         }
 #endif
-        wav = realloc(wav, (wav_n + HALF_FRAMES) * 4u);
-        for (i = 0; i < 2u * HALF_FRAMES; i++) {
-            int32_t v = blk[i];                 /* (USB audio at the MASTER knob all the way up) */
-            wav[2u * wav_n + i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
-        }
-        wav_n += HALF_FRAMES;
+        block_done(blk);
     }
     if (frame_fps) {                            /* a film: a frame every 1/fps s, as the screen is then, and a log line:
                                                    keys held, key LEDs, button LEDs, the 7 encoder positions */

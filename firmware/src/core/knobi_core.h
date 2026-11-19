@@ -10,7 +10,13 @@
  * one block, so the output does not depend on how the caller cuts it.
  * Timing: kc_midi, kc_param_set, kc_program_* and kc_global_set act at the start of the next internal block (the one
  * after the frames already rendered into the FIFO): a caller that renders in multiples of KC_BLOCK frames gets them at
- * the frame it called them before.
+ * the frame it called them before. Sample-accurate (the plugin): kc_render_exact renders exactly the frames asked for,
+ * no FIFO ahead, so a call made between two kc_render_exact calls acts at that frame: the firmware's block is split
+ * there, as the firmware's host build does it with "split" (tests/scripts/core_split.txt, test_core
+ * split_matches_host).
+ *
+ * Exports: built as a shared object with -fvisibility=hidden (the plugin, tests/Makefile), the kc_* calls (KC_API) are
+ * the only symbols exported, none of the firmware's own. Build it with -ffp-contract=off (bit-exactness).
  *
  * Instances and threads: every instance owns all of its state (the firmware modules' file-scope state included:
  * knobi_core.c, tools/core_state.py), so any number of instances may exist, be created and destroyed in any order, and
@@ -34,6 +40,12 @@
 extern "C" {
 #endif
 
+#if defined __GNUC__
+#define KC_API __attribute__((visibility("default")))   /* (the only exports under -fvisibility=hidden) */
+#else
+#define KC_API
+#endif
+
 #define KC_RATE 44100u                    /* the sample rate */
 #define KC_BLOCK 256u                     /* frames an internal block */
 #define KC_PROGRAMS 500u                  /* the bank: programs 0..499 (bank / tens / ones; store_prog.h PROG_COUNT) */
@@ -41,17 +53,24 @@ extern "C" {
 
 typedef struct kc kc_t;
 
-kc_t *kc_create(void);                    /* the init program (program 0 of the bank), the globals at their defaults
+KC_API kc_t *kc_create(void);                    /* the init program (program 0 of the bank), the globals at their defaults
                                            * (MIDI CH = ALL), silent; NULL: no memory */
-void kc_destroy(kc_t *k);
-void kc_render(kc_t *k, int16_t *lr, uint32_t frames);   /* frames x (L, R), any count */
-void kc_midi(kc_t *k, const uint8_t *msg, uint32_t len);   /* one MIDI message (1..3 bytes: a channel message or a
+KC_API void kc_destroy(kc_t *k);
+KC_API void kc_render(kc_t *k, int16_t *lr, uint32_t frames);   /* frames x (L, R), any count */
+KC_API void kc_render_exact(kc_t *k, int16_t *lr, uint32_t frames);   /* the same, rendering no frame ahead: first what
+                                           * kc_render left in the FIFO, then internal blocks of exactly the frames
+                                           * asked for (at most KC_BLOCK each: the firmware's block, cut short). With
+                                           * calls that end on the multiples of KC_BLOCK (and anywhere a call to act
+                                           * there is made), the same samples as kc_render for the same calls made
+                                           * before the same blocks; the frames of a cut block add up (the control
+                                           * period, the clock's steps and the notes' gates run on across the cut) */
+KC_API void kc_midi(kc_t *k, const uint8_t *msg, uint32_t len);   /* one MIDI message (1..3 bytes: a channel message or a
                                            * realtime byte; SysEx and others ignored), the firmware's MIDI in
                                            * (ui/midi_map.c controls_midi: notes, pressure, bend, CC map, sustain, bank
                                            * select + program change, MIDI clock per the MIDI CLOCK global); queued
                                            * for the next block (up to KC_MIDI_QUEUE; beyond: dropped, counted) */
 #define KC_MIDI_QUEUE 1024u
-uint32_t kc_midi_dropped(const kc_t *k);  /* messages dropped so far (the queue full) */
+KC_API uint32_t kc_midi_dropped(const kc_t *k);  /* messages dropped so far (the queue full) */
 
 /* parameters: the firmware's live ids (params.h P_IS_LIVE: Phase 1's, P_DISTORTION, P_BPM, P_CLK_DIV, P_ARP_*), the
  * firmware's own values (a knob min..max, a switch 0 / 1, a select min..max) */
@@ -64,23 +83,23 @@ typedef struct {
     int section;                          /* params.h enum param_section (PS_*) */
     const char *const *labels;            /* a select: labels[v - min], max - min + 1 of them; else NULL */
 } kc_param_info_t;
-int kc_param_info(uint16_t id, kc_param_info_t *out);   /* 0: id is exposed (out filled unless NULL); -1 not */
-void kc_param_set(kc_t *k, uint16_t id, int32_t v);   /* as a panel edit (clamped; not sent as CC); not exposed: none */
-int32_t kc_param_get(const kc_t *k, uint16_t id);     /* the value in the edit buffer; not exposed: 0 */
+KC_API int kc_param_info(uint16_t id, kc_param_info_t *out);   /* 0: id is exposed (out filled unless NULL); -1 not */
+KC_API void kc_param_set(kc_t *k, uint16_t id, int32_t v);   /* as a panel edit (clamped; not sent as CC); not exposed: none */
+KC_API int32_t kc_param_get(const kc_t *k, uint16_t id);     /* the value in the edit buffer; not exposed: 0 */
 
 /* programs: the edit buffer (the program in play + its sequence) and the number it came from. edited: changed since
  * it was loaded (a parameter, CC or the sequence), or set as edited */
-int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, int edited);   /* into the edit buffer
+KC_API int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, int edited);   /* into the edit buffer
                                            * as a load (the player stops, recording ends); 0 ok, -1 refused: number
                                            * not 0..499, or p / s not records the firmware would store */
-void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int *edited);   /* any pointer may be NULL */
-int kc_program_select(kc_t *k, int32_t number);   /* load program number from the bank, as a program change: 0 ok */
+KC_API void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int *edited);   /* any pointer may be NULL */
+KC_API int kc_program_select(kc_t *k, int32_t number);   /* load program number from the bank, as a program change: 0 ok */
 typedef struct {
     uint8_t used[KC_PROGRAMS];            /* 0: the factory program (or init) */
     program_t program[KC_PROGRAMS];
     seq_t seq[KC_PROGRAMS];
 } kc_bank_t;
-int kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none), read on loads only. 0 taken; -1
+KC_API int kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none), read on loads only. 0 taken; -1
                                            * refused (the previous one stays): a used entry is not a program + sequence
                                            * the firmware would store (kc_program_valid). Any thread, at any time, also
                                            * while another thread renders: the instance takes the newest bank set at the
@@ -91,17 +110,17 @@ int kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none
                                            * after that kc_bank_set, returns a bank other than B (the instance has moved
                                            * on and never reads B again), or once the instance is destroyed. An instance
                                            * that makes no call (idle, not rendering) keeps its bank in use as long */
-const kc_bank_t *kc_bank_in_use(const kc_t *k);   /* the bank the instance's calls read now (any thread) */
-int kc_program_valid(const program_t *p, const seq_t *s);   /* 0: a program + sequence the firmware would store (its
+KC_API const kc_bank_t *kc_bank_in_use(const kc_t *k);   /* the bank the instance's calls read now (any thread) */
+KC_API int kc_program_valid(const program_t *p, const seq_t *s);   /* 0: a program + sequence the firmware would store (its
                                            * record formats: program_pack / unpack, seq_pack / unpack); -1 not */
 
 /* globals (params/globals.h G_*: MIDI CH, TRANSPOSE, TUNE, VEL CURVE, LOCAL, STEREO, SUSTAIN, AT CURVE, MIDI CLOCK, ARP
  * BEAT SYNC, ...), GLOB_MIN..GLOB_MAX, clamped */
-void kc_global_set(kc_t *k, int g, int32_t v);
-int32_t kc_global_get(const kc_t *k, int g);
+KC_API void kc_global_set(kc_t *k, int g, int32_t v);
+KC_API int32_t kc_global_get(const kc_t *k, int g);
 
 /* the host's transport (plan Task 5: declared, not implemented yet; does nothing) */
-void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t frame_offset);
+KC_API void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t frame_offset);
 
 #ifdef __cplusplus
 }

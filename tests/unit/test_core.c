@@ -29,6 +29,16 @@
  *   bank_validated        kc_bank_set refuses a bank with an entry the firmware would not store; kc_bank_in_use
  *   first_render_no_alloc (macOS) the core as a dylib (dlopen'd, as in the plugin bundle): a thread's first kc_render
  *                         allocates nothing (malloc zone statistics; a lazily allocated thread-local would)
+ * Sample-accurate events (plan Task 3, kc_render_exact):
+ *   split_matches_host    the firmware's host build plays tests/scripts/core_split.txt ("split": a block rendered in two
+ *                         parts, the MIDI in between) into ../build/unit/core_split.wav; the core, given the same
+ *                         messages between kc_render_exact calls cut at the same frames, gives the same samples
+ *   exact_aligned         kc_render_exact in 256-frame calls gives kc_render's samples; after a part of a block taken
+ *                         with kc_render, kc_render_exact hands out the rest of that block first
+ *   exact_onset           a note given at frame 300 (kc_render_exact up to it) starts exactly 300 frames after the same
+ *                         note given at frame 0; at 301, 301 frames
+ *   exports_only_kc       the core as a shared library (the plugin's build flags: -fvisibility=hidden, KC_API) exports
+ *                         the kc_* calls and nothing else (none of the firmware's own non-static functions)
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
 #include <stdio.h>
@@ -175,6 +185,182 @@ static void odd_frames(void)
     for (i = 0; i < 2u * n; i++) diff += x[i] != y[i];
     printf("odd_frames: %u frames in chunks of 1, 37, 4096 vs 256: %u samples differ\n", n, diff);
     CHECK(r1 == 0 && r2 == 0 && diff == 0);
+}
+
+/* ---- sample-accurate events (kc_render_exact) */
+#define SPLIT_WAV "../build/unit/core_split.wav"
+#define SPLIT_SCRIPT "scripts/core_split.txt"
+typedef struct { uint32_t at; uint8_t m[3]; } sev_t;   /* a message at frame 'at' (kc_midi before that frame) */
+static sev_t sevs[64];
+static int nsev, sev_bad;
+static int read_split_script(void)
+{
+    char line[256], what[16];
+    unsigned t, a, b, c;
+    uint32_t split_ms[32], split_f[32], nsplit = 0;
+    FILE *f = fopen(SPLIT_SCRIPT, "r");
+    if (!f) { perror(SPLIT_SCRIPT); return -1; }
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || sscanf(line, "%u %15s", &t, what) != 2 || !strcmp(what, "end")) continue;
+        if (!strcmp(what, "split")) {           /* the block rendered at t (one must be) is split at F */
+            if (sscanf(line, "%*u %*s %u", &a) != 1 || nsplit >= 32 || !a || a >= KC_BLOCK ||
+                t * 441u / 2560u == (t - 1u) * 441u / 2560u) { sev_bad++; continue; }
+            split_ms[nsplit] = t, split_f[nsplit++] = a;
+            continue;
+        }
+        if (strcmp(what, "midi") || sscanf(line, "%*u %*s %i %u %u", (int *)&a, &b, &c) != 3 || nsev >= 64) { sev_bad++; continue; }
+        sevs[nsev].at = t * 441u / 2560u * KC_BLOCK;   /* (no split: before the next block, as core_ref.txt) */
+        if (t * 441u / 2560u != (t + 1u) * 441u / 2560u) sev_bad++;
+        for (uint32_t i = 0; i < nsplit; i++)   /* (a split at t: at its frame in the block rendered at t) */
+            if (split_ms[i] == t) sevs[nsev].at = (t * 441u / 2560u - 1u) * KC_BLOCK + split_f[i];
+        sevs[nsev].m[0] = (uint8_t)a, sevs[nsev].m[1] = (uint8_t)b, sevs[nsev].m[2] = (uint8_t)c;
+        nsev++;
+    }
+    fclose(f);
+    return (int)nsplit;
+}
+/* the plugin's way (plugin/src/CoreRunner.h): render up to each message's frame and to each block's end with
+ * kc_render_exact, the messages at their frames */
+static void play_exact(kc_t *k, const sev_t *ev, int n, int16_t *out, uint32_t frames)
+{
+    uint32_t done = 0;
+    int e = 0;
+    while (done < frames) {
+        uint32_t end = (done / KC_BLOCK + 1u) * KC_BLOCK;
+        while (e < n && ev[e].at <= done) { kc_midi(k, ev[e].m, msg_len(ev[e].m[0])); e++; }
+        if (e < n && ev[e].at < end) end = ev[e].at;
+        if (end > frames) end = frames;
+        kc_render_exact(k, out + 2u * done, end - done);
+        done = end;
+    }
+}
+typedef struct { int16_t *out; uint32_t frames; } split_arg_t;
+static int split_child(void *arg)
+{
+    split_arg_t *a = arg;
+    kc_t *k = kc_create();
+    if (!k) return 3;
+    play_exact(k, sevs, nsev, a->out, a->frames);
+    kc_destroy(k);
+    return 0;
+}
+static void split_matches_host(void)
+{
+    uint32_t nref = 0, i, diff = 0, first = 0, peak = 0;
+    int16_t *ref = read_wav(SPLIT_WAV, &nref), *out;
+    int nsplit = read_split_script(), rc;
+    split_arg_t a;
+    if (!ref || nref < KC_RATE) {
+        printf("split_matches_host: no reference %s (%u frames; make -C tests unit makes it)\n", SPLIT_WAV, nref);
+        CHECK(0);
+        return;
+    }
+    if (nref > MAXF) nref = MAXF;
+    out = shared_buf(nref);
+    a.out = out, a.frames = nref;
+    rc = in_child(split_child, &a);
+    for (i = 0; i < 2u * nref; i++) {
+        uint32_t m = (uint32_t)abs(ref[i]);
+        if (m > peak) peak = m;
+        if (out[i] != ref[i] && !diff++) first = i / 2u;
+    }
+    printf("split_matches_host: %d splits, %d messages, %u frames, reference peak %u; %u samples differ%s", nsplit, nsev,
+           nref, peak, diff, diff ? "" : "\n");
+    if (diff) printf(", the first at frame %u (ref %d %d, core %d %d)\n", first, ref[2u * first], ref[2u * first + 1u],
+                     out[2u * first], out[2u * first + 1u]);
+    CHECK(rc == 0 && sev_bad == 0 && nsplit == 8 && nsev == 12 && peak > 1000u && diff == 0);
+    free(ref);
+}
+
+typedef struct { int16_t *x, *y, *z; uint32_t n; } exact_arg_t;
+static int exact_aligned_child(void *arg)
+{
+    exact_arg_t *a = arg;
+    static const uint8_t on[3] = {0x90, 60, 100}, on2[3] = {0x90, 67, 90};
+    kc_t *k1 = kc_create(), *k2 = kc_create(), *k3 = kc_create();
+    uint32_t i;
+    if (!k1 || !k2 || !k3) return 3;
+    kc_param_set(k1, P_ARP_ON, 1), kc_param_set(k2, P_ARP_ON, 1), kc_param_set(k3, P_ARP_ON, 1);   /* (the step path) */
+    kc_midi(k1, on, 3), kc_midi(k2, on, 3), kc_midi(k3, on, 3);
+    for (i = 0; i < a->n; i += KC_BLOCK) {
+        if (i == 40u * KC_BLOCK) kc_midi(k1, on2, 3), kc_midi(k2, on2, 3), kc_midi(k3, on2, 3);
+        kc_render(k1, a->x + 2u * i, KC_BLOCK);
+        kc_render_exact(k2, a->y + 2u * i, KC_BLOCK);
+        kc_render(k3, a->z + 2u * i, 100);      /* (a block rendered, 100 of it handed out: kc_render_exact the rest) */
+        kc_render_exact(k3, a->z + 2u * i + 200u, KC_BLOCK - 100u);
+    }
+    kc_destroy(k1), kc_destroy(k2), kc_destroy(k3);
+    return 0;
+}
+static void exact_aligned(void)
+{
+    uint32_t n = 100u * KC_BLOCK, dy = 0, dz = 0, peak = 0;
+    exact_arg_t a = {shared_buf(n), shared_buf(n), shared_buf(n), n};
+    int rc = in_child(exact_aligned_child, &a);
+    for (uint32_t i = 0; i < 2u * n; i++) {
+        dy += a.x[i] != a.y[i], dz += a.x[i] != a.z[i];
+        if ((uint32_t)abs(a.x[i]) > peak) peak = (uint32_t)abs(a.x[i]);
+    }
+    printf("exact_aligned: %u frames (arp on), peak %u: kc_render_exact by blocks %u differ, after part of a block %u\n",
+           n, peak, dy, dz);
+    CHECK(rc == 0 && peak > 1000u && dy == 0 && dz == 0);
+}
+
+static uint32_t onset(const int16_t *x, uint32_t n)   /* the first frame not silent */
+{
+    for (uint32_t i = 0; i < n; i++) if (x[2u * i] || x[2u * i + 1u]) return i;
+    return n;
+}
+static int onset_child(void *arg)
+{
+    exact_arg_t *a = arg;
+    static const sev_t at0 = {0, {0x90, 60, 100}}, at300 = {300, {0x90, 60, 100}}, at301 = {301, {0x90, 60, 100}};
+    kc_t *k1 = kc_create(), *k2 = kc_create(), *k3 = kc_create();
+    if (!k1 || !k2 || !k3) return 3;
+    play_exact(k1, &at0, 1, a->x, a->n);
+    play_exact(k2, &at300, 1, a->y, a->n);
+    play_exact(k3, &at301, 1, a->z, a->n);
+    kc_destroy(k1), kc_destroy(k2), kc_destroy(k3);
+    return 0;
+}
+static void exact_onset(void)
+{
+    uint32_t n = 8u * KC_BLOCK, o0, o300, o301;
+    exact_arg_t a = {shared_buf(n), shared_buf(n), shared_buf(n), n};
+    int rc = in_child(onset_child, &a);
+    o0 = onset(a.x, n), o300 = onset(a.y, n), o301 = onset(a.z, n);
+    printf("exact_onset: a note at frame 0 sounds from frame %u, at 300 from %u, at 301 from %u\n", o0, o300, o301);
+    CHECK(rc == 0 && o0 < 64u && o300 == o0 + 300u && o301 == o0 + 301u);
+}
+
+/* the shared library's exported symbols (nm: defined, external): kc_* only */
+static void exports_only_kc(void)
+{
+#if defined __APPLE__
+    const char *cmd = "nm -gU ../build/unit/libknobi_core.dylib 2>/dev/null";
+#else
+    const char *cmd = "nm -D --defined-only ../build/unit/libknobi_core.so 2>/dev/null";
+#endif
+    char line[512];
+    int kc = 0, other = 0, api = 0;
+    FILE *p = popen(cmd, "r");
+    if (!p) { CHECK(0); return; }
+    while (fgets(line, sizeof line, p)) {
+        char addr[64], type[8], name[400];
+        if (sscanf(line, "%63s %7s %399s", addr, type, name) != 3) continue;
+        const char *nm = name[0] == '_' ? name + 1 : name;   /* (Mach-O's leading underscore) */
+        if (type[0] == 'w' || type[0] == 'V') continue;   /* (weak: the toolchain's) */
+        if (!strncmp(nm, "kc_", 3)) kc++;
+        else if (!strcmp(nm, "_init") || !strcmp(nm, "_fini") || !strncmp(nm, "__", 2) || !strcmp(type, "A")) continue;
+        else { if (other < 10) printf("  exported: %s\n", nm); other++; }
+    }
+    pclose(p);
+    if ((p = fopen("../firmware/src/core/knobi_core.h", "r")) != NULL) {   /* (the calls declared KC_API) */
+        while (fgets(line, sizeof line, p)) api += !strncmp(line, "KC_API ", 7);
+        fclose(p);
+    }
+    printf("exports_only_kc: %d kc_* exported (%d declared KC_API), %d others\n", kc, api, other);
+    CHECK(api >= 18 && kc == api && other == 0);
 }
 
 static int roundtrip_child(void *arg)
@@ -761,6 +947,10 @@ int main(void)
     param_while_pending();
     bank_validated();
     first_render_no_alloc();
+    split_matches_host();
+    exact_aligned();
+    exact_onset();
+    exports_only_kc();
 #endif
     if (fails) { printf("test_core: %d FAILED\n", fails); return 1; }
     printf("test_core: all passed\n");

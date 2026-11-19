@@ -1,0 +1,30 @@
+# The host core's split render (knobi_core.h kc_render_exact; tests/unit/test_core.c split_matches_host): the plugin
+# applies MIDI at its sample, splitting the firmware's 256-frame block there. The firmware's host build does the same
+# split ("T split F": the block rendered at T is rendered as F frames, then two main-loop passes take the MIDI scripted
+# at T, then its other frames); the core, given the same messages between kc_render_exact calls at the same frames, must
+# give the same samples. Every split and its messages are at a millisecond where a block renders (test_core checks);
+# the messages without a split are as in core_ref.txt (a millisecond after which no block renders at T + 1).
+# A note from silence at frame 100 of a block, a second note mid control period (37), CC 74 at 200, two messages in one
+# split (bend + pressure at 1), a note-off at 255, sustain at 128 holding a note-off at 16, a plain block-boundary
+# note in between, and the last note-offs split at 150.
+6 split 100
+6 midi 0x90 60 100
+192 split 37
+192 midi 0x90 64 90
+302 split 200
+302 midi 0xB0 74 40
+401 split 1
+401 midi 0xE0 0 80
+401 midi 0xD0 100 0
+500 midi 0x90 67 70
+604 split 255
+604 midi 0x80 60 0
+651 split 128
+651 midi 0xB0 64 127
+750 midi 0x90 72 100
+755 split 16
+755 midi 0x80 64 0
+900 split 150
+900 midi 0xB0 64 0
+900 midi 0x80 67 0
+1100 end
