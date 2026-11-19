@@ -164,9 +164,10 @@ uint32_t seqst_total(void) { return 0; }
 #include "../ui/controls.c"
 #include "../ui/midi_map.c"
 
-_Static_assert(KC_EV_STEP == CLK_EV_STEP && KC_EV_JUMP == CLK_EV_JUMP && KC_EV_RESUME == CLK_EV_RESUME &&
-               KC_EV_RELEASE == CLK_EV_RELEASE && KC_EV_KIND == CLK_EV_KIND && KC_EV_HOSTED == CLK_EV_HOSTED,
-               "knobi_core.h's step kinds are synth/clock.h's");
+_Static_assert((int)KC_EV_STEP == (int)CLK_EV_STEP && (int)KC_EV_JUMP == (int)CLK_EV_JUMP &&
+               (int)KC_EV_RESUME == (int)CLK_EV_RESUME && (int)KC_EV_RELEASE == (int)CLK_EV_RELEASE &&
+               KC_EV_KIND == CLK_EV_KIND && KC_EV_HOSTED == CLK_EV_HOSTED,
+               "knobi_core.h's step kinds are synth/clock.h's");   /* (int: two enums, gcc -Wenum-compare) */
 
 /* ---- the instance */
 #define KC_ST_FIELD(b) struct kc_st_##b b;
