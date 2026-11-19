@@ -13,6 +13,16 @@
 // so the output does not depend on the host's block sizes, and an event at s sounds at s + latency() (+ less than one
 // internal frame at other rates, the 44.1 kHz grid).
 //
+// The host's transport (plan Task 5; knobi_core.h kc_clock_host, synth/clock.h): given per host block (transport(),
+// before process()), for the block's first sample: the core takes it at that sample's internal frame e(S), the frame a
+// MIDI message at S acts at, with the position moved on to e(S)'s own time (at other rates e(S) is up to one internal
+// frame after S: + (e(S) / 44100 - S / rate) x bpm / 60 quarter notes), at the block's tempo (a steady ramp: the tempo
+// predicted for the block's middle from the last block's, transport()); a loop's wrap inside the block (the loop's end
+// before the block's end, at the block's tempo) is given at its own frame, the loop's start there. So a step at the
+// host's position p acts at the internal frame of the session sample where the host is at p -- where a MIDI note the
+// host places at p acts -- and sounds latency() samples later, as that note does: aligned with the host's grid once
+// the host compensates the reported latency (it delays the other tracks by it).
+//
 // Re-prepare (a rate or block-size change): the core is kept (its voices sound on); events still waiting for their
 // frame are given to the core then, not dropped (no stuck note).
 // Real time: prepare() allocates (not on the audio thread); process() allocates nothing, takes no lock, does no I/O.
@@ -24,6 +34,14 @@
 #include "CoreC.h"
 
 namespace knobi {
+
+struct Transport {                                // the host's transport for a block, at its first sample
+    bool playing = false;                         // (no position known: as stopped)
+    double bpm = 120.0;                           // (none known, or not > 0: 120)
+    double ppq = 0.0;                             // quarter notes from the song's start
+    bool looping = false;                         // a loop [loopStart, loopEnd) (quarter notes) is on
+    double loopStart = 0.0, loopEnd = 0.0;
+};
 
 struct MidiEvent {                                // a host block's MIDI message at its sample offset
     uint32_t offset;
@@ -51,6 +69,11 @@ public:
 
     // n frames into L and R (floats, -1..1); ev: this block's MIDI, by offset (0..n-1, in order)
     void process(float* L, float* R, uint32_t n, const MidiEvent* ev, uint32_t nev);
+    // the host's transport for the coming process() block of n samples (above): the core's clock follows it while
+    // playing; stopped, the firmware's clock (internal at P_BPM)
+    void transport(const Transport& t, uint32_t n);
+    // the core's clock follows the host now (P_BPM greyed on the panel): as of the frames rendered so far
+    bool following() const { return core_ && kc_clock_following(core_) != 0; }
     // a parameter change at a sample offset of the coming process() block (plan Task 4's automation; same timing as
     // MIDI). The queue is kept in frame order (stable), so paramAt calls made before process() and that block's MIDI
     // act in offset order, whatever order they were given in
@@ -74,6 +97,10 @@ private:
     void renderTo(int64_t target);
     void queueMidi(const MidiEvent& m, uint32_t offset);   // offset: in the part about to be processed
     void processPart(float* L, float* R, uint32_t n);
+    static constexpr double kWrapEps = 1e-3;     // internal frames: a loop's wrap this close after a frame is at it
+    static constexpr double kRampMax = 2.0;      // BPM a block: a steady tempo change (transport(): a ramp)
+    struct Last { bool valid; int64_t s; double ppq, bpm; };   // the last playing block's transport (a ramp's slope)
+    Last last_{false, 0, 0.0, 0.0};
 
     kc_t* core_ = nullptr;
     Resampler rs_;

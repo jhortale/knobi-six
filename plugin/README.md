@@ -4,11 +4,11 @@ KNOBI-SIX as an instrument plugin for Ableton Live 12 on a Mac (Apple Silicon): 
 sequencer (`firmware/src/core/knobi_core.h`) inside a [JUCE](https://juce.com) 8 plugin. Design:
 `docs/superpowers/specs/2026-11-19-plugin-design.md`; plan: `docs/superpowers/plans/2026-11-19-plugin.md`.
 
-Status (plan Task 4): it plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the firmware's CC map,
+Status (plan Task 5): it plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the firmware's CC map,
 bank select + program change); every sound parameter is a Live parameter (73: automatable, MIDI-mappable); the host's
 program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
-edited, differs from bank). Not yet: the shared bank library (until Task 6 the bank is the core's own: "INIT" in the
-default build), host clock (Task 5), panel (Task 7; the window is a placeholder), sequencer grid (Task 8).
+edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate). Not yet:
+the shared bank library (until Task 6 the bank is the core's own: "INIT" in the default build), panel (Task 7; the window is a placeholder), sequencer grid (Task 8).
 
 ## Build
 
@@ -89,7 +89,11 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 7. Programs: the device's program menu lists `000 INIT` … `499 INIT` (the default build); choosing one loads it. A MIDI
    program change in a clip changes it too.
 8. Save the set with an edited sound, close, reopen: the same sound (program number, values, sequence) comes back.
-9. To check (not known yet, please report): with the arrangement **recording** and automation armed, does a program
+9. The clock from Live (the arp with a chord held, or a sequence playing: SEQ PLAY comes with the panel, Task 7/8):
+   press play from bar 1, from the middle of a bar, loop 1 or 2 bars, jump around while playing, automate the tempo:
+   the steps stay on Live's grid next to a drum clip, a loop's wrap plays the loop start's step, no note hangs. Stop
+   Live: the arp still plays with keys held, at the program's BPM (P_BPM, shown greyed while Live plays).
+10. To check (not known yet, please report): with the arrangement **recording** and automation armed, does a program
    change or a CC into KNOBI-SIX write automation for the parameters it changes? JUCE tells the host with a plain value
    change and no gesture; for AU, JUCE's notification is the one Live and Logic are reported not to record; for VST3 it
    is a `performEdit` without `beginEdit`, which Live is reported to record while recording. If it does, prefer the AU
@@ -123,14 +127,28 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
 - `src/ProgramBank.*`: the bank as the plugin reads it (program + sequence of any number, names for the program list),
   through a private scratch core instance with the same bank, so loading is the firmware's own. `Processor::setBank` is
   where Task 6's library plugs in.
+- The clock from Live (plan Task 5; `CoreRunner::transport`, `knobi_core.h` `kc_clock_host`, `synth/clock.h` "The
+  host's transport"): each block's tempo, position (ppq), playing and loop points from the AudioPlayHead go to the
+  core at the block's first sample (and a loop's wrap inside a block at its own sample). While Live plays the steps are
+  Live's grid from the song's start: step n of the division at position n × its length, so starting mid-bar, a loop's
+  wrap and a locate land on the matching step (the sequence plays step n modulo its length: bar 1 plays its step 1); a
+  step inside its first half when you jump in plays at once with the rest of its gate, later the next step waits; a
+  jump or a stop releases the arp's and the sequencer's notes; a new arp pattern (or SEQ PLAY) waits for the next step
+  of Live's grid (no restart: Live owns the phase). A step at Live's position p sounds exactly where a clip
+  note at p sounds (same sample, same latency compensation: `transport_aligned`). Tempo automation is followed (a ramp
+  predicted within the block: within one sample of the ideal grid). P_BPM is kept but not used while Live plays
+  (`Processor::followingHost()` for the panel's grey). Stopped: the firmware's clock (internal at P_BPM from where it
+  was, the firmware's rules: the arp plays with keys held, the sequencer while SEQ PLAY is on, a new arp pattern
+  restarts it unless ARP BEAT SYNC). No MIDI clock out.
 - `src/StateCodec.*`: the set state: `KN6S`, version, minimum reader version, then tagged records (program number,
   flags, the firmware's packed program record, its packed sequence record); unknown records are skipped, older program
   record versions load. The stored copy wins over the bank on load.
 - `tests/`: CTest — `render_44k_bitexact`, `render_48k`, `midi_sample_accurate`, `rt_no_alloc` (an allocation and
   lock counter around `processBlock`), `seam`, `silent_block`, `prepare_keeps_pending`, `events_ordered`,
   `params_layout`, `automation_to_core`, `core_to_host`, `state_roundtrip`, `state_bank_changed`, `state_versioned`,
-  `rt_params` (automation storms and program loads: no allocation, no lock), `bundle_exports` (the bundles export none
-  of the firmware's symbols).
+  `rt_params` (automation storms and program loads: no allocation, no lock), `transport_start_bar`,
+  `transport_aligned`, `transport_loop`, `transport_locate`, `transport_tempo_ramp`, `transport_stop_internal`,
+  `bpm_param_greyed` (a fake AudioPlayHead), `bundle_exports` (the bundles export none of the firmware's symbols).
 - What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
   audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone
   allocators, so `operator new`) and pthread mutexes / rwlocks / `os_unfair_lock`. Not covered: what JUCE's AU / VST3

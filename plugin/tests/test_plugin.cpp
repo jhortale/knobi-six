@@ -14,7 +14,8 @@
 //                         300 + latency (44.1 kHz); at 48 / 96 kHz within the 44.1 kHz grid
 //   rt_no_alloc           an allocation + lock counter (alloc_hook.c, the whole process) armed around processBlock:
 //                         notes, CCs, bend, pressure, program changes, SysEx, a block longer than prepared, a call
-//                         served from another thread (CoreAccess): zero allocations, zero locks
+//                         served from another thread (CoreAccess), the host's transport (Task 5: play, a loop, a
+//                         locate, a ramp, stop): zero allocations, zero locks
 //   seam                  CoreAccess: with no audio running, run() takes the instance itself (real clock); with an
 //                         audio thread rendering, run() is served by it between blocks (the seam's clock held: a
 //                         FakeClock); never two at once (the processor's too)
@@ -45,6 +46,21 @@
 //   state_versioned       a later writer's state (unknown records and flag bits) loads; an older one (a version-1
 //                         program record, no sequence, no flags) loads; the empty Task-3 state changes nothing; a newer
 //                         format (minReader), a cut or broken state, a bad number: refused, nothing changed
+// Plan Task 5 (the clock from the host's transport; a FakeHead as the AudioPlayHead):
+//   transport_start_bar   play from bar 1 (44.1 kHz / 512, 48 kHz / 1000): the steps at the internal frame of the
+//                         session sample where the host is at each 16th, numbered 0, 1, ...; following
+//   transport_aligned     a sequence step at the host's ppq 0.25 (and 4.25) gives exactly the samples of a MIDI note the
+//                         host places there (its note-off where the step's gate ends): 44.1 kHz / 512, 48 kHz / 480 and
+//                         1000 -- the step sounds where the host's grid is, after the reported latency, as a clip does
+//   transport_loop        a 1-bar loop as Live loops it (the wrap inside a block, or at a block's start): 16 steps a
+//                         pass, 0..15 every pass on the grid, none doubled or skipped; a 12-step sequence's notes in order
+//   transport_locate      a jump while playing (to ppq 8.25: the song's 16th 33 = the sequence's step 1; back to 0.6:
+//                         resumed): the matching step at the block's first frame
+//   transport_tempo_ramp  100 -> 140 BPM in 4 s (each block's tempo at its start, the exact position): every 16th within
+//                         1 internal frame of the ideal grid (48 kHz / 1000, 44.1 kHz / 512)
+//   transport_stop_internal  P_BPM automated while playing: reaches the core, not used (greyed); stopped: one release,
+//                         the internal clock at the new P_BPM, the sequence on (SEQ PLAY on: the firmware's rule)
+//   bpm_param_greyed      followingHost(): off stopped, on playing; the host's 150 used, not P_BPM 60
 //   rt_params             every parameter set every block (setValue: what the wrappers call), CCs, MIDI program
 //                         changes and setCurrentProgram from another thread: no allocation, no lock in processBlock
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
@@ -60,6 +76,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include "Processor.h"
 #include "Resampler.h"
@@ -79,6 +96,21 @@ struct FakeClock final : CoreAccess::Clock {
     void advanceMs(int64_t ms) { t.fetch_add(ms * 1000, std::memory_order_acq_rel); }
 };
 
+// the host's transport as the processor reads it (getPlayHead()->getPosition()); the test moves it block by block
+struct FakeHead final : juce::AudioPlayHead {
+    bool playing = false, looping = false;
+    double bpm = 120.0, ppq = 0.0, ls = 0.0, le = 0.0;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo i;
+        i.setIsPlaying(playing);
+        i.setBpm(bpm);
+        i.setPpqPosition(ppq);
+        i.setIsLooping(looping);
+        if (looping) i.setLoopPoints(LoopPoints{ls, le});
+        return i;
+    }
+};
 // ---- a script: MIDI messages at absolute session samples
 struct Msg { int64_t at; uint8_t len, d[3]; };
 static std::vector<Msg> script44()
@@ -355,6 +387,8 @@ static void rt_no_alloc()
         const int block = 256;
         p.setPlayConfigDetails(0, 2, rate, block);
         p.prepareToPlay(rate, block);
+        FakeHead head;                            // the host's transport (plan Task 5): plays from block 50, a 1-bar
+        p.setPlayHead(&head);                     // loop, a locate at 150, a tempo ramp, stopped from 300
         juce::AudioBuffer<float> buf(2, block * 3);   // (one block longer than prepared: taken in parts)
         juce::MidiBuffer midi;
         midi.ensureSize(65536);
@@ -389,6 +423,9 @@ static void rt_no_alloc()
             midi.addEvents(blocks[(size_t)b], 0, -1, 0);   // (outside the counted part)
             int n = b == 200 ? block * 3 : block;
             buf.setSize(2, n, false, false, true);
+            head.playing = b >= 50 && b < 300, head.looping = true, head.ls = 0.0, head.le = 4.0;
+            head.bpm = 100.0 + (b % 100) * 0.4;
+            if (b == 150) head.ppq = 2.37;
             if (b == 100) {                           // (the asker's thread made, and its exit, outside the counted part)
                 asker = std::thread([&] {
                     served = p.access().run(fn, &snap);
@@ -402,6 +439,10 @@ static void rt_no_alloc()
             alloc_hook_arm(0);
             allocs += alloc_hook_allocs() - a, locks += alloc_hook_locks() - l;
             if (b == 100) { release = true; asker.join(); }
+            if (head.playing) {
+                head.ppq += n * head.bpm / 60.0 / rate;
+                if (head.ppq >= head.le) head.ppq -= head.le - head.ls;
+            }
         }
         std::printf("rt_no_alloc: %.0f Hz: 400 blocks (notes, CCs, bend, pressure, 10 program changes, SysEx, one block "
                     "3x the prepared size, a served call %s): %ld allocations, %ld locks in processBlock\n", rate,
@@ -1191,6 +1232,311 @@ static void rt_params()
     CHECK(allocs == 0 && locks == 0 && served == 12 && p.access().ranHere() == 0);
 }
 
+// ===============================================================================================================
+// plan Task 5: the clock from the host's transport (a fake AudioPlayHead)
+// ===============================================================================================================
+// a host: blocks of `block` at `rate`, the position moved on after each block at its tempo (a loop's end wraps it, as
+// Live does: the next block starts inside the loop); MIDI at absolute session samples; the output kept
+struct Host {
+    Processor& p;
+    FakeHead head;
+    double rate;
+    int block;
+    int64_t s = 0;
+    std::vector<float> out;
+    Host(Processor& pp, double r, int b) : p(pp), rate(r), block(b)
+    {
+        p.setPlayConfigDetails(0, 2, rate, block);
+        p.prepareToPlay(rate, block);
+        p.setPlayHead(&head);
+    }
+    void run(int64_t frames, const std::vector<Msg>& msgs = {}, std::function<void(int64_t)> before = nullptr)
+    {
+        juce::AudioBuffer<float> buf(2, block);
+        juce::MidiBuffer midi;
+        for (int64_t d = 0; d < frames; d += block) {
+            const int n = (int)std::min<int64_t>(block, frames - d);
+            if (before) before(s);
+            buf.setSize(2, n, false, false, true);
+            midi.clear();
+            for (auto& m : msgs) if (m.at >= s && m.at < s + n) midi.addEvent(m.d, m.len, (int)(m.at - s));
+            p.processBlock(buf, midi);
+            for (int i = 0; i < n; i++) out.push_back(buf.getSample(0, i)), out.push_back(buf.getSample(1, i));
+            s += n;
+            if (head.playing) {
+                head.ppq += n * head.bpm / 60.0 / rate;
+                if (head.looping && head.le > head.ls && head.ppq >= head.le) head.ppq -= head.le - head.ls;
+            }
+        }
+    }
+    std::vector<kc_step_t> steps()                // (the test's thread: no audio thread runs meanwhile)
+    {
+        std::vector<kc_step_t> v(KC_LOG);
+        v.resize(kc_clock_steps(p.runner().core(), v.data(), KC_LOG));
+        return v;
+    }
+};
+constexpr int kDiv16th = 6;                       // (P_CLK_DIV's 16TH: synth/clock.h kDiv16th)
+// the program: a sequence of 16ths (len steps), note 40 + i on step i, or only `only` (>= 0) playing (the rest rests)
+static void tpProgram(Processor& p, int len, int only = -1)
+{
+    program_t prog;
+    seq_t q;
+    int32_t num;
+    kc_t* k = p.runner().core();
+    kc_program_get(k, &num, &prog, nullptr, nullptr);
+    seq_clear(&q);
+    q.len = (uint8_t)len;
+    for (int i = 0; i < len; i++)
+        if (only < 0 || i == only) q.step[i].count = 1, q.step[i].notes[0] = (uint8_t)(40 + i), q.step[i].vels[0] = 100;
+    prog.v[P_CLK_DIV] = kDiv16th;
+    CHECK(kc_program_set(k, 0, &prog, &q, 0) == 0);
+}
+// internal frame of session sample time x (real): the first at or after it (CoreRunner's e(s) for a real time)
+static int64_t eOf(double x, double rate) { return (int64_t)std::ceil(x * 44100.0 / rate - 1e-6); }
+
+// play from bar 1 at session sample S0 (44.1 kHz blocks of 512, 48 kHz blocks of 1000): the step events at the internal
+// frame of the session sample where the host is at each 16th (S0 + k x 5512.5 x rate / 44100), numbered 0, 1, ...;
+// the sequence's notes 40, 41, ...; following the host while playing
+static void transport_start_bar()
+{
+    for (auto [rate, block] : {std::pair<double, int>{44100, 512}, {48000, 1000}}) {
+        Processor p;
+        Host h(p, rate, block);
+        tpProgram(p, 16);
+        h.run(4 * block);
+        kc_seq_play(p.runner().core(), 1);
+        h.steps();
+        const int64_t S0 = h.s;
+        h.head.playing = true, h.head.ppq = 0.0;
+        h.run(16 * 5513 * rate / 44100);
+        auto st = h.steps();
+        int bad = 0, n = 0;
+        for (auto& e : st) {
+            if (e.frame < (uint64_t)eOf((double)S0, rate)) continue;
+            bad += (int64_t)e.frame != eOf(S0 + n * 5512.5 * rate / 44100.0, rate) || e.step != n;
+            n++;
+        }
+        std::printf("transport_start_bar: %.0f Hz, blocks of %d, from sample %lld: %d steps, %d off; following %d\n", rate,
+                    block, (long long)S0, n, bad, (int)p.followingHost());
+        CHECK(n == 16 && bad == 0 && p.followingHost());
+    }
+}
+
+// the alignment with the host's grid: a sequence step at the host's position p sounds exactly as a MIDI note the host
+// places at p (the same samples out: the same internal frame, the same latency), at 44.1 and 48 kHz. The sequence: a
+// note on its 2nd 16th only (60, velocity 100; its gate 2756 frames); the reference: SEQ off, MIDI note-on at the session
+// sample where the host is at ppq 0.25 (+ 4 bars), its note-off where the gate ends (internal frame + 2756)
+static void transport_aligned()
+{
+    for (auto [rate, block] : {std::pair<double, int>{44100, 512}, {48000, 480}, {48000, 1000}}) {
+        const int64_t frames = (int64_t)(3.0 * rate);
+        Processor a, b;
+        Host ha(a, rate, block), hb(b, rate, block);
+        tpProgram(a, 16, 1);
+        tpProgram(b, 16, 1);
+        {                                         // (step 1's note: 60)
+            program_t prog;
+            seq_t q;
+            int32_t num;
+            for (Processor* p : {&a, &b}) {
+                kc_program_get(p->runner().core(), &num, &prog, &q, nullptr);
+                q.step[1].notes[0] = 60;
+                CHECK(kc_program_set(p->runner().core(), 0, &prog, &q, 0) == 0);
+            }
+        }
+        ha.run(4 * block), hb.run(4 * block);
+        const int64_t S0 = ha.s;
+        kc_seq_play(a.runner().core(), 1);        // (with the start: its internal restart's step 0 is a rest)
+        ha.head.playing = true, ha.head.ppq = 0.0;
+        hb.head.playing = true, hb.head.ppq = 0.0;
+        std::vector<Msg> msgs;
+        for (int bar = 0; bar < 2; bar++) {       // (the reference: the clip's notes at ppq 0.25 and 4.25)
+            const double x = S0 + (bar * 4.0 + 0.25) * 60.0 / 120.0 * rate;
+            const int64_t on = (int64_t)std::ceil(x - 1e-6), f = eOf(x, rate) + 2756;
+            int64_t off = (int64_t)std::floor(f * rate / 44100.0);
+            while (eOf((double)off, rate) < f) off++;
+            msgs.push_back({on, 3, {0x90, 60, 100}}), msgs.push_back({off, 3, {0x80, 60, 0}});
+        }
+        ha.run(frames - S0), hb.run(frames - S0, msgs);
+        size_t diff = 0, first = 0;
+        for (size_t i = 0; i < ha.out.size(); i++)
+            if (ha.out[i] != hb.out[i]) { if (!diff) first = i / 2; diff++; }
+        const int64_t onA = onset(ha.out, 1e-4f);
+        std::printf("transport_aligned: %.0f Hz, blocks of %d: the sequence's step at ppq 0.25 sounds from sample %lld "
+                    "(the host's ppq 0.25 at %.1f + latency %d); %zu samples differ from the clip's MIDI note (first %zu)\n",
+                    rate, block, (long long)onA, S0 + 0.25 * 0.5 * rate, a.getLatencySamples(), diff, first);
+        CHECK(diff == 0 && onA > S0);
+    }
+}
+
+// a 1-bar loop [0, 4) as Live loops it (the position wrapped from the next block on; the loop points reported), blocks
+// of 1000 at 48 kHz and 500 at 44.1 kHz (the wrap inside a block), a 12-step sequence: 3 passes, 16 steps each (one at
+// each wrap, at the wrap's frame: the loop's start), steps 0..15 every pass, none doubled or skipped; the notes 40..51,
+// 40..43 every pass
+static void transport_loop()
+{
+    for (auto [rate, block] : {std::pair<double, int>{48000, 1000}, {44100, 500}}) {
+        Processor p;
+        Host h(p, rate, block);
+        tpProgram(p, 12);
+        h.run(2 * block);
+        kc_seq_play(p.runner().core(), 1);        // (stopped: it plays on the internal clock until the start)
+        h.run(2 * block);
+        h.steps();
+        {
+            kc_note_t drop[KC_LOG];
+            kc_notes(p.runner().core(), drop, KC_LOG);
+        }
+        const int64_t S0 = h.s;
+        h.head.playing = true, h.head.looping = true, h.head.ls = 0.0, h.head.le = 4.0;
+        h.run((int64_t)(3 * 2.0 * rate) - 1);
+        auto st = h.steps();
+        int n = 0, bad = 0;
+        for (auto& e : st) {
+            if (!(e.kind & KC_EV_HOSTED)) continue;
+            const int pass = n / 16, k = n % 16;
+            const bool off = (int64_t)e.frame != eOf(S0 + (pass * 4.0 + k * 0.25) * 0.5 * rate, rate) || e.step != k;
+            if (off && std::getenv("TP_DEBUG"))
+                std::printf("  [%d] frame %llu step %d kind %02X want %lld\n", n, (unsigned long long)e.frame, e.step, e.kind,
+                            (long long)eOf(S0 + (pass * 4.0 + k * 0.25) * 0.5 * rate, rate));
+            bad += off;
+            n++;
+        }
+        kc_note_t nt[KC_LOG];
+        uint32_t m = kc_notes(p.runner().core(), nt, KC_LOG), ons = 0, order = 1;
+        for (uint32_t i = 0; i < m; i++)
+            if (nt[i].vel) order &= nt[i].note == 40 + (int)(ons % 16) % 12, ons++;
+        std::printf("transport_loop: %.0f Hz, blocks of %d: %d steps in 3 passes (want 48), %d off; %u note-ons in order: "
+                    "%s\n", rate, block, n, bad, ons, order ? "yes" : "no");
+        CHECK(n == 48 && bad == 0 && ons >= 47 && order);
+    }
+}
+
+// a locate while playing (the host's position jumps between blocks): to ppq 8.25 (the song's 16th 33 = the sequence's
+// step 1, note 41) at the block's first sample's frame; backwards to 0.6 (inside the 16th 2's first half: resumed,
+// note 42 at once)
+static void transport_locate()
+{
+    Processor p;
+    Host h(p, 48000, 1000);
+    tpProgram(p, 16);
+    h.run(2000);
+    kc_seq_play(p.runner().core(), 1);
+    h.head.playing = true;
+    h.run(10000);
+    h.steps();
+    kc_note_t nt[KC_LOG];
+    kc_notes(p.runner().core(), nt, KC_LOG);
+    for (auto [to, step, note, kind] : {std::tuple<double, int, int, int>{8.25, 33, 41, KC_EV_JUMP}, {0.6, 2, 42, KC_EV_RESUME}}) {
+        const int64_t J = h.s;
+        h.head.ppq = to;
+        h.run(3000);
+        auto st = h.steps();
+        uint32_t m = kc_notes(p.runner().core(), nt, KC_LOG), on = 0;
+        while (on < m && !nt[on].vel) on++;
+        std::printf("transport_locate: at %lld to ppq %.2f: step %d kind %02X at frame %llu (want %d at %lld), note %d\n",
+                    (long long)J, to, st.empty() ? -99 : st[0].step, st.empty() ? 0 : st[0].kind,
+                    (unsigned long long)(st.empty() ? 0 : st[0].frame), step, (long long)eOf((double)J, 48000),
+                    on < m ? nt[on].note : -1);
+        CHECK(!st.empty() && st[0].step == step && (st[0].kind & KC_EV_KIND) == kind &&
+              (int64_t)st[0].frame == eOf((double)J, 48000) && on < m && nt[on].note == note);
+    }
+}
+
+// tempo automation 100 -> 140 BPM over 4 s (linear in time; each block's tempo at its start, the position the exact
+// integral): every 16th within 1 internal frame of the ideal (the first frame at or past the time the host's position
+// reaches it), 48 kHz blocks of 1000 and 44.1 kHz blocks of 512
+static double tpRamp(double t) { return t < 4.0 ? (100.0 * t + 5.0 * t * t) / 60.0 : 8.0 + 140.0 * (t - 4.0) / 60.0; }
+static void transport_tempo_ramp()
+{
+    for (auto [rate, block] : {std::pair<double, int>{48000, 1000}, {44100, 512}}) {
+        Processor p;
+        Host h(p, rate, block);
+        kc_param_set(p.runner().core(), P_CLK_DIV, kDiv16th);
+        h.head.playing = true;
+        const double r = rate;
+        h.run((int64_t)(5.0 * rate), {}, [&h, r](int64_t s) {
+            const double t = s / r;
+            h.head.bpm = t < 4.0 ? 100.0 + 10.0 * t : 140.0, h.head.ppq = tpRamp(t);
+        });
+        auto st = h.steps();
+        double worst = 0;
+        int bad = 0;
+        for (size_t i = 0; i < st.size(); i++) {
+            double lo = 0, hi = 6;
+            for (int it = 0; it < 80; it++) { double m = (lo + hi) / 2; if (tpRamp(m) * 4.0 < (double)i) lo = m; else hi = m; }
+            worst = std::max(worst, std::fabs((double)st[i].frame - hi * 44100.0));
+            if (std::getenv("TP_DEBUG")) std::printf("  %zu: %llu ideal %.3f\n", i, (unsigned long long)st[i].frame, hi * 44100.0);
+            bad += st[i].step != (int)i;
+        }
+        std::printf("transport_tempo_ramp: %.0f Hz, blocks of %d: %zu 16ths, worst %.3f internal frames from the ideal "
+                    "grid, %d numbered wrong\n", rate, block, st.size(), worst, bad);
+        CHECK(st.size() == 42 && worst <= 1.0 && bad == 0);
+    }
+}
+
+// stopped: the internal clock at P_BPM (the arp / sequencer per the firmware's rules); P_BPM greyed while playing: a
+// host change of it (automation) reaches the core (kc_param_get) but the steps stay on the host's 120; following
+// while playing, not after the stop; after the stop the internal clock at the new P_BPM (90): steps 7350 frames apart
+static void transport_stop_internal()
+{
+    Processor p;
+    Host h(p, 44100, 512);
+    tpProgram(p, 16);
+    h.run(1024);
+    kc_seq_play(p.runner().core(), 1);
+    h.head.playing = true;
+    h.run(512 * 20);
+    auto* q = const_cast<juce::RangedAudioParameter*>(paramById(p, "p" + juce::String(P_BPM)));
+    kc_param_info_t in;
+    kc_param_info(P_BPM, &in);
+    CHECK(q != nullptr);
+    if (q) q->setValueNotifyingHost(Params::toNormalised(in, 90));
+    h.steps();
+    const bool followed = p.followingHost();
+    h.run(512 * 40);
+    auto st = h.steps();
+    int bad = 0;
+    for (size_t i = 1; i < st.size(); i++) bad += st[i].frame - st[i - 1].frame != 5512 && st[i].frame - st[i - 1].frame != 5513;
+    std::printf("bpm_param_greyed: P_BPM %d while playing: following %d, %zu steps, %d not 16ths of 120\n",
+                (int)kc_param_get(p.runner().core(), P_BPM), (int)followed, st.size(), bad);
+    CHECK(kc_param_get(p.runner().core(), P_BPM) == 90 && followed && st.size() >= 3 && bad == 0);
+    h.head.playing = false;
+    h.run(512 * 100);
+    st = h.steps();
+    int rel = 0, gaps = 0, n = 0;
+    for (size_t i = 0; i < st.size(); i++) {
+        if ((st[i].kind & KC_EV_KIND) == KC_EV_RELEASE) { rel++; continue; }
+        if (n++ && st[i].frame - st[i - 1].frame != 7350) gaps++;
+    }
+    std::printf("transport_stop_internal: stopped: following %d, %d release(s), %d steps on the internal clock, %d not "
+                "7350 apart (90 BPM); SEQ PLAY %d\n", (int)p.followingHost(), rel, n, gaps, kc_seq_playing(p.runner().core()));
+    CHECK(!p.followingHost() && rel == 1 && n >= 6 && gaps == 0 && kc_seq_playing(p.runner().core()));
+}
+
+// P_BPM greyed: following while playing (the panel's flag), the host's tempo used, not P_BPM; stopped: P_BPM
+static void bpm_param_greyed()
+{
+    Processor p;
+    Host h(p, 44100, 512);
+    kc_param_set(p.runner().core(), P_BPM, 60);
+    h.run(512 * 4);
+    const bool before = p.followingHost();
+    h.head.playing = true, h.head.bpm = 150.0;
+    h.run(512 * 100);
+    auto st = h.steps();
+    int bad = 0, n = 0;
+    for (size_t i = 0; i < st.size(); i++) {
+        if (!(st[i].kind & KC_EV_HOSTED)) continue;
+        bad += (int64_t)st[i].frame != 2048 + (int64_t)std::ceil(n * 17640.0 - 1e-9);
+        n++;
+    }
+    std::printf("bpm_param_greyed: stopped: following %d; playing at 150 (P_BPM 60): following %d, %d quarters, %d off "
+                "17640 apart\n", (int)before, (int)p.followingHost(), n, bad);
+    CHECK(!before && p.followingHost() && n == 3 && bad == 0);
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -1203,6 +1549,10 @@ int main(int argc, char** argv)
         {"params_layout", params_layout}, {"automation_to_core", automation_to_core}, {"core_to_host", core_to_host},
         {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
+        {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
+        {"transport_loop", transport_loop}, {"transport_locate", transport_locate},
+        {"transport_tempo_ramp", transport_tempo_ramp}, {"transport_stop_internal", transport_stop_internal},
+        {"bpm_param_greyed", bpm_param_greyed},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

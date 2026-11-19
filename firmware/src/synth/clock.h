@@ -68,7 +68,36 @@
  * engine.c); with BEAT SYNC on it waits for the next step event instead. It does nothing on an external clock (the master owns the phase).
  *
  * LFO sync: clock_quarter_inc(c) is the tempo as Q32 quarter notes per frame (0: none known), for mod.c
- * lfo_sync_inc. */
+ * lfo_sync_inc.
+ *
+ * The host's transport (CLOCK_HOST: the plugin's core only, firmware/src/core/knobi_core.c defines it; the device build
+ * never does, so none of this is in the firmware: plugin plan Task 5, spec "Clock from Live"). clock_host(c, at, playing,
+ * rate, pos, frac) gives the host's transport as of frame `at` of the next clock_tick (at >= that tick's frames: a later
+ * one; anchors in frame order: one at the last one's frame (or before it) replaces it, at most CLOCK_HOST_Q waiting:
+ * more and the newest replaces the last): playing, the tempo
+ * (rate: counts a frame, BPM x CLOCK_RATE_Q) and the position there (pos ticks, frac counts into the next; pos as a
+ * signed 32-bit tick count: before the song's start, a count-in, is negative). clock_tick applies each anchor at its
+ * frame (the block is cut there; the steps' frames stay the block's):
+ *   - playing (the clock follows the host: clock_following): the position is the host's and the tempo its tempo; the
+ *     steps are the host's grid: step g of the division starts at tick g / 2 x (even + odd) (+ even when g is odd)
+ *     counted from position 0, its step number is g (signed 32-bit), so a step's number says where in the song it is.
+ *     P_BPM (clock_set_bpm) is kept for later and not used, clock_restart and MIDI clock in (clock_midi) do nothing, the
+ *     mode (clock_set_mode) is kept for later; a division change (clock_set_div) puts the step under way on the grid
+ *     at once (no step fires: the next boundary of the new division comes on time).
+ *   - an anchor where the position is within CLOCK_HOST_TOL of the clock's own (it ran on at the tempo since the last
+ *     one): the position is the host's from there (a tempo ramp, rounding); the steps go on: one already fired never
+ *     fires again (a host position a little behind it), one passed fires there.
+ *   - any other (a start, a loop's wrap, a locate): a jump. The step under way at the new position is computed from
+ *     the grid; an event at the anchor's frame says so (kind, below): on its boundary (CLK_EV_JUMP: a step, the
+ *     notes sounding released first), inside its first half (CLK_EV_RESUME: the step plays at once, its gate ending
+ *     where it would on the grid: gate[] frames), after it (CLK_EV_RELEASE: the notes sounding released, no step; the
+ *     next step on the grid). No step doubled or skipped across a wrap: the old position's step at the wrap frame is not
+ *     fired, the new position's is.
+ *   - stopped (from playing): CLK_EV_RELEASE at its frame, and the clock is the firmware's again from where it is
+ *     (its mode, at P_BPM if internal: the next step where the grid has it, at that tempo; no restart). Stopped
+ *     anchors while not following change nothing: with the host stopped the clock is exactly the firmware's.
+ * Every event has a kind (kind[]: CLK_EV_*, | CLK_EV_HOSTED for a step on the host's grid) and gate[] (RESUME: the
+ * gate's frames left; else 0). Not integers-only (the core is host code): 64-bit arithmetic. */
 #ifndef KNOBI_CLOCK_H
 #define KNOBI_CLOCK_H
 #include <stdint.h>
@@ -84,6 +113,14 @@
 #define CLOCK_TAP_GAP_MS 2000u           /* a longer gap between taps starts a new tap count */
 #define CLOCK_TAP_MIN 4u                 /* taps before the tempo changes */
 #define CLOCK_OUT_OWED 8u                /* 0xF8 sent at most at once after a stall (clock_out_poll) */
+#ifdef CLOCK_HOST
+#define CLOCK_HOST_Q 16u                 /* host anchors waiting (clock_host) */
+#define CLOCK_HOST_TOL (CLOCK_U / 4u)    /* a host position this close to the clock's: no jump (a quarter tick) */
+#define CLOCK_HOST_RATE_MAX (999u * CLOCK_RATE_Q)   /* a host tempo is taken up to 999 BPM */
+enum { CLK_EV_STEP, CLK_EV_JUMP, CLK_EV_RESUME, CLK_EV_RELEASE };
+#define CLK_EV_KIND 0x0Fu
+#define CLK_EV_HOSTED 0x80u              /* kind[]: a step on the host's grid (its step number: g) */
+#endif
 
 enum { CLK_DIV_HALF, CLK_DIV_QTR, CLK_DIV_8TH, CLK_DIV_8TH_D, CLK_DIV_8TH_S, CLK_DIV_8TH_T, CLK_DIV_16TH, CLK_DIV_16TH_S,
        CLK_DIV_16TH_T, CLK_DIV_32ND, CLK_DIV_COUNT };
@@ -113,6 +150,15 @@ typedef struct clk {
     uint8_t tap_n;                       /* tap tempo (the main loop's clk_t) */
     uint32_t tap_t[5];
     uint32_t starts, start_ticks;        /* restarts to step 0 so far; ticks before the latest one's tick 0 */
+#ifdef CLOCK_HOST
+    uint8_t host;                        /* following the host (playing) */
+    uint8_t hpart;                       /* clock_tick: a part of a block cut at an anchor (events kept, frames + hoff) */
+    uint8_t hq_n;                        /* anchors waiting */
+    uint32_t hoff;                       /* the part's first frame in the block */
+    struct clk_host { uint32_t at, rate, pos, frac; uint8_t playing; } hq[CLOCK_HOST_Q];
+    uint8_t kind[CLOCK_EV_MAX];          /* the events' kinds (CLK_EV_*) */
+    uint32_t gate[CLOCK_EV_MAX];         /* CLK_EV_RESUME: the gate's frames left */
+#endif
 } clk_t;
 typedef struct { int8_t mode; uint8_t started; uint32_t starts, sent; } clk_out_t;   /* MIDI clock out (main loop) */
 
@@ -134,5 +180,9 @@ void clock_out_init(clk_out_t *o);
  * the clock has them (a consistent snapshot) */
 uint32_t clock_out_poll(clk_out_t *o, int mode, int applied, uint32_t starts, uint32_t start_ticks, uint32_t ticks,
                         uint8_t *bytes, uint32_t max);
+#ifdef CLOCK_HOST
+void clock_host(clk_t *c, uint32_t at, int playing, uint32_t rate, uint32_t pos, uint32_t frac);   /* see above */
+int clock_following(const clk_t *c);     /* following the host's transport now (P_BPM not used) */
+#endif
 
 #endif

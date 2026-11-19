@@ -121,8 +121,38 @@ KC_API int kc_program_valid(const program_t *p, const seq_t *s);   /* 0: a progr
 KC_API void kc_global_set(kc_t *k, int g, int32_t v);
 KC_API int32_t kc_global_get(const kc_t *k, int g);
 
-/* the host's transport (plan Task 5: declared, not implemented yet; does nothing) */
+/* The host's transport (plan Task 5; synth/clock.h "The host's transport", spec "Clock from Live"): playing, the tempo
+ * (BPM) and the position (quarter notes from the song's start, ppq; negative in a count-in) as of the frame
+ * frame_offset frames after the next frame the core hands out (kc_render / kc_render_exact; a frame already rendered
+ * into kc_render's FIFO: at the next block's first frame). Given once a host block for its first frame, and once more
+ * for a loop's wrap inside the block (at the wrap's frame, the loop's start), in frame order. While the host plays the
+ * clock follows it: the steps are the host's grid from position 0 (a start mid-bar, a loop's wrap, a locate land on the
+ * matching step: the sequence's step = the step's number modulo its length), the tempo the host's (automation
+ * followed; P_BPM kept, not used: kc_clock_following), MIDI clock in and the arp's restart do nothing. A jump or a stop
+ * releases the arp's and the sequencer's notes at its frame. Stopped: the firmware's clock (MIDI CLOCK OFF: internal at
+ * P_BPM, from where it was: the arp plays with keys held, the sequencer with SEQ PLAY on; the firmware's rules). The
+ * output frame: an event at internal frame f acts at f, as a MIDI message given for f does (kc_midi before rendering
+ * f): a step at the host's position p acts where a MIDI note the host places at p would. Not a number (bpm, ppq):
+ * 120 BPM, position 0 */
 KC_API void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t frame_offset);
+KC_API int kc_clock_following(const kc_t *k);   /* the clock follows the host now (playing): P_BPM is not used */
+/* SEQ PLAY (the panel's button: on plays, off stops; recording ends first, as SEQ PLAY on the keyboard); the state as
+ * asked */
+KC_API void kc_seq_play(kc_t *k, int on);
+KC_API int kc_seq_playing(const kc_t *k);
+/* what the clock and the arp / sequencer did (the panel's playing step, the tests): logs of KC_LOG entries since the
+ * last call (older ones dropped), read and emptied here. Steps: every clock step event, its internal frame (frames
+ * rendered since kc_create), number (the host's grid: the song position's step), kind (synth/clock.h CLK_EV_*, |
+ * CLK_EV_HOSTED) and gate (a resumed step's frames). Notes: the arp's and the sequencer's note-ons (vel > 0) and
+ * note-offs (vel 0) in order, with the first frame of the internal block they fell in */
+#define KC_LOG 256u
+enum { KC_EV_STEP, KC_EV_JUMP, KC_EV_RESUME, KC_EV_RELEASE };   /* kc_step_t.kind & KC_EV_KIND (= clock.h's CLK_EV_*) */
+#define KC_EV_KIND 0x0Fu
+#define KC_EV_HOSTED 0x80u                /* a step on the host's grid (its number: the song position's 16th, ...) */
+typedef struct { uint64_t frame; int32_t step; uint8_t kind; uint32_t gate; } kc_step_t;
+typedef struct { uint64_t frame; uint8_t note, vel; } kc_note_t;
+KC_API uint32_t kc_clock_steps(kc_t *k, kc_step_t *out, uint32_t max);
+KC_API uint32_t kc_notes(kc_t *k, kc_note_t *out, uint32_t max);
 
 #ifdef __cplusplus
 }

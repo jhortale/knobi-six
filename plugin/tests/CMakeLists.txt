@@ -14,7 +14,8 @@ target_compile_options(test_plugin PRIVATE -O2 -Wno-float-equal -Wno-sign-conver
 
 foreach(t render_44k_bitexact render_48k midi_sample_accurate rt_no_alloc seam silent_block prepare_keeps_pending
         events_ordered params_layout automation_to_core core_to_host state_roundtrip state_bank_changed
-        state_versioned rt_params)
+        state_versioned rt_params transport_start_bar transport_aligned transport_loop transport_locate
+        transport_tempo_ramp transport_stop_internal bpm_param_greyed)
     add_test(NAME ${t} COMMAND test_plugin ${t})
 endforeach()
 

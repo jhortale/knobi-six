@@ -76,6 +76,9 @@ public:
     CoreRunner& runner() { return runner_; }     // (the audio thread, or inside access().run)
     uint64_t midiDropped() const { return midiDropped_; }
     uint64_t silentBlocks() const { return silentBlocks_; }   // blocks output silent (CoreAccess.h)
+    // the clock follows the host's transport (Live playing): P_BPM is not used, the panel shows it greyed (plan Task
+    // 7). Any thread; as of the last block
+    bool followingHost() const { return following_.load(std::memory_order_acquire); }
 
 private:
     void timerCallback() override { syncHost(); }
@@ -90,7 +93,7 @@ private:
     ProgramBank bank_;
     std::array<int32_t, Params::kLimit> lastCore_{};   // the core's values as last scanned (alone with the core)
     std::atomic<int> program_{0};
-    std::atomic<bool> programMoved_{false}, edited_{false}, stateDiffers_{false};
+    std::atomic<bool> programMoved_{false}, edited_{false}, stateDiffers_{false}, following_{false};
     std::array<juce::String, KC_PROGRAMS> names_;    // (the message thread; filled on first use, cleared by setBank)
     bool namesValid_ = false;
     std::mutex namesLock_;

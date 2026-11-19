@@ -234,6 +234,17 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         e.data[2] = len > 2 ? meta.data[2] : 0;
     }
     midi.clear();                                // (no MIDI out: spec, first version)
+    Transport tr;                                 // the host's transport at this block's first sample (plan Task 5)
+    if (auto* head = getPlayHead())
+        if (const auto pos = head->getPosition()) {
+            const auto ppq = pos->getPpqPosition();
+            tr.playing = pos->getIsPlaying() && ppq.hasValue();   // (no position: as stopped)
+            if (ppq) tr.ppq = *ppq;
+            if (const auto bpm = pos->getBpm()) tr.bpm = *bpm;
+            if (const auto loop = pos->getLoopPoints(); loop && pos->getIsLooping())
+                tr.looping = true, tr.loopStart = loop->ppqStart, tr.loopEnd = loop->ppqEnd;
+        }
+    runner_.transport(tr, (uint32_t)n);
     float* L = buffer.getWritePointer(0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
     if (R)
@@ -243,6 +254,7 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     }
     for (int c = 2; c < buffer.getNumChannels(); c++) buffer.clear(c, 0, n);
     scanCore();                                   // CC, program change: the host is told later (syncHost)
+    following_.store(runner_.following(), std::memory_order_release);   // (P_BPM greyed: the panel)
     if (R) {
         if (fadeIn_) {                           // (after a silent block: in over kFade, no hard step)
             for (int i = 0; i < n && i < kFade; i++) {

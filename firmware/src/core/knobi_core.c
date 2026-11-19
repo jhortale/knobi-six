@@ -42,6 +42,7 @@
 #undef KNOBI_CPU1
 #define KNOBI_CPU1 0
 #define KNOBI_CORE 1                            /* (the firmware's state blocks: per instance, core/state/) */
+#define CLOCK_HOST 1                            /* (synth/clock.h: the host's transport; never on the device) */
 #if !defined KNOBI_FACTORY_LOCAL && !defined KNOBI_FACTORY_H && !defined KNOBI_NO_FACTORY
 #define KNOBI_NO_FACTORY 1                      /* no OB-6 data unless asked for (plugin: KNOBI_FACTORY_LOCAL=ON) */
 #endif
@@ -163,6 +164,10 @@ uint32_t seqst_total(void) { return 0; }
 #include "../ui/controls.c"
 #include "../ui/midi_map.c"
 
+_Static_assert(KC_EV_STEP == CLK_EV_STEP && KC_EV_JUMP == CLK_EV_JUMP && KC_EV_RESUME == CLK_EV_RESUME &&
+               KC_EV_RELEASE == CLK_EV_RELEASE && KC_EV_KIND == CLK_EV_KIND && KC_EV_HOSTED == CLK_EV_HOSTED,
+               "knobi_core.h's step kinds are synth/clock.h's");
+
 /* ---- the instance */
 #define KC_ST_FIELD(b) struct kc_st_##b b;
 struct kc {
@@ -186,6 +191,11 @@ struct kc {
     uint8_t pend_edited;
     program_t pend_p;
     seq_t pend_s;
+    kc_step_t steps[KC_LOG];                    /* kc_clock_steps' log (steps_w - steps_r of them) */
+    uint32_t steps_w, steps_r;
+    kc_note_t notes[KC_LOG];                    /* kc_notes' log */
+    uint32_t notes_w, notes_r;
+    uint32_t ring_r;                            /* the arp's MIDI out ring read so far (eng_arp.out_w) */
 };
 
 /* the instance k runs on this thread until kc_unbind (every kc_* call that touches the shared code: bound on entry,
@@ -259,6 +269,18 @@ static void kc_block_n(kc_t *k, int16_t *to, uint32_t n)
     kc_pass(k);
     memset(out, 0, sizeof out);
     eng_render(out, n);
+    for (uint32_t i = 0; i < eng_clk.n; i++) {  /* (the logs: kc_clock_steps, kc_notes; full: the oldest go) */
+        kc_step_t *e = &k->steps[k->steps_w++ % KC_LOG];
+        e->frame = k->frames + eng_clk.at[i], e->step = (int32_t)eng_clk.step[i];
+        e->kind = eng_clk.kind[i], e->gate = eng_clk.gate[i];
+    }
+    if (k->steps_w - k->steps_r > KC_LOG) k->steps_r = k->steps_w - KC_LOG;
+    for (uint32_t w = eng_arp.out_w; k->ring_r != w; k->ring_r++) {
+        kc_note_t *e = &k->notes[k->notes_w++ % KC_LOG];
+        e->frame = k->frames;
+        e->note = eng_arp.out[k->ring_r & (ARP_OUT_N - 1u)][0], e->vel = eng_arp.out[k->ring_r & (ARP_OUT_N - 1u)][1];
+    }
+    if (k->notes_w - k->notes_r > KC_LOG) k->notes_r = k->notes_w - KC_LOG;
     if (ctl_glob[G_STEREO])                     /* app.c app_audio: MONO, both sides the sum */
         for (uint32_t i = 0; i < n; i++) out[2u * i] = out[2u * i + 1u] = (out[2u * i] + out[2u * i + 1u]) >> 1;
     for (uint32_t i = 0; i < 2u * n; i++) {     /* (tests/host.c's clip) */
@@ -294,6 +316,7 @@ kc_t *kc_create(void)
     k->seq_sent = edit_seq_ver() - 1u;
     ctl_prog_select(0);
     kc_track_load(k);
+    k->ring_r = eng_arp.out_w;
     kc_unbind(was);
     return k;
 }
@@ -458,7 +481,58 @@ int32_t kc_global_get(const kc_t *k, int g)
     return v;
 }
 
+/* the host's transport into the clock (synth/clock.h clock_host): the frame relative to the next clock_tick (the next
+ * internal block: after kc_render's FIFO), the tempo as counts a frame (BPM x CLOCK_RATE_Q, rounded), the position as
+ * ticks (24 a quarter) + counts into the next (CLOCK_U a tick) */
 void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t frame_offset)
 {
-    (void)k, (void)playing, (void)bpm, (void)ppq_pos, (void)frame_offset;   /* (plan Task 5) */
+    kc_binding_t was;
+    uint32_t ahead = k->fifo_at < KC_BLOCK ? KC_BLOCK - k->fifo_at : 0u, rate = 120u * CLOCK_RATE_Q, pos = 0, frac = 0;
+    if (playing) {
+        double t, w;
+        if (!(bpm >= 1.0 && bpm <= 999.0)) bpm = bpm > 999.0 ? 999.0 : bpm >= 0.0 && bpm < 1.0 ? 1.0 : 120.0;   /* (NaN: 120) */
+        if (!(ppq_pos > -8e7 && ppq_pos < 8e7)) ppq_pos = 0.0;   /* (the clock's ticks: a signed 32-bit count) */
+        rate = (uint32_t)(bpm * CLOCK_RATE_Q + 0.5);
+        t = ppq_pos * CLOCK_PPQ;
+        w = (double)(int64_t)t;
+        if (w > t) w -= 1.0;                    /* (floor) */
+        t = (t - w) * (double)CLOCK_U + 0.5;
+        if (t >= (double)CLOCK_U) w += 1.0, t = 0.0;
+        pos = (uint32_t)(int32_t)(int64_t)w, frac = (uint32_t)t;
+    }
+    was = kc_bind(k);
+    clock_host(&eng_clk, frame_offset > ahead ? frame_offset - ahead : 0u, playing, rate, pos, frac);
+    kc_unbind(was);
+}
+int kc_clock_following(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int f = clock_following(&eng_clk);
+    kc_unbind(was);
+    return f;
+}
+void kc_seq_play(kc_t *k, int on)
+{
+    kc_binding_t was = kc_bind(k);
+    if ((on != 0) != (ctl_seq_on() != 0)) ctl_seq_play_press();   /* (the button: recording ends first) */
+    kc_unbind(was);
+}
+int kc_seq_playing(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int on = ctl_seq_on() != 0;
+    kc_unbind(was);
+    return on;
+}
+uint32_t kc_clock_steps(kc_t *k, kc_step_t *out, uint32_t max)
+{
+    uint32_t n = 0;
+    for (; k->steps_r != k->steps_w && n < max; k->steps_r++) out[n++] = k->steps[k->steps_r % KC_LOG];
+    return n;
+}
+uint32_t kc_notes(kc_t *k, kc_note_t *out, uint32_t max)
+{
+    uint32_t n = 0;
+    for (; k->notes_r != k->notes_w && n < max; k->notes_r++) out[n++] = k->notes[k->notes_r % KC_LOG];
+    return n;
 }

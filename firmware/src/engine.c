@@ -621,6 +621,29 @@ static void eng_cpu(uint32_t used, uint32_t budget)
  * frame (arp_step / seq_step there: their notes start on that sample) and at the end of their notes' gate (arp_run /
  * seq_run: the note-offs on that sample). synth_render takes any frame count and keeps its control period across the
  * calls. With both off and no note of their own: one render, as before */
+#ifdef CLOCK_HOST
+/* The host's transport (synth/clock.h CLOCK_HOST: the plugin's core only, never the device). An event after a jump (a
+ * start, a loop's wrap, a locate) or a stop releases the arp's and the sequencer's notes first: nothing sounds on from
+ * before it (a tie does not carry across it). A resumed step (started inside its first half) plays with what is left of
+ * its gate on the grid. A step on the host's grid plays the sequence's step matching the song position: the step's
+ * number modulo the sequence's length (the sequence anchored at position 0: bar 1 plays step 1), so a start mid-bar,
+ * a loop's wrap and a locate land on the matching step. 1: a release only, no step here */
+static int eng_host_step(uint32_t k)
+{
+    unsigned kind = eng_clk.kind[k] & CLK_EV_KIND;
+    if (kind != CLK_EV_STEP) {
+        arp_note_off(&eng_arp, &eng_synth);
+        seq_silence(&eng_seqp, &eng_synth);
+    }
+    if (kind == CLK_EV_RELEASE) return 1;
+    if (kind == CLK_EV_RESUME) eng_arp.step_len = eng_seqp.step_len = 2u * eng_clk.gate[k];
+    if (eng_clk.kind[k] & CLK_EV_HOSTED) {
+        int32_t len = eng_seqd.len > SEQ_MAX_STEPS ? (int32_t)SEQ_MAX_STEPS : (int32_t)eng_seqd.len, m;
+        if (len) m = (int32_t)eng_clk.step[k] % len, eng_seqp.pos = (uint8_t)(m < 0 ? m + len : m);
+    }
+    return 0;
+}
+#endif
 static void eng_render_steps(int32_t *lr, uint32_t frames)
 {
     uint32_t pos = 0, k = 0, n = eng_clk.n;
@@ -630,6 +653,9 @@ static void eng_render_steps(int32_t *lr, uint32_t frames)
         while (k < n && eng_clk.at[k] <= pos) {   /* a step here: the step's length for the gate (50 %) */
             uint32_t ticks = CLOCK_DIV_TICKS[eng_clk.div][eng_clk.step[k] & 1u], rate = eng_clk.rate;
             eng_arp.step_len = eng_seqp.step_len = rate ? ticks * CLOCK_U / rate : 0u;   /* (48 x CLOCK_U < 2^29) */
+#ifdef CLOCK_HOST
+            if (eng_host_step(k)) { k++; continue; }
+#endif
             arp_step(&eng_arp, &eng_synth);
             seq_step(&eng_seqp, &eng_synth);
             k++;

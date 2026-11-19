@@ -39,6 +39,19 @@
  *                         note given at frame 0; at 301, 301 frames
  *   exports_only_kc       the core as a shared library (the plugin's build flags: -fvisibility=hidden, KC_API) exports
  *                         the kc_* calls and nothing else (none of the firmware's own non-static functions)
+ * The host's transport (plan Task 5, kc_clock_host; a host at 44.1 kHz: its transport before each block, kc_render_exact):
+ *   core_transport_start_bar  SEQ PLAY on, then play from bar 1: step 0 at the start's frame, the 16ths on the grid,
+ *                         the sequence's notes from its step 1
+ *   core_transport_mid_bar    from ppq 1.5 / 5 / 1.6: the sequence's step matching the position (a resumed one inside
+ *                         its first half, its gate what is left on the grid)
+ *   core_transport_loop   a 1-bar loop, the wrap inside a block: 16 steps a pass, none doubled or skipped; a 12-step
+ *                         sequence plays 1..12, 1..4 every pass
+ *   core_transport_locate     forward and backward jumps: the matching step at once
+ *   core_transport_tempo_ramp 100 -> 140 BPM: every 16th within 1 frame of the ideal grid
+ *   core_transport_stop_internal  P_BPM kept, not used while playing (bpm_param_greyed); stopped: a release, the
+ *                         internal clock at P_BPM from the position, the sequence on (SEQ PLAY), the arp with a key held
+ *   core_no_stuck_notes   a tied sequence across loop wraps, locates, a stop and a restart; the arp with a chord across
+ *                         a loop, a locate and a stop: every note-on has its note-off, the output silent at the end
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
 #include <stdio.h>
@@ -925,6 +938,320 @@ static void first_render_no_alloc(void)
 static void first_render_no_alloc(void) { printf("first_render_no_alloc: macOS only: skipped\n"); }
 #endif
 
+/* ---- the host's transport (plan Task 5: kc_clock_host; synth/clock.h's own tests: test_clock_host.c). A host at
+ * 44.1 kHz: before each host block its transport for the block's first frame (and a loop's wrap inside it at its
+ * frame), then kc_render_exact of the block. The program: a sequence of 16ths, step i plays note 40 + i (velocity 100) */
+#include <math.h>
+static int16_t tr_buf[2u * 4096u];
+static void tr_prog(kc_t *k, int len, int tie_last)
+{
+    program_t p;
+    seq_t q;
+    int32_t num;
+    kc_program_get(k, &num, &p, NULL, NULL);
+    seq_clear(&q);
+    q.len = (uint8_t)len;
+    for (int i = 0; i < len; i++) q.step[i].count = 1, q.step[i].notes[0] = (uint8_t)(40 + i), q.step[i].vels[0] = 100;
+    if (tie_last) q.step[len - 1].tie = 1, q.step[len - 1].notes[0] = (uint8_t)(40 + len - 2);   /* (a tie: a copy) */
+    p.v[P_CLK_DIV] = CLK_DIV_16TH;
+    CHECK(kc_program_set(k, 0, &p, &q, 0) == 0);
+}
+/* the host: frames [*t, *t + frames) in blocks of hb at a steady tempo from ppq p0 (a loop [ls, le) when le > ls) */
+static void tr_host(kc_t *k, uint64_t *t, uint64_t frames, uint32_t hb, int playing, double bpm, double p0, double ls,
+                    double le)
+{
+    const double fpq = 44100.0 * 60.0 / bpm;     /* frames a quarter */
+    double ppq = p0;
+    for (uint64_t d = 0; d < frames; d += hb) {
+        uint32_t n = frames - d < hb ? (uint32_t)(frames - d) : hb;
+        kc_clock_host(k, playing, bpm, ppq, 0);
+        ppq += n / fpq;
+        if (playing && le > ls && ppq >= le) {    /* (a wrap inside the block: at its frame, the loop's start) */
+            double w = (le - (ppq - n / fpq)) * fpq;
+            uint32_t at = (uint32_t)ceil(w - 1e-9);
+            if (at < n) kc_clock_host(k, 1, bpm, ls + (at - w) / fpq, at);
+            ppq -= le - ls;
+        }
+        kc_render_exact(k, tr_buf, n);
+        *t += n;
+    }
+}
+static kc_step_t tr_st[KC_LOG];
+static kc_note_t tr_nt[4096];
+static uint32_t tr_nn;
+static void tr_take_notes(kc_t *k) { uint32_t m; while ((m = kc_notes(k, tr_nt + tr_nn, 4096u - tr_nn)) && tr_nn < 4096u) tr_nn += m; }
+/* the note-ons from frame f on, into on[] (up to max) */
+static uint32_t tr_ons(uint64_t f, int *on, uint32_t max)
+{
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < tr_nn; i++) if (tr_nt[i].frame >= f && tr_nt[i].vel && m < max) on[m++] = tr_nt[i].note;
+    return m;
+}
+/* notes sounding after the log (on minus off, per note; must be 0 or 1): how many */
+static int tr_sounding(int *bad)
+{
+    int c[128] = {0}, n = 0;
+    *bad = 0;
+    for (uint32_t i = 0; i < tr_nn; i++) {
+        c[tr_nt[i].note] += tr_nt[i].vel ? 1 : -1;
+        if (c[tr_nt[i].note] < 0 || c[tr_nt[i].note] > 1) (*bad)++;
+    }
+    for (int i = 0; i < 128; i++) n += c[i] != 0;
+    return n;
+}
+
+/* SEQ PLAY on with the host stopped (the internal clock plays it), then the host plays from bar 1 at frame 1024: step 0
+ * there (a jump), note 40 first, then 41.. on 16ths of 120 BPM exactly (1024 + ceil(k x 5512.5)) */
+static void core_transport_start_bar(void)
+{
+    kc_t *k = kc_create();
+    uint64_t t = 0;
+    uint32_t n, bad = 0, j = 0;
+    int on[16], m;
+    tr_prog(k, 16, 0);
+    tr_nn = 0;
+    tr_host(k, &t, 1024, 512, 0, 120.0, 0.0, 0, 0);   /* (the program set taken: kc_create's load drained first) */
+    kc_seq_play(k, 1);
+    kc_clock_steps(k, tr_st, KC_LOG), tr_take_notes(k), tr_nn = 0;
+    tr_host(k, &t, 8u * 5512u, 512, 1, 120.0, 0.0, 0, 0);
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    tr_take_notes(k);
+    for (uint32_t i = 0; i < n; i++) {
+        if (tr_st[i].frame < 1024u) continue;
+        bad += tr_st[i].frame != 1024u + ((uint64_t)j * 11025u + 1u) / 2u || tr_st[i].step != (int32_t)j ||
+               !(tr_st[i].kind & CLK_EV_HOSTED);
+        j++;
+    }
+    m = (int)tr_ons(1024, on, 16);
+    printf("core_transport_start_bar: following %d, %u steps from frame 1024 (%u off the grid), first kind %02X, "
+           "note-ons %d: %d %d %d ..\n", kc_clock_following(k), j, bad, n ? tr_st[0].kind : 0, m, m > 0 ? on[0] : -1,
+           m > 1 ? on[1] : -1, m > 2 ? on[2] : -1);
+    CHECK(kc_clock_following(k) && j == 8u && bad == 0 && m == 8 && on[0] == 40 && on[1] == 41 && on[7] == 47);
+    kc_destroy(k);
+}
+
+/* start mid-bar: ppq 1.5 (beat 2.5): the sequence's step 7 (note 46) at once, then 47 on the grid; ppq 5 (bar 2 beat
+ * 2): step 20 of the song = the 16-step sequence's step 5 (note 44); ppq 1.6: inside the 16th's first half: step 6
+ * resumed (note 46 at once, its gate to ppq 1.625: 551.25 frames, 552 whole ones) */
+static void core_transport_mid_bar(void)
+{
+    const double starts[3] = {1.5, 5.0, 1.6};
+    const int want[3] = {46, 44, 46};
+    for (int c = 0; c < 3; c++) {
+        kc_t *k = kc_create();
+        uint64_t t = 0;
+        int on[4], m;
+        uint32_t n;
+        tr_prog(k, 16, 0);
+        tr_host(k, &t, 2048, 512, 0, 120.0, 0.0, 0, 0);
+        kc_seq_play(k, 1);
+        kc_clock_steps(k, tr_st, KC_LOG), tr_nn = 0, tr_take_notes(k), tr_nn = 0;
+        tr_host(k, &t, 2u * 5513u, 512, 1, 120.0, starts[c], 0, 0);
+        n = kc_clock_steps(k, tr_st, KC_LOG);
+        tr_take_notes(k);
+        m = (int)tr_ons(0, on, 4);
+        printf("core_transport_mid_bar: from ppq %.2f: step %d kind %02X gate %u at %llu, note-ons %d %d (want %d %d)\n",
+               starts[c], n ? tr_st[0].step : -99, n ? tr_st[0].kind : 0, n ? tr_st[0].gate : 0,
+               (unsigned long long)(n ? tr_st[0].frame : 0), m > 0 ? on[0] : -1, m > 1 ? on[1] : -1, want[c], want[c] + 1);
+        CHECK(n >= 2u && tr_st[0].frame == 2048u && m >= 2 && on[0] == want[c] && on[1] == want[c] + 1);
+        if (c == 2) CHECK(n >= 1u && (tr_st[0].kind & CLK_EV_KIND) == CLK_EV_RESUME && tr_st[0].gate == 552u);
+        kc_destroy(k);
+    }
+}
+
+/* a 1-bar loop [0, 4) of 16ths at 120 BPM, host blocks of 500 (the wrap, at 88200, inside a block: its own anchor),
+ * a 12-step sequence: each pass plays steps 1..12 then 1..4 (the song's 16ths 0..15 modulo 12): note-ons 40..51,
+ * 40..43, the same every pass; 16 steps a pass, one at each wrap (a jump), none doubled or skipped */
+static void core_transport_loop(void)
+{
+    kc_t *k = kc_create();
+    uint64_t t = 0;
+    uint32_t n, bad = 0, hosted = 0;
+    int on[64], m, okn = 1;
+    tr_prog(k, 12, 0);
+    tr_host(k, &t, 512, 512, 0, 120.0, 0.0, 0, 0);
+    kc_seq_play(k, 1);
+    kc_clock_steps(k, tr_st, KC_LOG), tr_nn = 0, tr_take_notes(k), tr_nn = 0;
+    tr_host(k, &t, 3u * 88200u, 500, 1, 120.0, 0.0, 0.0, 4.0);
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    tr_take_notes(k);
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t pass = hosted / 16u, j = hosted % 16u;
+        if (!(tr_st[i].kind & CLK_EV_HOSTED)) continue;
+        bad += tr_st[i].frame != 512u + pass * 88200u + ((uint64_t)j * 11025u + 1u) / 2u || tr_st[i].step != (int32_t)j;
+        hosted++;
+    }
+    m = (int)tr_ons(512, on, 64);
+    for (int i = 0; i < m; i++) okn &= on[i] == 40 + (i % 16) % 12;
+    printf("core_transport_loop: 3 passes of a 1-bar loop: %u steps (want 48), %u off; %d note-ons, in order: %s\n",
+           hosted, bad, m, okn ? "yes" : "no");
+    CHECK(hosted == 48u && bad == 0 && m == 48 && okn);
+    kc_destroy(k);
+}
+
+/* a locate while playing: at frame 512 x 10 to ppq 8.25 (the song's 16th 33 = the sequence's step 2: note 41), then
+ * 42 on the grid; backwards to ppq 0.75 (step 4: note 43) */
+static void core_transport_locate(void)
+{
+    kc_t *k = kc_create();
+    uint64_t t = 0;
+    int on[4], m;
+    uint32_t n;
+    tr_prog(k, 16, 0);
+    tr_host(k, &t, 5120, 512, 1, 120.0, 0.0, 0, 0);
+    kc_seq_play(k, 1);
+    kc_clock_steps(k, tr_st, KC_LOG), tr_nn = 0, tr_take_notes(k), tr_nn = 0;
+    tr_host(k, &t, 5514, 512, 1, 120.0, 8.25, 0, 0);
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    tr_take_notes(k);
+    m = (int)tr_ons(5120, on, 4);
+    printf("core_transport_locate: to ppq 8.25 at 5120: step %d kind %02X, note-ons %d %d (want 41 42)\n",
+           n ? tr_st[0].step : -99, n ? tr_st[0].kind : 0, m > 0 ? on[0] : -1, m > 1 ? on[1] : -1);
+    CHECK(n == 2u && tr_st[0].frame == 5120u && tr_st[0].step == 33 && (tr_st[0].kind & CLK_EV_KIND) == CLK_EV_JUMP &&
+          m == 2 && on[0] == 41 && on[1] == 42);
+    tr_nn = 0;
+    tr_host(k, &t, 5514, 512, 1, 120.0, 0.75, 0, 0);
+    tr_take_notes(k);
+    m = (int)tr_ons(0, on, 4);
+    printf("core_transport_locate: back to ppq 0.75: note-ons %d %d (want 43 44)\n", m > 0 ? on[0] : -1, m > 1 ? on[1] : -1);
+    CHECK(m == 2 && on[0] == 43 && on[1] == 44);
+    kc_destroy(k);
+}
+
+/* tempo automation 100 -> 140 BPM over 4 s (linear in time; each host block of 256 given its tempo at its start and
+ * its exact position): every 16th within 1 frame of the ideal grid */
+static double tr_ramp_ppq(double s) { return s < 4.0 ? (100.0 * s + 5.0 * s * s) / 60.0 : (400.0 + 80.0) / 60.0 + 140.0 * (s - 4.0) / 60.0; }
+static void core_transport_tempo_ramp(void)
+{
+    kc_t *k = kc_create();
+    uint32_t n, worst = 0, want = 0;
+    kc_param_set(k, P_CLK_DIV, CLK_DIV_16TH);
+    for (uint64_t S = 0; S < 5u * 44100u; S += 256u) {
+        double s = (double)S / 44100.0;
+        kc_clock_host(k, 1, s < 4.0 ? 100.0 + 10.0 * s : 140.0, tr_ramp_ppq(s), 0);
+        kc_render_exact(k, tr_buf, 256);
+    }
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    while (tr_ramp_ppq((5.0 * 44100.0 - 1.0) / 44100.0) * 4.0 >= (double)want) want++;
+    for (uint32_t i = 0; i < n; i++) {
+        double lo = 0.0, hi = 6.0, d;
+        for (int it = 0; it < 80; it++) { double mid = (lo + hi) / 2.0; if (tr_ramp_ppq(mid) * 4.0 < (double)i) lo = mid; else hi = mid; }
+        d = fabs((double)tr_st[i].frame - hi * 44100.0);
+        if (d > worst) worst = (uint32_t)ceil(d);
+        if (tr_st[i].step != (int32_t)i) worst = 999;
+    }
+    printf("core_transport_tempo_ramp: 100 -> 140 BPM: %u 16ths (want %u), worst %u frame(s) from the ideal grid\n", n,
+           want, worst);
+    CHECK(n == want && worst <= 1u);
+    kc_destroy(k);
+}
+
+/* P_BPM while the host plays: kept (kc_param_get), not used (the steps on the host's 120); stopped at frame 512 x 12
+ * (6144: inside the 16th that started at 5513): a release there, the internal clock at P_BPM 60 from the position
+ * (the rest of that 16th, 11025 - 6144 = 4881 frames at 120 = 9762 at 60: the next step at 15906), the sequence on (SEQ PLAY
+ * on: the firmware's rule), its steps 11025 frames apart; SEQ PLAY off: no more notes, none left sounding; the arp
+ * with a key held, the host stopped: it plays (internal clock at 60) */
+static void core_transport_stop_internal(void)
+{
+    kc_t *k = kc_create();
+    uint64_t t = 0;
+    uint32_t n, i0;
+    int on[8], m;
+    tr_prog(k, 16, 0);
+    tr_host(k, &t, 2048, 512, 1, 120.0, 0.0, 0, 0);
+    kc_seq_play(k, 1);
+    kc_param_set(k, P_BPM, 60);
+    tr_host(k, &t, 4096, 512, 1, 120.0, 2048.0 / 22050.0, 0, 0);
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    printf("bpm_param_greyed (core): P_BPM %d while playing: following %d, steps at %llu %llu (want 0 5513)\n",
+           (int)kc_param_get(k, P_BPM), kc_clock_following(k), (unsigned long long)(n > 0 ? tr_st[0].frame : 0),
+           (unsigned long long)(n > 1 ? tr_st[1].frame : 0));
+    CHECK(kc_param_get(k, P_BPM) == 60 && kc_clock_following(k) && n == 2u && tr_st[1].frame == 5513u);
+    tr_nn = 0, tr_take_notes(k), tr_nn = 0;
+    tr_host(k, &t, 40000, 512, 0, 120.0, 0.0, 0, 0);
+    n = kc_clock_steps(k, tr_st, KC_LOG);
+    tr_take_notes(k);
+    for (i0 = 0; i0 < n && tr_st[i0].frame < 6144u; i0++) {}
+    printf("core_transport_stop_internal: stopped at 6144: following %d, kind %02X at %llu, then steps at %llu %llu "
+           "(want 15906 26931)\n", kc_clock_following(k), n > i0 ? tr_st[i0].kind : 0,
+           (unsigned long long)(n > i0 ? tr_st[i0].frame : 0), (unsigned long long)(n > i0 + 1 ? tr_st[i0 + 1].frame : 0),
+           (unsigned long long)(n > i0 + 2 ? tr_st[i0 + 2].frame : 0));
+    CHECK(!kc_clock_following(k) && n > i0 + 2 && tr_st[i0].frame == 6144u && tr_st[i0].kind == CLK_EV_RELEASE &&
+          tr_st[i0 + 1].frame == 15906u && tr_st[i0 + 2].frame == 26931u && kc_seq_playing(k));
+    m = (int)tr_ons(6144, on, 8);
+    CHECK(m >= 2 && on[0] == 42 && on[1] == 43);  /* (the sequence on: its steps 3, 4 on the internal clock) */
+    kc_seq_play(k, 0);
+    tr_nn = 0;
+    tr_host(k, &t, 30000, 512, 0, 120.0, 0.0, 0, 0);
+    tr_take_notes(k);
+    m = (int)tr_ons(0, on, 8);
+    printf("core_transport_stop_internal: SEQ PLAY off: %d note-ons after\n", m);
+    CHECK(m == 0);
+    {                                             /* the arp, the host stopped: a key held plays it */
+        uint8_t non[3] = {0x90, 60, 100};
+        kc_param_set(k, P_ARP_ON, 1);
+        tr_host(k, &t, 512, 512, 0, 120.0, 0.0, 0, 0);
+        kc_midi(k, non, 3);
+        tr_nn = 0;
+        tr_host(k, &t, 3u * 11025u, 512, 0, 120.0, 0.0, 0, 0);
+        tr_take_notes(k);
+        m = (int)tr_ons(0, on, 8);
+        printf("core_transport_stop_internal: the arp with a key held, host stopped: %d note-ons (%d ..)\n", m, m ? on[0] : -1);
+        CHECK(m >= 3 && on[0] == 60);
+    }
+    kc_destroy(k);
+}
+
+/* no note left sounding across the transport: a 12-step sequence with a tie on its last step (its notes held into the
+ * next step) in a 1-bar loop (the wrap cuts the tie), locates mid-step (resumed steps), a stop and a restart, then SEQ
+ * PLAY off; the arp with a chord held across a locate, a loop and a stop, then the keys released: every note-on has
+ * its note-off, nothing sounds at the end (the audio silent) */
+static void core_no_stuck_notes(void)
+{
+    kc_t *k = kc_create();
+    uint64_t t = 0;
+    int bad, left, quiet = 1;
+    tr_prog(k, 12, 1);
+    tr_host(k, &t, 512, 512, 0, 120.0, 0.0, 0, 0);
+    kc_seq_play(k, 1);
+    tr_nn = 0;
+    tr_host(k, &t, 2u * 88200u + 1234u, 500, 1, 120.0, 0.0, 0.0, 4.0);   /* (the wraps cut the tie) */
+    tr_host(k, &t, 30000, 512, 1, 120.0, 2.8, 0, 0);       /* (a locate inside a step: resumed) */
+    tr_host(k, &t, 7000, 512, 0, 120.0, 0.0, 0, 0);        /* (stopped: the internal clock plays on) */
+    tr_host(k, &t, 20000, 333, 1, 133.0, 1.13, 0, 0);      /* (playing again inside a step) */
+    kc_seq_play(k, 0);
+    tr_host(k, &t, 2048, 512, 1, 133.0, 9.0, 0, 0);
+    tr_take_notes(k);
+    left = tr_sounding(&bad);
+    printf("core_no_stuck_notes: the sequencer: %u notes logged, %d sounding at the end, %d unpaired\n", tr_nn, left, bad);
+    CHECK(tr_nn > 40u && left == 0 && bad == 0);
+    {
+        uint8_t m1[3] = {0x90, 60, 100}, m2[3] = {0x90, 64, 100}, m3[3] = {0x90, 67, 100};
+        uint8_t o1[3] = {0x80, 60, 0}, o2[3] = {0x80, 64, 0}, o3[3] = {0x80, 67, 0};
+        kc_param_set(k, P_ARP_ON, 1);
+        kc_param_set(k, P_CLK_DIV, CLK_DIV_32ND);
+        kc_midi(k, m1, 3), kc_midi(k, m2, 3), kc_midi(k, m3, 3);
+        tr_nn = 0;
+        tr_host(k, &t, 50000, 500, 1, 120.0, 0.0, 0.0, 1.0);   /* (a 1-beat loop: wraps) */
+        tr_host(k, &t, 9000, 512, 1, 120.0, 7.1, 0, 0);     /* (a locate) */
+        tr_host(k, &t, 9000, 512, 0, 120.0, 0.0, 0, 0);     /* (stopped: the arp on the internal clock) */
+        tr_host(k, &t, 9000, 512, 1, 120.0, 3.3, 0, 0);
+        kc_midi(k, o1, 3), kc_midi(k, o2, 3), kc_midi(k, o3, 3);
+        tr_host(k, &t, 4096, 512, 1, 120.0, 5.0, 0, 0);
+        tr_take_notes(k);
+        left = tr_sounding(&bad);
+        printf("core_no_stuck_notes: the arp: %u notes logged, %d sounding after the keys' release, %d unpaired\n", tr_nn,
+               left, bad);
+        CHECK(tr_nn > 40u && left == 0 && bad == 0);
+    }
+    tr_host(k, &t, 3u * 44100u, 512, 1, 120.0, 7.0, 0, 0);  /* (the releases' tails) */
+    kc_render_exact(k, tr_buf, 2048);
+    for (int i = 0; i < 4096; i++) quiet &= tr_buf[i] == 0;
+    printf("core_no_stuck_notes: silent at the end: %s\n", quiet ? "yes" : "no");
+    CHECK(quiet);
+    kc_destroy(k);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -951,6 +1278,13 @@ int main(void)
     exact_aligned();
     exact_onset();
     exports_only_kc();
+    core_transport_start_bar();
+    core_transport_mid_bar();
+    core_transport_loop();
+    core_transport_locate();
+    core_transport_tempo_ramp();
+    core_transport_stop_internal();
+    core_no_stuck_notes();
 #endif
     if (fails) { printf("test_core: %d FAILED\n", fails); return 1; }
     printf("test_core: all passed\n");
