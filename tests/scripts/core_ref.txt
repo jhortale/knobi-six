@@ -1,0 +1,17 @@
+# The host core's reference (tests/unit/test_core.c, run by make -C tests unit): the firmware's host build plays the
+# init program from MIDI in on USB; the core (firmware/src/core/knobi_core.c) gets the same messages at the same 256-frame
+# blocks and must give the same samples. Each message is at a millisecond T after which no block renders at T + 1 (the
+# main loop's next pass hands the levels it set, bend and pressure, to the engine before the next block, as the core
+# does): test_core.c checks that and puts each message at block T * 441 / 2560 (the blocks rendered by then).
+# A note, a second note, filter cutoff by CC 74, pitch bend, channel pressure, a note-off, sustain holding a note-off,
+# sustain released.
+1 midi 0x90 60 100
+200 midi 0x90 64 90
+300 midi 0xB0 74 40
+401 midi 0xE0 0 80
+500 midi 0xD0 100 0
+600 midi 0x80 60 0
+700 midi 0xB0 64 127
+750 midi 0x80 64 0
+900 midi 0xB0 64 0
+1100 end
