@@ -12,9 +12,11 @@
  * after the frames already rendered into the FIFO): a caller that renders in multiples of KC_BLOCK frames gets them at
  * the frame it called them before.
  *
- * Threads: none of this is thread-safe; one thread drives an instance (the plugin's audio thread). For now (plan Task 1)
- * the state is the firmware's file-scope state: one instance per process (kc_create returns NULL for a second one,
- * even after kc_destroy); plan Task 2 makes it per instance.
+ * Instances and threads: every instance owns all of its state (the firmware modules' file-scope state included:
+ * knobi_core.c, tools/core_state.py), so any number of instances may exist, be created and destroyed in any order, and
+ * run at the same time on different threads. One instance is not thread-safe: the calls on one instance must not
+ * overlap (one thread at a time drives it, e.g. the plugin's audio thread; another thread may take over between calls).
+ * The one exception is kc_bank_set: any thread, at any time (see there).
  *
  * Storage: the core reads and writes no file and no flash. The program bank's user layer comes in through kc_bank_set
  * (a snapshot the caller owns and keeps unchanged while set); programs it does not hold are the factory programs of
@@ -40,7 +42,7 @@ extern "C" {
 typedef struct kc kc_t;
 
 kc_t *kc_create(void);                    /* the init program (program 0 of the bank), the globals at their defaults
-                                           * (MIDI CH = ALL), silent; NULL: no room, or an instance exists (Task 1) */
+                                           * (MIDI CH = ALL), silent; NULL: no memory */
 void kc_destroy(kc_t *k);
 void kc_render(kc_t *k, int16_t *lr, uint32_t frames);   /* frames x (L, R), any count */
 void kc_midi(kc_t *k, const uint8_t *msg, uint32_t len);   /* one MIDI message (1..3 bytes: a channel message or a
@@ -78,7 +80,17 @@ typedef struct {
     program_t program[KC_PROGRAMS];
     seq_t seq[KC_PROGRAMS];
 } kc_bank_t;
-void kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none); read on loads only */
+int kc_bank_set(kc_t *k, const kc_bank_t *bank);   /* the user layer (NULL: none), read on loads only. 0 taken; -1
+                                           * refused (the previous one stays): a used entry is not a program + sequence
+                                           * the firmware would store (kc_program_valid). Any thread, at any time, also
+                                           * while another thread renders: the instance takes the newest bank set at the
+                                           * start of each of its calls (kc_render, kc_midi, ...). The caller keeps a bank
+                                           * unchanged and alive while it may be in use: until kc_bank_in_use no longer
+                                           * returns it (after a later kc_bank_set, once the instance's next call has
+                                           * started), or the instance is destroyed */
+const kc_bank_t *kc_bank_in_use(const kc_t *k);   /* the bank the instance's calls read now (any thread) */
+int kc_program_valid(const program_t *p, const seq_t *s);   /* 0: a program + sequence the firmware would store (its
+                                           * record formats: program_pack / unpack, seq_pack / unpack); -1 not */
 
 /* globals (params/globals.h G_*: MIDI CH, TRANSPOSE, TUNE, VEL CURVE, LOCAL, STEREO, SUSTAIN, AT CURVE, MIDI CLOCK, ARP
  * BEAT SYNC, ...), GLOB_MIN..GLOB_MAX, clamped */

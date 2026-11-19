@@ -19,6 +19,16 @@
  * one pass after the messages is the same as the host build's when its next pass also comes before the block
  * (tests/scripts/core_ref.txt). Then the host build's clip to +-32767 (tests/host.c: the USB audio at full MASTER).
  *
+ * Per instance (plan Task 2): every instance owns all mutable state. The firmware modules' file-scope state stays
+ * declared where it is (the device build unchanged), in blocks wrapped "#ifdef KNOBI_CORE / #include
+ * core/state/<block>.h / #else / the declarations / #endif": tools/core_state.py writes each header from the
+ * declarations (a struct per block, its initial values, a macro per variable naming the field of the instance this
+ * thread runs: kc_tls_<block>, a _Thread_local pointer). The core's own (the platform stubs' state, the bank in use) is
+ * kc_st_core below, the same way. Every kc_* call binds its instance to the calling thread (kc_bind: the pointers set,
+ * the previous ones put back at the end), so instances on different threads never meet, and one thread may run several
+ * in turn. Function statics in the shared code are scratch copies there (locals under KNOBI_CORE); voice_c4_q16 is a
+ * constant. tests/unit/test_core.c no_mutable_globals checks the object has no other writable data.
+ *
  * Not for the device: built with DINGHY_HOST (the firmware's host paths: no .pool sections, the CPU guard's clock is
  * the host's fake one, so the guard never sheds) and KNOBI_CPU1 0. */
 #ifndef DINGHY_HOST
@@ -29,12 +39,14 @@
 #endif
 #undef KNOBI_CPU1
 #define KNOBI_CPU1 0
+#define KNOBI_CORE 1                            /* (the firmware's state blocks: per instance, core/state/) */
 #if !defined KNOBI_FACTORY_LOCAL && !defined KNOBI_FACTORY_H && !defined KNOBI_NO_FACTORY
 #define KNOBI_NO_FACTORY 1                      /* no OB-6 data unless asked for (plugin: KNOBI_FACTORY_LOCAL=ON) */
 #endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "knobi_core.h"
 
 #if defined __GNUC__
@@ -52,9 +64,21 @@
 enum { BTN_KNOB_BANK = 0, BTN_FADER_BANK = 1, BTN_LEFT = 2, BTN_RIGHT = 3, BTN_OCT_DOWN = 4, BTN_OCT_UP = 5,
        BTN_ARP = 6, BTN_LFO = 7, BTN_SEL = 8, BTN_ENV = 9, BTN_GLO = 10, BTN_SAVE = 11, BTN_HOME = 12, BTN_EDIT = 13,
        BTN_FX = 14, BTN_SEQ = 15, BTN_PLAY = 16, BTN_REC = 17 };   /* (platform.c, BOARD_SMK37) */
-static uint32_t fm1_ms;
-static struct { uint32_t notes, buttons; uint8_t fader[4], pad_press[16]; } fm1_in;
-static uint8_t smk_pad_events, store_sliced;
+struct kc_st_core {                             /* the core's own state, per instance (as core/state/<block>.h) */
+    uint32_t fm1_ms;                            /* platform.c's millisecond clock */
+    struct { uint32_t notes, buttons; uint8_t fader[4], pad_press[16]; } fm1_in;   /* (platform.c fm1_in: at rest) */
+    uint8_t smk_pad_events, store_sliced;
+    uint32_t eng_fake_ticks, eng_fake_per_voice;   /* (engine.c's host CPU guard clock: never advanced here) */
+    const kc_bank_t *bank;                      /* kc_bank: the bank this call reads (kc_bind: the newest kc_bank_set) */
+};
+static _Thread_local struct kc_st_core *kc_tls_core;
+#define fm1_ms (kc_tls_core->fm1_ms)
+#define fm1_in (kc_tls_core->fm1_in)
+#define smk_pad_events (kc_tls_core->smk_pad_events)
+#define store_sliced (kc_tls_core->store_sliced)
+#define eng_fake_ticks (kc_tls_core->eng_fake_ticks)
+#define eng_fake_per_voice (kc_tls_core->eng_fake_per_voice)
+#define kc_bank (kc_tls_core->bank)
 static uint32_t fm1_input_edges(uint32_t *released) { *released = 0; return 0; }
 static int32_t fm1_enc_take(uint32_t e) { (void)e; return 0; }
 static int32_t smk_pad_take(void) { return -1; }
@@ -73,12 +97,25 @@ static void midi_send(uint32_t st, uint32_t d1, uint32_t d2) { (void)st; (void)d
 #include "../synth/seq.c"
 #include "../params/seq_store.h"
 #define KC_BANK_GEN 1u
-static const kc_bank_t *kc_bank;                /* (Task 2: per instance) */
+/* a program / sequence through the firmware's own record formats, as its stores keep them: 0 ok, -1 not one it stores */
+static int kc_copy_program(const program_t *from, program_t *to)
+{
+    uint8_t buf[PROGRAM_PACKED_MAX];
+    int n = program_pack(from, buf, sizeof buf);
+    return n < 0 || program_unpack(to, buf, (uint32_t)n) ? -1 : 0;
+}
+static int kc_copy_seq(const seq_t *from, seq_t *to)
+{
+    uint8_t buf[SEQ_PACKED_MAX];
+    int n = seq_pack(from, buf, sizeof buf);
+    return n < 0 || seq_unpack(to, buf, (uint32_t)n) ? -1 : 0;
+}
 uint32_t prog_count(void) { return PROG_COUNT; }
 int prog_load(uint32_t n, program_t *p)
 {
     if (n < PROG_COUNT && kc_bank && kc_bank->used[n]) {
-        *p = kc_bank->program[n];
+        if (kc_copy_program(&kc_bank->program[n], p)) { program_init(p); return -2; }   /* (as store_prog.c: broken;
+                                                 * never here: kc_bank_set refuses such a bank) */
         program_set_seq_gen(p, KC_BANK_GEN);
         return 0;
     }
@@ -89,8 +126,7 @@ int seqst_init(void) { return 0; }
 int seqst_get(uint16_t prog, uint16_t gen, seq_t *out)
 {
     if (prog >= PROG_COUNT || gen != KC_BANK_GEN || !kc_bank || !kc_bank->used[prog]) return 0;
-    *out = kc_bank->seq[prog];
-    return 1;
+    return kc_copy_seq(&kc_bank->seq[prog], out) == 0;
 }
 int seqst_put(uint16_t prog, const seq_t *s, uint16_t *gen_out) { (void)prog; (void)s; (void)gen_out; return -1; }
 int seqst_put_above(uint16_t prog, const seq_t *s, uint16_t floor, uint16_t *gen_out) { (void)floor; return seqst_put(prog, s, gen_out); }
@@ -116,7 +152,14 @@ uint32_t seqst_total(void) { return 0; }
 #include "../ui/midi_map.c"
 
 /* ---- the instance */
+#include "state/list.h"
+#define KC_ST_FIELD(b) struct kc_st_##b b;
+#define KC_ST_PTR(b) struct kc_st_##b *b;
 struct kc {
+    struct kc_st_core core;                     /* all the state the shared code reads and writes, this instance's */
+    KC_STATE_BLOCKS(KC_ST_FIELD)
+    _Atomic(const kc_bank_t *) bank_next;       /* kc_bank_set's (any thread) */
+    _Atomic(const kc_bank_t *) bank_used;       /* core.bank, published for kc_bank_in_use */
     int16_t fifo[2u * KC_BLOCK];                /* the block rendered, handed out from fifo_at */
     uint32_t fifo_at;                           /* KC_BLOCK: empty */
     uint64_t frames;                            /* rendered so far (fm1_ms) */
@@ -133,7 +176,29 @@ struct kc {
     program_t pend_p;
     seq_t pend_s;
 };
-static uint8_t kc_made;                         /* (one instance per process until Task 2) */
+
+/* the instance k runs on this thread until kc_unbind (every kc_* call: bound on entry, the previous binding put back on
+ * return); it reads the newest bank set */
+typedef struct { struct kc_st_core *core; KC_STATE_BLOCKS(KC_ST_PTR) } kc_binding_t;
+static kc_binding_t kc_bind(const kc_t *kk)
+{
+    kc_t *k = (kc_t *)kk;                       /* (a const call binds too: the shared code's reads are macros) */
+    kc_binding_t was;
+    was.core = kc_tls_core, kc_tls_core = &k->core;
+#define KC_BIND(b) was.b = kc_tls_##b, kc_tls_##b = &k->b;
+    KC_STATE_BLOCKS(KC_BIND)
+#undef KC_BIND
+    k->core.bank = atomic_load_explicit(&k->bank_next, memory_order_acquire);
+    atomic_store_explicit(&k->bank_used, k->core.bank, memory_order_release);
+    return was;
+}
+static void kc_unbind(kc_binding_t was)
+{
+    kc_tls_core = was.core;
+#define KC_UNBIND(b) kc_tls_##b = was.b;
+    KC_STATE_BLOCKS(KC_UNBIND)
+#undef KC_UNBIND
+}
 
 static void kc_track_load(kc_t *k)             /* a program load queued since: it is the new base */
 {
@@ -198,17 +263,25 @@ static void kc_block(kc_t *k)
 
 kc_t *kc_create(void)
 {
-    kc_t *k;
-    if (kc_made || !(k = calloc(1, sizeof *k))) return NULL;
-    kc_made = 1;
+    kc_t *k = calloc(1, sizeof *k);
+    kc_binding_t was;
+    if (!k) return NULL;
+    memset(&k->core, 0, sizeof k->core);        /* (every block at its declarations' values: zero unless given) */
+#define KC_INIT(b) kc_st_##b##_init(&k->b);
+    KC_STATE_BLOCKS(KC_INIT)
+#undef KC_INIT
+    atomic_init(&k->bank_next, NULL);
+    atomic_init(&k->bank_used, NULL);
     k->fifo_at = KC_BLOCK;
     k->screen = SCR_PLAY;
+    was = kc_bind(k);
     eng_init();                                 /* (app_main's start, the globals at their defaults: ctl_glob) */
     controls_init();
     prog_seq_boot();
     k->seq_sent = edit_seq_ver() - 1u;
     ctl_prog_select(0);
     kc_track_load(k);
+    kc_unbind(was);
     return k;
 }
 
@@ -216,6 +289,7 @@ void kc_destroy(kc_t *k) { free(k); }
 
 void kc_render(kc_t *k, int16_t *lr, uint32_t frames)
 {
+    kc_binding_t was = kc_bind(k);
     while (frames) {
         uint32_t n;
         if (k->fifo_at >= KC_BLOCK) kc_block(k);
@@ -224,6 +298,7 @@ void kc_render(kc_t *k, int16_t *lr, uint32_t frames)
         memcpy(lr, &k->fifo[2u * k->fifo_at], n * 4u);
         lr += 2u * n, frames -= n, k->fifo_at += n;
     }
+    kc_unbind(was);
 }
 
 void kc_midi(kc_t *k, const uint8_t *msg, uint32_t len)
@@ -252,32 +327,52 @@ int kc_param_info(uint16_t id, kc_param_info_t *out)
 }
 void kc_param_set(kc_t *k, uint16_t id, int32_t v)
 {
+    kc_binding_t was;
     if (kc_param_info(id, NULL)) return;
+    was = kc_bind(k);
     kc_apply_pending(k);                        /* (an edit after a set program: on that program) */
-    ctl_set(&eng_edit, id, v, 0);
+    if (k->pend) k->pend_p.v[id] = param_clamp(id, v);   /* (the engine still busy: the program set takes it) */
+    else ctl_set(&eng_edit, id, v, 0);
+    kc_unbind(was);
 }
 int32_t kc_param_get(const kc_t *k, uint16_t id)
 {
+    kc_binding_t was;
+    int32_t v;
     if (kc_param_info(id, NULL)) return 0;
-    return k->pend ? k->pend_p.v[id] : eng_edit.v[id];
+    if (k->pend) return k->pend_p.v[id];
+    was = kc_bind(k);
+    v = eng_edit.v[id];
+    kc_unbind(was);
+    return v;
 }
 
+int kc_program_valid(const program_t *p, const seq_t *s)
+{
+    program_t q;
+    seq_t t;
+    return p && s && kc_copy_program(p, &q) == 0 && kc_copy_seq(s, &t) == 0 ? 0 : -1;
+}
 int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, int edited)
 {
-    static uint8_t buf[PROGRAM_PACKED_MAX > SEQ_PACKED_MAX ? PROGRAM_PACKED_MAX : SEQ_PACKED_MAX];
-    int n;
+    program_t q;
+    seq_t t;
+    kc_binding_t was;
     if (number < 0 || number >= (int32_t)PROG_COUNT) return -1;
     /* as the firmware would store them: through its own record formats (a CRC, the version, the ranges; a sequence's
-     * notes, velocities and tie rules) */
-    if ((n = program_pack(p, buf, sizeof buf)) < 0 || program_unpack(&k->pend_p, buf, (uint32_t)n)) return -1;
-    if ((n = seq_pack(s, buf, sizeof buf)) < 0 || seq_unpack(&k->pend_s, buf, (uint32_t)n)) return -1;
+     * notes, velocities and tie rules); refused: nothing changes (a set still pending stays) */
+    if (!p || !s || kc_copy_program(p, &q) || kc_copy_seq(s, &t)) return -1;
+    k->pend_p = q, k->pend_s = t;
     program_set_seq_gen(&k->pend_p, 0);
     k->pend = 1, k->pend_n = number, k->pend_edited = (uint8_t)(edited != 0);
+    was = kc_bind(k);
     kc_apply_pending(k);
+    kc_unbind(was);
     return 0;
 }
 void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int *edited)
 {
+    kc_binding_t was = kc_bind(k);
     if (number) *number = k->pend ? k->pend_n : ctl_prog;
     if (p) {
         *p = k->pend ? k->pend_p : eng_edit;
@@ -285,23 +380,52 @@ void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int 
     }
     if (s) *s = k->pend ? k->pend_s : *edit_seq();
     if (edited) *edited = kc_edited(k);
+    kc_unbind(was);
 }
 int kc_program_select(kc_t *k, int32_t number)
 {
+    kc_binding_t was;
     if (number < 0 || number >= (int32_t)PROG_COUNT) return -1;
+    was = kc_bind(k);
     k->pend = 0;                                /* (a later load wins) */
     ctl_prog_select(number);                    /* (the engine busy: retried by the next pass, controls_poll) */
     kc_track_load(k);
+    kc_unbind(was);
     return 0;
 }
-void kc_bank_set(kc_t *k, const kc_bank_t *bank) { (void)k; kc_bank = bank; }
+
+/* any thread: validated here, taken by the instance's next call (kc_bind) */
+int kc_bank_set(kc_t *k, const kc_bank_t *bank)
+{
+    if (bank)
+        for (uint32_t i = 0; i < KC_PROGRAMS; i++)
+            if (bank->used[i] && kc_program_valid(&bank->program[i], &bank->seq[i])) return -1;
+    atomic_store_explicit(&k->bank_next, bank, memory_order_release);
+    return 0;
+}
+const kc_bank_t *kc_bank_in_use(const kc_t *k)
+{
+    return atomic_load_explicit(&((kc_t *)k)->bank_used, memory_order_acquire);
+}
 
 void kc_global_set(kc_t *k, int g, int32_t v)
 {
-    (void)k;
-    if (g >= 0 && g < G_COUNT) ctl_set(&eng_edit, (uint16_t)B_GLOBAL(g), v, 0);
+    kc_binding_t was;
+    if (g < 0 || g >= G_COUNT) return;
+    was = kc_bind(k);
+    ctl_set(&eng_edit, (uint16_t)B_GLOBAL(g), v, 0);
+    kc_unbind(was);
 }
-int32_t kc_global_get(const kc_t *k, int g) { (void)k; return g >= 0 && g < G_COUNT ? ctl_glob[g] : 0; }
+int32_t kc_global_get(const kc_t *k, int g)
+{
+    kc_binding_t was;
+    int32_t v;
+    if (g < 0 || g >= G_COUNT) return 0;
+    was = kc_bind(k);
+    v = ctl_glob[g];
+    kc_unbind(was);
+    return v;
+}
 
 void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t frame_offset)
 {

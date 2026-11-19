@@ -92,6 +92,9 @@ typedef struct { uint8_t type, a; int16_t b; } eng_ev_t;   /* NOTE a note b vel;
                                                               handed over (eng_sbuf) */
 _Static_assert(P_COUNT_RESERVED <= 256, "a live id fits eng_ev_t.a");
 
+#ifdef KNOBI_CORE
+#include "core/state/engine.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 static synth_t eng_synth;                 /* the consumer's (and eng_init's, before eng_ready) */
 static eng_ev_t eng_q[ENG_QLEN];
 static volatile uint32_t eng_qw, eng_qr, eng_drops;
@@ -134,6 +137,7 @@ static uint32_t eng_load_q3, eng_peak_q8;   /* (consumer only) */
 static uint32_t eng_off_pend[4];          /* note-offs waiting for room: bit n = note n (producer only) */
 static uint32_t eng_par_pend[(P_COUNT_RESERVED + 31u) / 32u];   /* live ids whose latest eng_edit value is not queued */
 static uint8_t eng_panic_pend, eng_alloff_pend, eng_chord_pend;
+#endif
 
 /* keep: the free slots that must remain after this event (0 for note-offs, HOLD, PANIC; ENG_RESERVE for the rest) */
 static int eng_push(uint32_t type, uint32_t a, int32_t b, uint32_t keep)
@@ -429,7 +433,9 @@ static void eng_drain(void)
  * fake clock that each render advances by eng_fake_per_voice ticks per voice sounding (the tests set it). */
 #define ENG_TICKS_PER_FRAME_X10 5442u      /* 24 ticks per us x 10 / 44.1 kHz */
 #ifdef DINGHY_HOST
+#ifndef KNOBI_CORE                         /* (knobi_core: per instance, knobi_core.c) */
 uint32_t eng_fake_ticks, eng_fake_per_voice;
+#endif
 static uint32_t eng_ticks(void) { return eng_fake_ticks; }
 #else
 #if FM1_TICKS_PER_US != 24

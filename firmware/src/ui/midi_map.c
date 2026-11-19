@@ -44,8 +44,12 @@ static const uint8_t MIDI_CC_MAP[][2] = {   /* param, CC; the free CCs, the Gene
     {P_AT_AMT, 105},
     {P_DETUNE, 94}, {P_PAN_SPREAD, 106}, {P_BEND_RANGE, 107}, {P_PRG_VOL, 108}, {P_PORTA_RATE, 5},
 };
+#ifdef KNOBI_CORE
+#include "../core/state/midi_cc.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 static uint8_t MIDI_CC[P_COUNT_PHASE1];   /* param -> CC (MIDI_CC_NONE); midi_map_init */
 static uint8_t midi_cc_id[128];           /* CC -> param + 1 (0 none) */
+#endif
 
 static void midi_map_init(void)
 {
@@ -60,7 +64,11 @@ static void midi_map_init(void)
 static int midi_cc_param(uint32_t cc) { return cc < 128u ? (int)midi_cc_id[cc] - 1 : -1; }
 
 #ifndef CONTROLS_PURE
+#ifdef KNOBI_CORE
+#include "../core/state/midi_known.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 static int16_t midi_cc_known[128], midi_cc_sent[128];   /* the last value either side had / we sent (-1 none) */
+#endif
 static void midi_map_reset(void)
 {
     midi_map_init();
@@ -88,6 +96,9 @@ static void ctl_program_change(int32_t bank, int32_t prog)
     ctl_prog_select(bank * 100 + prog);
 }
 
+#ifdef KNOBI_CORE
+#include "../core/state/midi_arp.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 static uint32_t ctl_arp_r;                 /* the arp ring's read index (main loop) */
 static uint32_t ctl_arp_sent[4];           /* arp notes on at the receiver (a bit a note) */
 static uint8_t ctl_arp_ch[128];            /* the channel each one's note-on went out on (its note-off's, final review 5:
@@ -96,6 +107,7 @@ static uint32_t ctl_arp_outs;              /* arp notes sent so far (host probe 
 static uint32_t ctl_arp_offs;              /* arp note-offs sent so far (host probe "arpoff") */
 static uint8_t ctl_arp_offch;              /* the channel of the last one, 0..15 (host probe "arpoffch") */
 static uint32_t ctl_arp_overruns;          /* ring overruns (host probe "arpoverrun") */
+#endif
 /* the arp's note-ons go out with PARAM TX on and LOCAL ON only (final review 2): under LOCAL OFF the arp is fed by MIDI
  * in alone, and a DAW echoing our notes back would feed the arp its own notes (with a latch on, a loop that sustains
  * itself). Every note-on sent gets its note-off, whatever PARAM TX or LOCAL have become since (ctl_arp_sent) */

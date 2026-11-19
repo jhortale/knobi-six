@@ -6,19 +6,22 @@
 # test_core.c (the host core, firmware/src/core/) compares with the firmware's host build: unit first builds tests/host.c
 # with firmware/src/app.c as tests/run_host.sh does and plays tests/scripts/core_ref.txt into $(OUT)/core_ref.wav. Both
 # with FP_EXACT: no fused multiply-add (the filter's float path; a compiler fuses differently in different files).
-#   make -C tests tsan    test_split.c's split_threads_tsan: set B on a second thread, under ThreadSanitizer (skipped,
-#                         not failed, where a -fsanitize=thread program cannot be built or run)
+# test_core's no_mutable_globals reads $(OUT)/knobi_core.o (the core alone, -O0: nothing folded away) with nm / objdump;
+# tools/core_state.py --check: the core's per-instance state headers (firmware/src/core/state/) match the firmware.
+#   make -C tests tsan    test_split.c's split_threads_tsan: set B on a second thread, and test_core's threads (two
+#                         instances at once, a bank swapped from another thread), under ThreadSanitizer (skipped, not
+#                         failed, where a -fsanitize=thread program cannot be built or run)
 CC ?= cc
 CFLAGS = -std=c11 -O2 -Wall -Werror -DDINGHY_HOST -DKNOBI_NO_FACTORY -I../firmware/src -I../firmware/hal -I../firmware/gen
 TESTS := $(basename $(notdir $(wildcard unit/test_*.c)))
 OUT = ../build/unit
 FP_EXACT = -ffp-contract=off
 
-.PHONY: unit tsan core-ref
-unit: core-ref
+.PHONY: unit tsan core-ref core-obj
+unit: core-ref core-obj
 	@mkdir -p $(OUT)
 	@set -e; for t in $(TESTS); do \
-	  case $$t in test_core) x="$(FP_EXACT)";; *) x=;; esac; \
+	  case $$t in test_core) x="$(FP_EXACT) -pthread";; *) x=;; esac; \
 	  echo "== $$t"; $(CC) $(CFLAGS) $$x -o $(OUT)/$$t unit/$$t.c -lm; $(OUT)/$$t; \
 	done
 
@@ -29,11 +32,19 @@ core-ref:
 	  -I../firmware/gen -o $(OUT)/core_ref_app ../firmware/src/app.c -lm
 	@$(OUT)/core_ref_app $(OUT)/core_ref scripts/core_ref.txt > $(OUT)/core_ref.log || { cat $(OUT)/core_ref.log; exit 1; }
 
+core-obj:
+	@mkdir -p $(OUT)
+	@python3 ../tools/core_state.py --check
+	@$(CC) $(CFLAGS) -O0 $(FP_EXACT) -c -o $(OUT)/knobi_core.o ../firmware/src/core/knobi_core.c
+
 tsan:
 	@mkdir -p $(OUT)
 	@echo "== test_split (threads, -fsanitize=thread)"
 	@if echo 'int main(void){return 0;}' | $(CC) -fsanitize=thread -x c -o $(OUT)/tsan_probe - >/dev/null 2>&1 && \
 	    $(OUT)/tsan_probe >/dev/null 2>&1; then \
 	  $(CC) $(CFLAGS) -O1 -g -fsanitize=thread -pthread -DSPLIT_THREADS -o $(OUT)/test_split_tsan unit/test_split.c -lm && \
-	  TSAN_OPTIONS="halt_on_error=1 $$TSAN_OPTIONS" $(OUT)/test_split_tsan; \
+	  TSAN_OPTIONS="halt_on_error=1 $$TSAN_OPTIONS" $(OUT)/test_split_tsan && \
+	  echo "== test_core (two instances on two threads, a bank swap; -fsanitize=thread)" && \
+	  $(CC) $(CFLAGS) $(FP_EXACT) -O1 -g -fsanitize=thread -pthread -DKC_TSAN -o $(OUT)/test_core_tsan unit/test_core.c -lm && \
+	  TSAN_OPTIONS="halt_on_error=1 $$TSAN_OPTIONS" $(OUT)/test_core_tsan; \
 	else echo "tsan: $(CC) cannot build or run a -fsanitize=thread program here: skipped"; fi

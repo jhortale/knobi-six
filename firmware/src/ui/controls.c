@@ -202,6 +202,9 @@ int32_t ctl_fader_move(ctl_fader_t *f, int mode, uint16_t id, int32_t cur, uint3
 
 #ifndef CONTROLS_PURE
 /* ---- the main loop's: state */
+#ifdef KNOBI_CORE
+#include "../core/state/controls.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 #define CTL_BOOT_MS 1000u                              /* the boot screen, then Play (or at the first button) */
 static int8_t ctl_glob[G_COUNT] = {0, POT_RELATIVE, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0};   /* (GLOB_DEF; app.c loads them) */
 static clk_t ctl_tapclk;                               /* TAP's state (clock_tap; only its tap count is used here) */
@@ -238,6 +241,7 @@ static uint16_t ctl_last_id = B_NONE;                  /* the last edit (screen)
 static int32_t ctl_last_v;
 static uint32_t ctl_edits, ctl_scr_n;                  /* counters: an edit, a screen / row change */
 static uint32_t ctl_led[16];
+#endif
 static void midi_cc_send(uint16_t id, int32_t v);     /* midi_map.c */
 static void midi_map_reset(void);
 
@@ -288,6 +292,9 @@ static void ctl_other_row(int screen)
  * edits the edit buffer's sequence (params/prog_seq.h edit_seq_mut): nothing is stored until WRITE; app.c hands every
  * change to the player. The player (engine.c eng_seq_*) is asked through the queue: a refused request is kept and sent
  * again on the next pass (ctl_seq_poll) */
+#ifdef KNOBI_CORE
+#include "../core/state/controls_seq.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 static seqrec_t ctl_rec;
 static int8_t ctl_seq_want = -1;                       /* SEQ PLAY still to send (refused by a full queue), -1 none */
 static uint8_t ctl_rec_arm;                            /* SEQ REC asked: recording starts once the stop is queued */
@@ -295,6 +302,7 @@ static uint8_t ctl_rec_xhold, ctl_rec_xused;           /* SEQ REC pressed while 
                                                         * a key transposed meanwhile: then it was the transpose's hold) */
 static int32_t ctl_xp_want;                            /* the transpose to send (ctl_xp_pend: still owed) */
 static uint8_t ctl_xp_pend;
+#endif
 static int ctl_seq_on(void) { return ctl_seq_want >= 0 ? ctl_seq_want : eng_seq_playing(); }   /* SEQ PLAY, as asked */
 static void ctl_seq_send(int on)
 {
@@ -367,7 +375,11 @@ int controls_btn_lit(uint32_t btn)
 /* ---- programs (main loop): load, MANUAL, WRITE */
 static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL off); retried while the engine is busy */
 {
+#ifdef KNOBI_CORE
+    program_t p;                                       /* (knobi_core: no state shared by instances; a scratch copy) */
+#else
     static program_t p;
+#endif
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
     if (ctl_wr != 0) { ctl_prog_want = n; return; }   /* (not under a WRITE, armed or committing: it stores the edit as
                                                        * it is; MIDI program change is ignored then, midi_map.c) */
@@ -387,7 +399,11 @@ static void ctl_prog_select(int32_t n)                 /* load program n (MANUAL
  * program); nothing is saved until WRITE. The stored program n stays as it is. */
 static void ctl_restore_factory(int32_t n)
 {
+#ifdef KNOBI_CORE
+    program_t p;                                       /* (knobi_core: no state shared by instances; a scratch copy) */
+#else
     static program_t p;
+#endif
     if (n < 0 || n >= (int32_t)PROG_COUNT) return;
     ctl_rec_forget();
     ctl_prog = n, ctl_manual = 0;

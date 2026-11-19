@@ -14,7 +14,11 @@
 #define VOICE_COEF_COPY(d, s) ((d).g = (s).g, (d).a1 = (s).a1, (d).a2 = (s).a2, (d).k = (s).k, (d).lp = (s).lp, \
                                (d).hp = (s).hp, (d).bp = (s).bp)
 /* C4, the key-track pivot, Q16, as a variable the compiler cannot fold: key - 60 x 65536 would carry 0xFFC40000,
- * which lies in the chip's ROM window, and tools/build.py fails such a build (osc.c osc_note_lo_neg). Never written. */
+ * which lies in the chip's ROM window, and tools/build.py fails such a build (osc.c osc_note_lo_neg). Never written.
+ * knobi_core (a host build, no ROM window): a constant, no state shared by its instances. */
+#ifdef KNOBI_CORE
+static const
+#endif
 int32_t voice_c4_q16 = 60 * 65536;
 _Static_assert(FENV_RANGE_Q16 == SVF_KNOB_SPAN, "a full filter envelope spans the FILTER FREQ knob's range");
 

@@ -18,6 +18,9 @@
 #define KNOBI_PROG_SEQ_C
 #include "prog_seq.h"
 
+#ifdef KNOBI_CORE
+#include "../core/state/prog_seq.h"   /* knobi_core: per instance (tools/core_state.py) */
+#else
 #ifdef DINGHY_HOST
 static seq_t es_seq;
 #else
@@ -29,6 +32,7 @@ static uint8_t es_fb, es_dirty, es_miss;
 static uint32_t es_sum;
 static uint32_t es_ver;                         /* edit_seq_ver: bumped by every change (or a pointer that may make one) */
 static program_t prog_wr;                       /* the record WRITE stores: the program, its generation */
+#endif
 
 static uint32_t es_hash(void)                   /* FNV-1a over the whole buffer */
 {

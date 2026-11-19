@@ -17,6 +17,7 @@ fail=0
 run() { echo "== $1"; shift; "$@" || fail=1; }
 
 run "unit tests (tests/unit/test_*.c)" make -s -C tests unit
+run "threads under ThreadSanitizer: the split, two core instances at once, a bank swap (skipped where TSan cannot run)" make -s -C tests tsan
 run "the OB-6 importer on synthetic dumps (tools/ob6_import.py; no OB-6 data)" python3 tests/ob6_import_test.py
 run "tools/build.py and a local factory bank: --release refused, other builds -local and a warning" python3 tests/build_factory_test.py
 
