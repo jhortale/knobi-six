@@ -15,11 +15,13 @@
 //   rt_no_alloc           an allocation + lock counter (alloc_hook.c, the whole process) armed around processBlock:
 //                         notes, CCs, bend, pressure, program changes, SysEx, a block longer than prepared, a call
 //                         served from another thread (CoreAccess): zero allocations, zero locks
-//   seam                  CoreAccess: with no audio running, run() takes the instance itself; with an audio thread
-//                         rendering, run() is served by it between blocks; never two at once (the processor's too)
+//   seam                  CoreAccess: with no audio running, run() takes the instance itself (real clock); with an
+//                         audio thread rendering, run() is served by it between blocks (the seam's clock held: a
+//                         FakeClock); never two at once (the processor's too)
 // Fix round 1:
-//   silent_block          blocks of 2048 at 44.1 kHz (46 ms apart, paced like a host): run() calls are served by the
-//                         audio thread (the idle threshold follows the block period: 3 blocks), no block is silent;
+//   silent_block          blocks of 2048 at 44.1 kHz, the gaps before them up to just under 3 block periods on the seam's
+//                         clock (a FakeClock the test advances: no real sleeps): run() calls are served by the audio
+//                         thread (the idle threshold follows the block period: 3 blocks), no block is silent;
 //                         then a collision forced (a call running on the asking thread after a real idle while the
 //                         host resumes): that block is faded out from the last output (no hard cut), its note-off
 //                         and note-on replayed at the start of the next block that enters (60 released, 67 sounds:
@@ -67,6 +69,15 @@ using namespace knobi;
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
+
+// the seam's time in a test (CoreAccess::setClock): it moves only when the test advances it, so "the host has been idle
+// for idleMs()" happens exactly when a test says so, never because the machine scheduled a thread late
+struct FakeClock final : CoreAccess::Clock {
+    std::atomic<int64_t> t{0};
+    int64_t nowUs() override { return t.load(std::memory_order_acquire); }
+    void pause() override { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+    void advanceMs(int64_t ms) { t.fetch_add(ms * 1000, std::memory_order_acq_rel); }
+};
 
 // ---- a script: MIDI messages at absolute session samples
 struct Msg { int64_t at; uint8_t len, d[3]; };
@@ -339,6 +350,8 @@ static void rt_no_alloc()
 
     for (double rate : {44100.0, 48000.0, 96000.0}) {
         Processor p;
+        FakeClock clock;                          // (the seam's idle rule: never met here, whatever the scheduling)
+        p.access().setClock(&clock);
         const int block = 256;
         p.setPlayConfigDetails(0, 2, rate, block);
         p.prepareToPlay(rate, block);
@@ -368,7 +381,7 @@ static void rt_no_alloc()
         // a call posted from another thread, served by the audio thread (CoreAccess): copies only
         struct Snap { kc_t* k; program_t prog; seq_t seq; int32_t num; int edited; } snap{p.runner().core(), {}, {}, 0, 0};
         auto fn = [](void* c) { auto* s = (Snap*)c; kc_program_get(s->k, &s->num, &s->prog, &s->seq, &s->edited); };
-        std::atomic<bool> posted{false}, served{false};
+        std::atomic<bool> served{false}, release{false};
         std::thread asker;
         long allocs = 0, locks = 0;
         for (int b = 0; b < 400; b++) {
@@ -376,17 +389,19 @@ static void rt_no_alloc()
             midi.addEvents(blocks[(size_t)b], 0, -1, 0);   // (outside the counted part)
             int n = b == 200 ? block * 3 : block;
             buf.setSize(2, n, false, false, true);
-            if (b == 100) {                           // (the asker's thread made outside the counted part)
-                asker = std::thread([&] { posted = true; served = p.access().run(fn, &snap); });
-                while (!posted) std::this_thread::yield();
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            if (b == 100) {                           // (the asker's thread made, and its exit, outside the counted part)
+                asker = std::thread([&] {
+                    served = p.access().run(fn, &snap);
+                    while (!release) std::this_thread::yield();
+                });
+                while (!p.access().posted()) std::this_thread::yield();
             }
             long a = alloc_hook_allocs(), l = alloc_hook_locks();
             alloc_hook_arm(1);
             p.processBlock(buf, midi);
             alloc_hook_arm(0);
             allocs += alloc_hook_allocs() - a, locks += alloc_hook_locks() - l;
-            if (b == 100) { asker.join(); }
+            if (b == 100) { release = true; asker.join(); }
         }
         std::printf("rt_no_alloc: %.0f Hz: 400 blocks (notes, CCs, bend, pressure, 10 program changes, SysEx, one block "
                     "3x the prepared size, a served call %s): %ld allocations, %ld locks in processBlock\n", rate,
@@ -413,7 +428,10 @@ static void seam()
     bool here = ctx.tid == std::this_thread::get_id();
     std::printf("seam: no audio thread: run() %s, on the asking thread: %s\n", ok ? "ok" : "FAILED", here ? "yes" : "no");
     CHECK(ok && here && acc.ranHere() == 1);
-    // an audio thread rendering: served by it, never at the same time as its block
+    // an audio thread rendering: served by it, never at the same time as its block. The seam's clock is held (a
+    // FakeClock never advanced): the host is never idle by its measure, however late the machine runs the threads
+    FakeClock held;
+    acc.setClock(&held);
     std::atomic<bool> stop{false};
     std::thread::id audioId;
     std::thread audio([&] {
@@ -439,6 +457,7 @@ static void seam()
     audio.join();
     // and the processor: run() while another thread calls processBlock, the instance read meanwhile
     Processor p;
+    p.access().setClock(&held);
     p.setPlayConfigDetails(0, 2, 44100, 256);
     p.prepareToPlay(44100, 256);
     std::atomic<bool> stop2{false};
@@ -490,20 +509,32 @@ static void silent_block()
         p.processBlock(buf, midi);
         hostSamples += block;
     };
-    // 1. a host with long blocks, paced in real time; calls from another thread meanwhile: all served by the audio thread
+    // 1. a host with long blocks; calls from another thread meanwhile, each answered by the next block after a gap
+    //    of host time (the seam's clock, advanced by the test) up to just under the idle threshold (3 blocks: 140 ms):
+    //    all served by the audio thread, none taken by the asking thread, no block silent
+    FakeClock clock;
+    p.access().setClock(&clock);
+    const int idle = p.access().idleMs();
+    const int64_t gaps[6] = {period.count() / 1000, period.count() / 1000, 2 * period.count() / 1000, 100, idle - 1,
+                             idle - 1};
     std::atomic<bool> stop{false};
     std::atomic<int> served{0};
     struct Snap { kc_t* k; int32_t num; } snap{p.runner().core(), -1};
     auto get = [](void* c) { auto* s = (Snap*)c; kc_program_get(s->k, &s->num, nullptr, nullptr, nullptr); };
     std::thread asker([&] { for (int i = 0; i < 6; i++) served += p.access().run(get, &snap); stop = true; });
-    int blocks = 0;
-    while (!stop && blocks < 200) { host({}); blocks++; std::this_thread::sleep_for(period); }
+    for (int i = 0; i < 6; i++) {
+        while (!p.access().posted()) std::this_thread::yield();   // (the call waits)
+        clock.advanceMs(gaps[i]);                 // the host's gap: no block for that long
+        host({});
+    }
     asker.join();
     uint64_t here1 = p.access().ranHere(), silent1 = p.silentBlocks();
-    std::printf("silent_block: blocks of %d at %.0f Hz paced %lld ms: %d / 6 calls served, %llu run on the asking "
-                "thread, %llu silent blocks\n", block, rate, (long long)(period.count() / 1000), served.load(),
+    std::printf("silent_block: blocks of %d at %.0f Hz, idle threshold %d ms; 6 calls each answered by the next block "
+                "after %lld / %lld / %lld / %lld / %lld / %lld ms of the seam's clock: %d / 6 served, %llu run on the "
+                "asking thread, %llu silent blocks\n", block, rate, idle, (long long)gaps[0], (long long)gaps[1],
+                (long long)gaps[2], (long long)gaps[3], (long long)gaps[4], (long long)gaps[5], served.load(),
                 (unsigned long long)here1, (unsigned long long)silent1);
-    CHECK(served == 6 && here1 == 0 && silent1 == 0);
+    CHECK(idle == 140 && served == 6 && here1 == 0 && silent1 == 0 && stop);
     // 2. a collision: the host idle, a call taken by the asking thread (it holds the instance), the host resumes
     host({{10, juce::MidiMessage::noteOn(1, 60, (juce::uint8)110)}});   // a held note
     for (int i = 0; i < 4; i++) host({});
@@ -517,7 +548,10 @@ static void silent_block()
             while (!*x->release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }, &h);
     });
+    while (!p.access().posted()) std::this_thread::yield();
+    clock.advanceMs(idle);                        // the host idle for the threshold: the asking thread takes the call
     while (!holding) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const uint64_t taken = p.access().ranHere() + 1;   // (counted when it returns: after release)
     midi.clear();                                 // (the colliding block, counted: the silent path allocates nothing)
     midi.addEvent(juce::MidiMessage::noteOff(1, 60), 100);
     midi.addEvent(juce::MidiMessage::noteOn(1, 67, (juce::uint8)100), 200);
@@ -533,6 +567,7 @@ static void silent_block()
     uint64_t silent2 = p.silentBlocks();
     release = true;
     taker.join();
+    const bool takenHere = p.access().ranHere() == taken;
     midi.clear();                                 // (the block that replays it, counted too)
     a0 = alloc_hook_allocs(), l0 = alloc_hook_locks();
     alloc_hook_arm(1);
@@ -565,7 +600,9 @@ static void silent_block()
                 (unsigned long long)(silent2 - silent1), first, last, jump, tailSilent ? "yes" : "no",
                 heldAt20 ? "yes" : "NO", controlSilent ? "yes" : "no", endsSilent ? "yes" : "NO (a stuck note)",
                 (long long)session, (long long)hostSamples, silentAllocs, silentLocks);
-    CHECK(silentAllocs == 0 && silentLocks == 0 && silent2 - silent1 == 1 && std::fabs(last) > 1e-4f && jump < std::fabs(last) * 0.1f + 1e-4f && tailSilent &&
+    std::printf("silent_block: the call taken by the asking thread after %d ms of the seam's clock with no block: %s\n",
+                idle, takenHere ? "yes" : "NO");
+    CHECK(takenHere && silentAllocs == 0 && silentLocks == 0 && silent2 - silent1 == 1 && std::fabs(last) > 1e-4f && jump < std::fabs(last) * 0.1f + 1e-4f && tailSilent &&
           heldAt20 && controlSilent && endsSilent && session == hostSamples);
 }
 
@@ -1106,6 +1143,8 @@ static void rt_params()
         bank->used[i] = 1;
     }
     Processor p;
+    FakeClock clock;                              // (the seam's idle rule: never met here, whatever the scheduling)
+    p.access().setClock(&clock);
     p.setBank(bank.get());
     const int block = 128;
     p.setPlayConfigDetails(0, 2, 48000, block);
