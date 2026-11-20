@@ -85,6 +85,12 @@ lend or sell.
 
 Install: `python3 tools/fm1_install.py knobi-six-cpu1probe.fwsc --yes`, USB and power connected until it finishes.
 
+**Run on hardware 2026-11-20 (João, SMK-37 Pro): passed, A to E**, with the `knobi-six-cpu1probe` artifact of CI run
+44450085801 (SHA-256 `997dab6dbdb6b97eb5c5a09968863bf2c1ffdcae9c2634d6841b3c717ffa4a7f`; the newer run supersedes
+the one named above). ERR 0 and MISREAD 0 throughout (~42 min), FPU and DUAL=SINGLE OK, `DUAL ON 16%` for ~11 min
+with the same sound; LOAD 1C 58 % / 2C 38-39 %. Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "CPU1 probe on the
+device".
+
 ### What the Globals screen shows (GLOBE)
 
 Four probe lines above the usual three (`CPU ...`, `WHEELS ...`, `FADERS ...`); red when something is wrong:
