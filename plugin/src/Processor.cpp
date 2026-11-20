@@ -472,13 +472,24 @@ void Processor::prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBl
     setLatencySamples(latency);
 }
 
+void Processor::setNonRealtime(bool isNonRealtime) noexcept
+{
+    juce::AudioProcessor::setNonRealtime(isNonRealtime);
+    access_.setOffline(isNonRealtime);
+}
+
 void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     if (n <= 0) return;
     const juce::ScopedValueSetter<bool> inProcess(tlInProcess, true);
-    if (!access_.audioEnter()) {                 // another thread holds the instance (CoreAccess.h: the host resumed
+    bool entered = access_.audioEnter();
+    if (!entered && isNonRealtime()) {           // offline (export, freeze): never a silent block in the file -- wait
+        access_.audioEnterWait();                // for the other thread (short: a call copies only; prepareToPlay)
+        entered = true;
+    }
+    if (!entered) {                              // another thread holds the instance (CoreAccess.h: the host resumed
         silentBlocks_++;                         // during a call it ran itself after a real idle): this block silent,
         for (const auto meta : midi) {           // its MIDI kept for the next block (in order; overflow: all notes off)
             const int len = meta.numBytes;

@@ -39,6 +39,9 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
+    // an offline render (export, freeze: the host's isNonRealtime) never outputs a silent block: processBlock waits for
+    // the instance instead, and the seam never takes it on an asking thread meanwhile (CoreAccess::setOffline)
+    void setNonRealtime(bool isNonRealtime) noexcept override;
     using juce::AudioProcessor::processBlock;
 
     juce::AudioProcessorEditor* createEditor() override;
