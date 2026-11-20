@@ -529,17 +529,20 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         e.data[2] = len > 2 ? meta.data[2] : 0;
     }
     midi.clear();                                // (no MIDI out: spec, first version)
-    Transport tr;                                 // the host's transport at this block's first sample (plan Task 5)
+    // the host's transport at this block's first sample (plan Task 5), only when the host gives a position (ppq): a
+    // host with no transport (no play head, no position) never gives the clock one, so the sequencer stays the
+    // firmware's (SEQ PLAY plays on the internal clock) and is never armed waiting for a play that cannot come
     if (auto* head = getPlayHead())
-        if (const auto pos = head->getPosition()) {
-            const auto ppq = pos->getPpqPosition();
-            tr.playing = pos->getIsPlaying() && ppq.hasValue();   // (no position: as stopped)
-            if (ppq) tr.ppq = *ppq;
-            if (const auto bpm = pos->getBpm()) tr.bpm = *bpm, hostBpm_.store(*bpm, std::memory_order_release);
-            if (const auto loop = pos->getLoopPoints(); loop && pos->getIsLooping())
-                tr.looping = true, tr.loopStart = loop->ppqStart, tr.loopEnd = loop->ppqEnd;
-        }
-    runner_.transport(tr, (uint32_t)n);
+        if (const auto pos = head->getPosition())
+            if (const auto ppq = pos->getPpqPosition()) {
+                Transport tr;
+                tr.playing = pos->getIsPlaying();
+                tr.ppq = *ppq;
+                if (const auto bpm = pos->getBpm()) tr.bpm = *bpm, hostBpm_.store(*bpm, std::memory_order_release);
+                if (const auto loop = pos->getLoopPoints(); loop && pos->getIsLooping())
+                    tr.looping = true, tr.loopStart = loop->ppqStart, tr.loopEnd = loop->ppqEnd;
+                runner_.transport(tr, (uint32_t)n);
+            }
     float* L = buffer.getWritePointer(0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
     if (R)

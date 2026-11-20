@@ -1781,6 +1781,46 @@ static void bpm_param_greyed()
 }
 
 
+// a host with no transport (no play head, or one that gives no position / no ppq): the clock is never given a host
+// transport, so the sequencer is the firmware's (SEQ PLAY plays at once on the internal clock), never armed for ever
+struct NoPosHead final : juce::AudioPlayHead {
+    bool withInfo = false;                        // a position without ppq (else: no position at all)
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        if (!withInfo) return {};
+        PositionInfo i;
+        i.setIsPlaying(false);
+        i.setBpm(120.0);
+        return i;
+    }
+};
+static void transport_none()
+{
+    int good = 0;
+    const char* what[3] = {"no play head", "no position", "a position without ppq"};
+    for (int v = 0; v < 3; v++) {
+        Processor p;
+        NoPosHead head;
+        head.withInfo = v == 2;
+        p.setPlayConfigDetails(0, 2, 44100, 512);
+        p.prepareToPlay(44100, 512);
+        if (v) p.setPlayHead(&head);
+        tpProgram(p, 16);
+        blocks(p, 4, 512);
+        p.seqPlay(true);
+        blocks(p, 40, 512);
+        kc_note_t nt[KC_LOG];
+        const uint32_t m = kc_notes(p.runner().core(), nt, KC_LOG);
+        uint32_t ons = 0;
+        for (uint32_t i = 0; i < m; i++) ons += nt[i].vel != 0;
+        const int state = p.seqState();
+        std::printf("transport_none: %s: SEQ PLAY -> state %d (want 1, playing), %u note-ons, following %d\n", what[v],
+                    state, ons, (int)p.followingHost());
+        good += state == 1 && ons >= 2 && !p.followingHost();
+    }
+    CHECK(good == 3);
+}
+
 // ===============================================================================================================
 // plan Task 6: the shared library
 // ===============================================================================================================
@@ -2526,7 +2566,7 @@ int main(int argc, char** argv)
         {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
         {"state_timeout_keeps_last", state_timeout_keeps_last}, {"seam_idle_clamped", seam_idle_clamped},
-        {"prepare_takes_instance", prepare_takes_instance},
+        {"prepare_takes_instance", prepare_takes_instance}, {"transport_none", transport_none},
         {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
         {"transport_loop", transport_loop}, {"transport_loop_tempo", transport_loop_tempo},
         {"transport_locate", transport_locate},
