@@ -70,8 +70,9 @@
 //   library_roundtrip     500 slots (programs + sequences) and the globals: written as a file, read back exactly (and
 //                         its bytes encoded again the same); WRITE / clear through the API; a processor attached loads
 //                         a slot as the library holds it; the default path is ~/Music/KNOBI-SIX/library.knobi
-//   library_atomic        a child process killed (SIGKILL) between the temp file's fsync and the rename: the file is
-//                         the old one byte for byte, readable; the stale temp file is removed by the next WRITE
+//   library_atomic        a child process (posix_spawn) killed (SIGKILL) between the temp file's fsync and the rename:
+//                         the file is the old one byte for byte, readable; the stale temp file is removed by the next
+//                         WRITE
 //   library_two_writers   two libraries on one file (as two instances / processes) WRITE different slots at once, 40
 //                         rounds, and two processes (posix_spawn) 20 slots each at once: every write lands; the same slot
 //                         written by both at once: one of the two (last write wins), and both libraries end with the
@@ -2161,6 +2162,20 @@ static void library_roundtrip()
     CHECK(loaded);
 }
 
+static std::string gSelf;                         // this program's path (main: argv[0])
+// library_atomic's writer (test_plugin --child-atomic PATH): WRITEs slot 2 ("NEW ONE") and is killed (SIGKILL, raised
+// by the Library's test hook) between the temp file's fsync and the rename; exit status 3: it was not killed
+static int childAtomic(const char* path)
+{
+    program_t pb;
+    seq_t sb;
+    makeProgram(12, pb, sb, "NEW ONE");
+    Library::beforeRename = [] { raise(SIGKILL); };
+    Library lib(path, 0);
+    lib.write(2, pb, sb);
+    return 3;                                     // (not reached)
+}
+
 static void library_atomic()
 {
     const std::string dir = freshDir("atomic"), path = dir + "/library.knobi";
@@ -2173,16 +2188,16 @@ static void library_atomic()
         CHECK(lib.write(1, pa, sa) == Library::kOk);
     }
     const auto before = readFile(path);
-    const pid_t child = fork();
-    if (child == 0) {                             // (the child: a writer killed between the fsync and the rename)
-        Library::beforeRename = [] { raise(SIGKILL); };
-        Library lib(path, 0);
-        lib.write(2, pb, sb);
-        _exit(0);                                 // (not reached)
-    }
+    // the writer killed between the fsync and the rename: this program started afresh (posix_spawn, childAtomic), not
+    // a fork (other tests' threads -- a library's watcher -- may run in this process); its own test hook
+    // (Library::beforeRename) raises SIGKILL at that point
+    const std::string pathArg = path;
+    char* args[] = {(char*)gSelf.c_str(), (char*)"--child-atomic", (char*)pathArg.c_str(), nullptr};
+    pid_t child = -1;
+    const int spawned = posix_spawn(&child, gSelf.c_str(), nullptr, nullptr, args, environ);
     int st = 0;
-    waitpid(child, &st, 0);
-    const bool killed = WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL;
+    if (spawned == 0) waitpid(child, &st, 0);
+    const bool killed = spawned == 0 && WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL;
     const auto after = readFile(path);
     const int temps = countFiles(dir, ".tmp-");
     Library lib(path, 0);
@@ -2200,7 +2215,6 @@ static void library_atomic()
 
 // library_two_writers' other process (test_plugin --child-write PATH FIRST): writes slots FIRST..FIRST+19 with the
 // programs the parent expects (makeProgram(n + 3), "W nnn"); exit status: the writes that failed
-static std::string gSelf;                         // this program's path (main: argv[0])
 static int childWrite(const char* path, int first)
 {
     Library c(path, 0);
@@ -2772,6 +2786,7 @@ int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc == 4 && std::strcmp(argv[1], "--child-write") == 0) return childWrite(argv[2], std::atoi(argv[3]));
+    if (argc == 3 && std::strcmp(argv[1], "--child-atomic") == 0) return childAtomic(argv[2]);
     gSelf = std::filesystem::absolute(argv[0]).string();
     juce::ScopedJuceInitialiser_GUI juce;           // (JUCE's statics; no window is opened)
     Processor::startHostSyncTimer = false;              // (no JUCE timer thread in this process: the tests call syncHost)
