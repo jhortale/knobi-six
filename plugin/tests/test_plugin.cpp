@@ -102,6 +102,14 @@
 //                         its lock beside it); listeners are told with the file's lock released
 //   factory_gating        the default build: every factory program is the init program, named KNOBI-SIX (bundles
 //                         KNOBI-SIX.component / .vst3); KNOBI_FACTORY_LOCAL=ON: factory programs, KNOBI-SIX-local
+// Final review fixes:
+//   state_timeout_keeps_last  the instance not answering (run() times out: an audio thread stuck mid-block, the
+//                         seam's FakeClock): the set state saved is the last good one (saved or loaded), never INIT
+//   seam_idle_clamped     the idle time for huge host blocks is at most a quarter of run()'s timeout (a call with no
+//                         audio runs, never times out); usual blocks keep 3 block periods / kIdleMs
+//   prepare_takes_instance  prepareToPlay waits while another thread's call holds the instance (CoreAccess::take)
+//   transport_none        no play head, no position, a position without ppq: the clock is never given a transport;
+//                         SEQ PLAY plays on the internal clock (never armed waiting for a play)
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
