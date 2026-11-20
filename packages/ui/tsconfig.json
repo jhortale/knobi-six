@@ -1,0 +1,5 @@
+{
+  "extends": "@knobi/tsconfig/react.json",
+  "compilerOptions": { "types": [] },
+  "include": ["src"]
+}

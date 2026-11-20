@@ -1,0 +1,16 @@
+{
+  "name": "knobi",
+  "private": true,
+  "description": "The KNOBI monorepo: synths, their platforms, the installer and (later) the portal. See docs/MONOREPO.md.",
+  "license": "GPL-3.0-only",
+  "packageManager": "pnpm@12.21.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "2.11.13"
+  }
+}

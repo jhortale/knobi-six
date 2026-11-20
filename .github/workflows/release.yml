@@ -123,9 +123,12 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: pnpm
 
       - name: The release files (this run's, or the existing release's on a redeploy)
         env:
@@ -144,23 +147,23 @@ jobs:
           name: knobi-six-release
           path: release
 
-      - name: Build the page and the catalog
-        working-directory: web
+      - name: Build the installer and the catalog
         run: |
           V="${TAG#v}"
-          npm ci
-          npm run build
-          npm test
-          mkdir -p "dist/firmware/knobi-six/$V"
-          mv "../release/knobi-six-$V-src.tar.gz" "dist/firmware/knobi-six/$V/"
-          node scripts/make-catalog.ts --version "$V" --dir ../release --out dist/catalog.json \
-            --files "dist/firmware/knobi-six/$V" --source "firmware/knobi-six/$V/knobi-six-$V-src.tar.gz"
-          cp site/README.md site/LICENSE dist/
-          touch dist/.nojekyll
+          D=apps/installer/dist
+          pnpm install --frozen-lockfile
+          pnpm turbo run build test --filter @knobi/installer...
+          mkdir -p "$D/firmware/knobi-six/$V"
+          mv "release/knobi-six-$V-src.tar.gz" "$D/firmware/knobi-six/$V/"
+          node packages/catalog/src/make-catalog.ts --synth knobi-six --version "$V" --dir release \
+            --out "$D/catalog.json" --files "$D/firmware/knobi-six/$V" \
+            --source "firmware/knobi-six/$V/knobi-six-$V-src.tar.gz"
+          cp apps/installer/site/README.md apps/installer/site/LICENSE "$D/"
+          touch "$D/.nojekyll"
 
       - name: Nothing that must never be published
         run: |
-          bad=$(find web/dist \( -iname '*-local*' -o -iname '*cpu1*' \) -print)
+          bad=$(find apps/installer/dist \( -iname '*-local*' -o -iname '*cpu1*' \) -print)
           if [ -n "$bad" ]; then echo "refused: $bad"; exit 1; fi
 
       - uses: peaceiris/actions-gh-pages@v4
@@ -168,6 +171,6 @@ jobs:
           deploy_key: ${{ secrets.KNOBI_FLASH_DEPLOY_KEY }}
           external_repository: jhortale/knobi-flash
           publish_branch: gh-pages
-          publish_dir: web/dist
+          publish_dir: apps/installer/dist
           force_orphan: true
           commit_message: knobi-flash for KNOBI-SIX ${{ env.TAG }}

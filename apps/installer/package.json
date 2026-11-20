@@ -1,0 +1,38 @@
+{
+  "name": "@knobi/installer",
+  "private": true,
+  "version": "0.0.0",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "jsdom": "26.1.0",
+    "tailwindcss": "4.3.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1",
+    "@knobi/tsconfig": "workspace:*",
+    "@knobi/device-sim": "workspace:*",
+    "@knobi/synth-knobi-six": "workspace:*"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@knobi/installer-core": "workspace:*",
+    "@knobi/web-midi": "workspace:*",
+    "@knobi/catalog": "workspace:*",
+    "@knobi/ui": "workspace:*"
+  }
+}

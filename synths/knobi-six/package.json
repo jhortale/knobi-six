@@ -1,0 +1,8 @@
+{
+  "name": "@knobi/synth-knobi-six",
+  "private": true,
+  "version": "0.0.0",
+  "license": "GPL-3.0-only",
+  "description": "KNOBI-SIX's metadata in the monorepo: synth.json (identity, package names) and its catalog entry.",
+  "exports": { "./synth.json": "./synth.json", "./catalog.json": "./catalog.json" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "knobi-six",
+  "name": "KNOBI-SIX",
+  "summary": "OB-6-inspired six-voice polysynth for the SMK-37",
+  "license": "GPL-3.0-only",
+  "notes": [
+    "Replaces the stored firmware and its saved data; calibration is not written."
+  ],
+  "releases": []
+}

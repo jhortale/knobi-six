@@ -1,0 +1,8 @@
+{
+  "id": "knobi-six",
+  "name": "KNOBI-SIX",
+  "ident": "956",
+  "packageName": "knobi-six-{version}{suffix}.fwsc",
+  "models": { "": "SMK-37 Pro", "-elite": "SMK-37 Elite", "-mke": "MKE-P37" },
+  "platforms": { "smk37": { "firmware": "firmware/", "build": "./build.sh" } }
+}

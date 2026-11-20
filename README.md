@@ -12,6 +12,11 @@ the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md),
 
 The browser installer, knobi-flash (Web MIDI; not published yet): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
 
+This repository is also a monorepo for more synths and their platforms: the firmware stays at upstream's paths
+(`firmware/`, `tools/`, `tests/`, `build.sh`), and a pnpm + Turborepo workspace beside it holds the installer
+(`apps/installer/`), the shared `@knobi/*` packages (`packages/`) and per-synth metadata (`synths/`). Layout and rules:
+[docs/MONOREPO.md](docs/MONOREPO.md).
+
 ## Build and test
 
 Linux on x86-64, or macOS with Docker; Python 3 with Pillow; JieLi's toolchain and three files of the AC79 SDK.

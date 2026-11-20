@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/BACKUP.md"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": { "dependsOn": ["^typecheck"] },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tools/fm1_install.py",
+        "$TURBO_ROOT$/tools/build.py",
+        "$TURBO_ROOT$/docs/IDENTITY.md",
+        "$TURBO_ROOT$/synths/**",
+        "$TURBO_ROOT$/packages/catalog/instruments.json",
+        "$TURBO_ROOT$/packages/installer-core/test/fixtures/**",
+        "$TURBO_ROOT$/build/*.fwsc"
+      ],
+      "outputs": []
+    }
+  }
+}

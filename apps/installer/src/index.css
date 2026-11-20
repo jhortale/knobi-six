@@ -1,0 +1,3 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* The installer's styles: Tailwind and the KNOBI panel theme, from @knobi/ui. */
+@import "@knobi/ui/globals.css";
