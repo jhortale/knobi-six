@@ -61,11 +61,12 @@ void Processor::syncHost()
     // (an automation write), which this plugin never sends for a core change
     if (programMoved_.exchange(false) && wrapperType == wrapperType_AudioUnit)
         updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
-    // the bank changed (a WRITE, another instance's, the file reloaded): the program list's names. VST3: JUCE turns
-    // parameterInfoChanged into restartComponent(kParamTitlesChanged), which makes hosts re-read the program list's
-    // strings (programChanged is not used there: JUCE writes it as a gesture on its "Program" parameter). AU: there is
-    // no "factory presets changed" notification; programChanged makes hosts re-read the present preset, and the
-    // list is re-read when the host asks for it again
+    // the bank changed (a WRITE, another instance's, the file reloaded): the program list's names. AU: no "factory
+    // presets changed" notification exists; programChanged makes hosts re-read the present preset; the list is
+    // re-read when the host asks for it again. VST3: no way to tell the host in JUCE 8.0.15 -- parameterInfoChanged
+    // reaches restartComponent(kParamTitlesChanged) only when a parameter's own title / units / steps changed, never
+    // for program names, and programChanged would be written as a gesture on JUCE's "Program" parameter (not sent).
+    // parameterInfoChanged is still sent (harmless; listeners in the process see it). plugin/README.md: limitation
     if (namesMoved_.exchange(false)) {
         auto d = juce::AudioProcessorListener::ChangeDetails().withParameterInfoChanged(true);
         if (wrapperType == wrapperType_AudioUnit) d = d.withProgramChanged(true);
@@ -132,15 +133,22 @@ void Processor::attachLibrary(std::shared_ptr<Library> lib, bool constructing)
         std::lock_guard<std::mutex> b(bankLock_);
         libGen_ = 0;                              // (another library: its generations count from its own start)
     }
+    {
+        std::lock_guard<std::mutex> g(globalsLock_);
+        globalsGen_ = 0;
+    }
     lib_ = std::move(lib);
     if (!lib_) return;
     listener_ = lib_->addListener([this](const std::shared_ptr<const LibrarySnapshot>& s) { onLibrary(s, false); });
     onLibrary(lib_->snapshot(), constructing);    // (a newer one given meanwhile by the listener wins: generation)
 }
 
+void Processor::deliverLibrarySnapshot(const std::shared_ptr<const LibrarySnapshot>& s) { onLibrary(s, false); }
+
 void Processor::onLibrary(const std::shared_ptr<const LibrarySnapshot>& s, bool constructing)
 {
     if (!s || !takeSnapshot(s)) return;
+    if (testHooks.beforeGlobals) testHooks.beforeGlobals(*this, s->generation);
     applyGlobals(*s, constructing);
 }
 
@@ -174,8 +182,13 @@ void Processor::applyGlobals(const LibrarySnapshot& s, bool constructing)
         for (int g : Library::kGlobals) kc_global_set(x->k, g, x->v[g]);
         kc_global_set(x->k, G_MIDI_CH, 0);        // (omni in the plugin: Live routes the MIDI)
     };
+    // two snapshots' listeners may run at once (a reload and a WRITE): the globals only move forward -- an older
+    // generation than the one applied is dropped, the check and the apply under one lock (never the audio thread's)
+    std::lock_guard<std::mutex> g(globalsLock_);
+    if (s.generation <= globalsGen_) return;
     if (constructing || tlInProcess) fn(&c);      // (the constructor: no thread has the instance yet)
-    else access_.run(fn, &c);
+    else if (!access_.run(fn, &c)) return;        // (not applied: a later snapshot may still)
+    globalsGen_ = s.generation;
 }
 
 void Processor::collectLocked()                  // (bankLock_ held; never the audio thread)
@@ -259,7 +272,7 @@ Library::Result Processor::writeProgram(int n)
 {
     if (!lib_ || !runner_.ok() || tlInProcess) return Library::kIoError;   // (file I/O: never the audio thread)
     Snapshot s;
-    snapshot(s);                                  // (number and content agree: snapshot())
+    if (!snapshot(s)) return Library::kIoError;   // (number and content agree: snapshot(); no answer: nothing written)
     if (n < 0) n = s.number;
     if (n < 0 || n >= (int)KC_PROGRAMS) return Library::kInvalid;
     // RESTORE FACTORY then WRITE on the same number, unchanged since: the slot emptied (the factory program again)
@@ -267,30 +280,34 @@ Library::Result Processor::writeProgram(int n)
     seq_t fs;
     const bool factory = restored_.load() == n && s.number == n && bank_.factory(n, &fp, &fs) &&
                          ProgramBank::same(s.program, s.seq, fp, fs);
-    if (afterSnapshot) afterSnapshot(*this);      // (tests: an edit arriving while the file is written)
+    if (testHooks.afterSnapshot) testHooks.afterSnapshot(*this);   // (tests: something arriving while the file is written)
     const Library::Result r = factory ? lib_->clear(n) : lib_->write(n, s.program, s.seq);
     if (r != Library::kOk) return r;
     restored_.store(-1);
     // as the keyboard's WRITE: the edit buffer is now program n, no load (the sound, the sequencer, the arp play on);
-    // "edited" clears unless the edit buffer changed since the snapshot (an edit made meanwhile stays an edit).
-    // Refused only when a load is on its way (kc_program_pending): that load replaces the edit buffer anyway
-    struct Ctx { Processor* p; int n; const program_t* prog; const seq_t* seq; } c{this, n, &s.program, &s.seq};
+    // "edited" clears unless the edit buffer changed since the snapshot (an edit made meanwhile stays an edit). Not
+    // marked when a load came after the snapshot (a MIDI program change, a set state: kc_program_loads -- that load
+    // is the program in play, it keeps its number) or one is on its way: kStoredOnly
+    struct Ctx { Processor* p; int n; const Snapshot* s; int rc; } c{this, n, &s, -3};
     auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
         auto* x = (Ctx*)v;
-        kc_program_mark_stored(x->p->runner_.core(), x->n, x->prog, x->seq);
+        x->rc = kc_program_mark_stored(x->p->runner_.core(), x->n, &x->s->program, &x->s->seq, x->s->loads);
         x->p->scanCore();
         x->p->programMoved_.store(false);         // (asked for here)
     };
-    access_.run(fn, &c);
+    const bool ran = access_.run(fn, &c);
     if (juce::MessageManager::existsAndIsCurrentThread()) params_.syncToHost();
-    return Library::kOk;
+    // (a program change still on its way when the snapshot was taken, written to its own number: that load is
+    // exactly what was stored, unedited -- nothing to mark)
+    const bool loadIsIt = ran && c.rc == -1 && s.pending && n == s.number;
+    return ran && (c.rc >= 0 || loadIsIt) ? Library::kOk : Library::kStoredOnly;
 }
 
 bool Processor::restoreFactory()
 {
     if (!runner_.ok() || tlInProcess) return false;
     Snapshot s;
-    snapshot(s);
+    if (!snapshot(s)) return false;
     program_t fp;
     seq_t fs;
     if (!bank_.factory(s.number, &fp, &fs)) return false;
@@ -300,32 +317,35 @@ bool Processor::restoreFactory()
 }
 
 // ---- state (StateCodec.h): the message thread, through access()
-void Processor::snapshot(Snapshot& s)
+bool Processor::snapshot(Snapshot& s)
 {
     struct Ctx { kc_t* k; Snapshot* s; int pending; } c{runner_.core(), &s, 0};
-    s.number = 0, s.edited = 0;
+    s.number = 0, s.edited = 0, s.loads = 0, s.pending = false;
     program_init(&s.program);
     seq_clear(&s.seq);
-    if (!c.k) return;
+    if (!c.k) return false;
     auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
         auto* x = (Ctx*)v;
         kc_program_get(x->k, &x->s->number, &x->s->program, &x->s->seq, &x->s->edited);
         x->pending = kc_program_pending(x->k);
+        x->s->loads = kc_program_loads(x->k);     // (with the content: kc_program_mark_stored's "a load since?")
     };
     if (tlInProcess) fn(&c);
-    else access_.run(fn, &c);
+    else if (!access_.run(fn, &c)) return false;
     // a program change the engine has not taken yet: the core reports its number with the previous edit buffer
     // (kc_program_pending); what that load gives is program number as the bank holds it, unedited -- number and
     // content always agree here (WRITE, the set state)
     program_t p;
     seq_t q;
+    s.pending = c.pending != 0;
     if (c.pending && !tlInProcess && bank_.program(s.number, &p, &q)) s.program = p, s.seq = q, s.edited = 0;
+    return true;
 }
 
 bool Processor::differsFromBank()
 {
     Snapshot s;
-    snapshot(s);
+    if (!snapshot(s)) return false;
     program_t p;
     seq_t q;
     if (!bank_.program(s.number, &p, &q)) return false;

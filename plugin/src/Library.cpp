@@ -349,7 +349,6 @@ void Library::removeListener(int id)
 // ---- writing: read-modify-write under the lock file, temp + fsync + rename
 Library::Result Library::mutate(const std::function<bool(Data&)>& change)
 {
-    namespace fs = std::filesystem;
     std::shared_ptr<const LibrarySnapshot> made;
     Result res = mutateLocked(change, made);      // (every lock released when it returns: the flock too)
     if (made) notify(made);

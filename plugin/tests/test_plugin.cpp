@@ -94,7 +94,10 @@
 //                         channel stays omni; only Library::kGlobals accepted
 //   library_write_plays_on  (fix round 1) WRITE without a load: a sequence playing with Live sounds the same, sample
 //                         for sample, as without the WRITE; number, edited, differs right after; an edit made while
-//                         the file is written stays, the program edited
+//                         the file is written stays, the program edited; a MIDI program change or a host program load
+//                         while the file is written (fix round 2): not renamed, kStoredOnly
+//   library_globals_order (fix round 2) two library snapshots delivered at once, the older one's globals applied
+//                         last: dropped (the globals only move forward)
 //   library_symlink       (fix round 1) a library path that is a symbolic link stays one (the file it names written,
 //                         its lock beside it); listeners are told with the file's lock released
 //   factory_gating        the default build: every factory program is the init program, named KNOBI-SIX (bundles
@@ -2237,10 +2240,10 @@ static void library_write_plays_on()
     CHECK(editedBefore && flags && diff == 0 && ha.out.size() == hb.out.size() && ons > 0 && kc_seq_state(a.runner().core()) == 1);
 
     // an edit (a CC's value) arriving after the snapshot, before the file is written: stays, the program edited
-    Processor::afterSnapshot = [](Processor& p) { kc_param_set(p.runner().core(), P_FLT_FREQ, 99); };
+    Processor::testHooks.afterSnapshot = [](Processor& p) { kc_param_set(p.runner().core(), P_FLT_FREQ, 99); };
     kc_param_set(a.runner().core(), P_FLT_FREQ, 41);
     const auto w2 = a.writeProgram();
-    Processor::afterSnapshot = nullptr;
+    Processor::testHooks.afterSnapshot = nullptr;
     auto snap = Library(da + "/library.knobi", 0).snapshot();
     const bool kept = w2 == Library::kOk && snap->bank.program[33].v[P_FLT_FREQ] == 41 &&
                       kc_param_get(a.runner().core(), P_FLT_FREQ) == 99 && a.edited() && a.getCurrentProgram() == 33 &&
@@ -2249,6 +2252,65 @@ static void library_write_plays_on()
                 "%d\n", snap->bank.program[33].v[P_FLT_FREQ], kc_param_get(a.runner().core(), P_FLT_FREQ),
                 (int)a.edited(), (int)a.differsFromBank());
     CHECK(kept);
+
+    // a load between the snapshot and the mark (fix round 2): never renamed to the written slot. A MIDI program change
+    // the audio thread applies meanwhile, then a host program load (kc_program_set) meanwhile: kStoredOnly, the
+    // instance keeps that load's number and content (not edited), the file has what the snapshot read
+    Processor::testHooks.afterSnapshot = [](Processor& p) {
+        juce::AudioBuffer<float> buf(2, 512);
+        juce::MidiBuffer pc;
+        pc.addEvent(juce::MidiMessage::programChange(1, 5), 0);
+        p.processBlock(buf, pc);
+        juce::MidiBuffer none;
+        p.processBlock(buf, none), p.processBlock(buf, none);
+    };
+    kc_param_set(a.runner().core(), P_FLT_FREQ, 42);
+    const auto w3 = a.writeProgram(34);
+    const int n3 = a.getCurrentProgram();
+    const bool e3 = a.edited();
+    auto s3 = Library(da + "/library.knobi", 0).snapshot();
+    Processor::testHooks.afterSnapshot = [](Processor& p) { p.setCurrentProgram(7); };
+    const auto w4 = a.writeProgram(35);
+    Processor::testHooks.afterSnapshot = nullptr;
+    const int n4 = a.getCurrentProgram();
+    const bool e4 = a.edited();
+    auto s4 = Library(da + "/library.knobi", 0).snapshot();
+    std::printf("library_write_plays_on: a MIDI program change during the WRITE: %d (4 stored only), number %d (5), "
+                "edited %d, slot 34 stored %d (42); a host program load during it: %d, number %d (7), edited %d, slot "
+                "35 stored %d\n", w3, n3, (int)e3, s3->bank.program[34].v[P_FLT_FREQ], w4, n4, (int)e4,
+                (int)s4->bank.used[35]);
+    CHECK(w3 == Library::kStoredOnly && n3 == 5 && !e3 && s3->bank.used[34] && s3->bank.program[34].v[P_FLT_FREQ] == 42 &&
+          w4 == Library::kStoredOnly && n4 == 7 && !e4 && s4->bank.used[35]);
+}
+
+// two snapshots' listeners at once (fix round 2): the older one's globals, applied last, must not win. Snapshot 100
+// taken, and before its globals are applied snapshot 101 is taken and applied (the hook): TUNE stays 101's
+static std::shared_ptr<const LibrarySnapshot> gLater;
+static void library_globals_order()
+{
+    const std::string dir = freshDir("globals_order");
+    Processor p;
+    p.attachLibrary(std::make_shared<Library>(dir + "/library.knobi", 0));
+    auto base = *Library(dir + "/library.knobi", 0).snapshot();
+    auto older = std::make_shared<LibrarySnapshot>(base), later = std::make_shared<LibrarySnapshot>(base);
+    older->generation = 100, older->globals[G_TUNE] = 10, older->globals[G_STEREO] = 1;
+    later->generation = 101, later->globals[G_TUNE] = 20, later->globals[G_STEREO] = 0;
+    gLater = later;
+    Processor::testHooks.beforeGlobals = [](Processor& q, uint64_t gen) {
+        if (gen == 100) q.deliverLibrarySnapshot(gLater);   // (101 taken and applied while 100 waits)
+    };
+    p.deliverLibrarySnapshot(older);
+    Processor::testHooks.beforeGlobals = nullptr;
+    const int tune = p.global(G_TUNE), stereo = p.global(G_STEREO);
+    auto next = std::make_shared<LibrarySnapshot>(base);
+    next->generation = 102, next->globals[G_TUNE] = 30;
+    p.deliverLibrarySnapshot(next);
+    p.deliverLibrarySnapshot(older);              // (an old one late: dropped)
+    const int tune2 = p.global(G_TUNE);
+    gLater.reset();
+    std::printf("library_globals_order: 100 then 101 inside it: TUNE %d (20), STEREO %d (0); then 102 and a late 100: "
+                "TUNE %d (30)\n", tune, stereo, tune2);
+    CHECK(tune == 20 && stereo == 0 && tune2 == 30);
 }
 
 // a library path that is a symbolic link stays one: the file it names is written; listeners are told with the
@@ -2340,7 +2402,7 @@ int main(int argc, char** argv)
         {"reload_off_audio_thread", reload_off_audio_thread}, {"library_snapshot_consistent", library_snapshot_consistent},
         {"library_write_restore", library_write_restore}, {"library_globals", library_globals},
         {"factory_gating", factory_gating}, {"library_write_plays_on", library_write_plays_on},
-        {"library_symlink", library_symlink},
+        {"library_symlink", library_symlink}, {"library_globals_order", library_globals_order},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

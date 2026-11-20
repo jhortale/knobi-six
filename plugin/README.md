@@ -122,6 +122,10 @@ Format and rules: `src/Library.h`.
   and the file is not touched. The next WRITE keeps it first as `library.knobi.bad-<date-time>` beside it. A single
   slot it cannot use: that slot is the factory program (counted in a notice), and its data stays in the file.
 - Back it up by copying the file; delete it to start again from the factory programs.
+- Known limitation: after a WRITE (here or in another instance) the host's program list may show the old names
+  until it asks for them again (reopen the device's program menu, or reload the set). Neither plugin format offers
+  a reliable way to say "the program names changed": AU has no notification for its preset list, and in JUCE 8.0.15
+  the VST3 wrapper does not pass one on for program names. The sound and the panel always use the new bank.
 
 ## auval
 

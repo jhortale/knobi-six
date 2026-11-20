@@ -20,6 +20,12 @@
 
 namespace knobi {
 
+class Processor;
+struct ProcessorTestHooks {                       // (tests only: Processor::testHooks)
+    void (*afterSnapshot)(Processor&) = nullptr;
+    void (*beforeGlobals)(Processor&, uint64_t generation) = nullptr;
+};
+
 class Processor : public juce::AudioProcessor, private juce::Timer {
 public:
     static constexpr int kMaxEvents = 2048;      // MIDI messages a block (beyond: the rest of that block dropped)
@@ -82,7 +88,9 @@ public:
     Library* library() { return lib_.get(); }
     // WRITE: the program in play + its sequence into slot n (-1: its own number); the instance's program is then n, not
     // edited, with no load (as the keyboard's WRITE: the sound and the sequencer play on; kc_program_mark_stored; an
-    // edit made while the file is written stays an edit). The content stored is always the content
+    // edit made while the file is written stays an edit). Library::kStoredOnly: the file has it but the instance was
+    // not marked (a load came meanwhile -- a MIDI program change, a set state: it keeps that program's number -- or
+    // the instance did not answer): the panel says so. The content stored is always the content
     // of the number reported (a program change still waiting for the engine: that program as the bank gives it,
     // kc_program_pending). After restoreFactory on n and no change since, WRITE n empties the slot (factory)
     Library::Result writeProgram(int n = -1);
@@ -104,7 +112,10 @@ public:
     // the bank release (the message thread; syncHost calls it): snapshots replaced and no longer read are freed
     void collectBanks();
     size_t heldBanks();                          // (tests) snapshots held: the current one + those not yet released
-    static inline void (*afterSnapshot)(Processor&) = nullptr;   // (tests) called by writeProgram after its snapshot
+    // (tests only; nullptr in the plugin) afterSnapshot: writeProgram, after its snapshot, before the file is written;
+    // beforeGlobals: a library snapshot taken, its globals not applied yet
+    static inline ProcessorTestHooks testHooks{};
+    void deliverLibrarySnapshot(const std::shared_ptr<const LibrarySnapshot>& s);   // (tests) as the library's listener
 
     CoreAccess& access() { return access_; }
     CoreRunner& runner() { return runner_; }     // (the audio thread, or inside access().run)
@@ -118,8 +129,9 @@ private:
     void timerCallback() override { syncHost(); }
     void scanCore();                              // the core's values -> Params (alone with the core)
     void applyHostChanges();                      // Params -> the core at the block's first sample (the audio thread)
-    struct Snapshot { int32_t number; program_t program; seq_t seq; int edited; };
-    void snapshot(Snapshot& s);                   // the program in play (through access()): number + content agree
+    struct Snapshot { int32_t number; program_t program; seq_t seq; int edited; uint32_t loads; bool pending; };
+    bool snapshot(Snapshot& s);                   // the program in play (through access()): number + content agree;
+                                                  // false: the instance did not answer (s: init)
     void attachLibrary(std::shared_ptr<Library> lib, bool constructing);
     void onLibrary(const std::shared_ptr<const LibrarySnapshot>& s, bool constructing);   // (not the audio thread)
     bool takeSnapshot(const std::shared_ptr<const LibrarySnapshot>& s);  // its bank -> ProgramBank + the core
@@ -139,6 +151,8 @@ private:
     std::shared_ptr<const LibrarySnapshot> held_;                 // the snapshot the instance is given (or none)
     std::vector<std::shared_ptr<const LibrarySnapshot>> retired_;
     uint64_t libGen_ = 0;                         // (bankLock_) the library snapshot taken last
+    std::mutex globalsLock_;                      // (never the audio thread) the globals applied in generation order
+    uint64_t globalsGen_ = 0;                     // (globalsLock_) the snapshot whose globals were applied last
     std::shared_ptr<Library> lib_;
     int listener_ = 0;
     std::atomic<bool> namesMoved_{false};         // the bank changed: syncHost tells the host (program names)

@@ -68,7 +68,8 @@ public:
     static constexpr uint16_t kVersion = 1;
     // write / clear / setGlobal. kNewer: the file is a newer version's (minReader above ours): never replaced by this
     // version (its slots would be lost to it); nothing written
-    enum Result { kOk, kInvalid, kIoError, kNewer };
+    // kStoredOnly: Processor::writeProgram only -- the slot was written, the instance not marked as that program
+    enum Result { kOk, kInvalid, kIoError, kNewer, kStoredOnly };
     enum Decode { kDecOk, kDecBad, kDecTooNew };
 
     // loads path now (on this thread) and starts the watcher (pollMs > 0; 0: no watcher, reload() by hand)
