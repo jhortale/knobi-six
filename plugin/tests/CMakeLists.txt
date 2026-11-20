@@ -22,7 +22,8 @@ foreach(t render_44k_bitexact render_48k midi_sample_accurate rt_no_alloc seam s
         library_roundtrip library_atomic library_two_writers library_corrupt reload_off_audio_thread
         library_snapshot_consistent library_write_restore library_globals factory_gating
         library_write_plays_on library_symlink library_globals_order state_timeout_keeps_last seam_idle_clamped
-        prepare_takes_instance transport_none)
+        prepare_takes_instance transport_none transport_vanishes offline_no_silent
+        offline_run_waits)
     add_test(NAME ${t} COMMAND test_plugin ${t})
 endforeach()
 

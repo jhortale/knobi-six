@@ -110,6 +110,14 @@
 //   prepare_takes_instance  prepareToPlay waits while another thread's call holds the instance (CoreAccess::take)
 //   transport_none        no play head, no position, a position without ppq: the clock is never given a transport;
 //                         SEQ PLAY plays on the internal clock (never armed waiting for a play)
+// Follow-up (export dropout):
+//   transport_vanishes    a host that gave a position while playing stops giving one: the core is told "stopped" once
+//                         (notes released, the sequencer armed, not following), then nothing
+//   offline_no_silent     an offline render (isNonRealtime) slower than real time, calls arriving past the idle threshold
+//                         and another thread holding the instance as blocks come: no call on the asking thread, no
+//                         silent block, the output sample for sample an undisturbed render's
+//   offline_run_waits     offline, run() never runs on the asking thread: no block, it times out (the set state the last
+//                         good one); a block serves it; real time again, the idle rule takes it on the asking thread
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
@@ -1831,6 +1839,195 @@ static void transport_none()
     CHECK(good == 3);
 }
 
+// a host that gave a position while playing, then stops giving one (no play head now): the core is told the host
+// stopped, once (its notes released, the sequencer stops, armed), then nothing more; a host that never played and loses
+// its position is told nothing
+static void transport_vanishes()
+{
+    Processor p;
+    Host h(p, 44100, 512);
+    tpProgram(p, 16);
+    h.run(1024);
+    kc_seq_play(p.runner().core(), 1);
+    h.head.playing = true;
+    h.run(512 * 20);
+    const bool followed = p.followingHost();
+    kc_note_t nt[KC_LOG];
+    kc_notes(p.runner().core(), nt, KC_LOG);      // (the notes played so far: dropped)
+    h.steps();
+    const int64_t goneAt = h.s;
+    p.setPlayHead(nullptr);                       // (the position disappears while playing)
+    h.run(512 * 100);
+    auto st = h.steps();
+    int rel = 0;
+    for (auto& e : st) rel += (e.kind & KC_EV_KIND) == KC_EV_RELEASE;
+    uint32_t m = kc_notes(p.runner().core(), nt, KC_LOG), ons = 0;
+    for (uint32_t i = 0; i < m; i++) ons += nt[i].vel != 0 && (int64_t)nt[i].frame >= goneAt;
+    const int state = kc_seq_state(p.runner().core());
+    std::printf("transport_vanishes: playing with a position, following %d; the position gone: following %d, %d "
+                "release(s), %u note-ons since, the sequencer state %d (want 2, armed)\n", (int)followed,
+                (int)p.followingHost(), rel, ons, state);
+    CHECK(followed && !p.followingHost() && rel == 1 && ons == 0 && state == 2);
+}
+
+// Follow-up (export dropout): an offline render (isNonRealtime) slower than real time, while calls arrive from another
+// thread (the panel's 15 Hz poll) and another thread takes the instance (prepareToPlay's take()): the gaps between the
+// blocks on the seam's clock are past the idle threshold, yet no call runs on the asking thread and no block is silent:
+// the output is sample for sample the same as an undisturbed offline render
+static void offline_no_silent()
+{
+    const int block = 2048, nBlocks = 24, nCalls = 14;
+    const double rate = 44100;
+    auto script = [](int b, juce::MidiBuffer& m) {
+        m.clear();
+        if (b == 1) m.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)110), 100);
+        if (b == 3) m.addEvent(juce::MidiMessage::noteOn(1, 64, (juce::uint8)90), 50);
+        if (b == 9) m.addEvent(juce::MidiMessage::noteOff(1, 60), 7);
+        if (b == 12) m.addEvent(juce::MidiMessage::noteOff(1, 64), 1000);
+        if (b == 15) m.addEvent(juce::MidiMessage::noteOn(1, 67, (juce::uint8)120), 0);
+        if (b == 17) m.addEvent(juce::MidiMessage::noteOn(1, 71, (juce::uint8)70), 2047);
+        if (b == 21) m.addEvent(juce::MidiMessage::noteOff(1, 67), 30), m.addEvent(juce::MidiMessage::noteOff(1, 71), 31);
+    };
+    auto render = [&](Processor& p, const std::function<void(int)>& before) {
+        std::vector<float> out;
+        juce::AudioBuffer<float> buf(2, block);
+        juce::MidiBuffer midi;
+        midi.ensureSize(1024);
+        for (int b = 0; b < nBlocks; b++) {
+            if (before) before(b);
+            script(b, midi);
+            p.processBlock(buf, midi);
+            for (int i = 0; i < block; i++) out.push_back(buf.getSample(0, i)), out.push_back(buf.getSample(1, i));
+        }
+        return out;
+    };
+    Processor ref;
+    ref.setNonRealtime(true);
+    ref.setPlayConfigDetails(0, 2, rate, block);
+    ref.prepareToPlay(rate, block);
+    const auto want = render(ref, nullptr);
+    Processor p;
+    p.setNonRealtime(true);
+    p.setPlayConfigDetails(0, 2, rate, block);
+    p.prepareToPlay(rate, block);
+    FakeClock clk;
+    p.access().setClock(&clk);
+    const int idle = p.access().idleMs();
+    struct Ctx { kc_t* k; std::thread::id asker; std::atomic<int> here{0}, audio{0}; std::atomic<bool> holding{false}; } c;
+    c.k = p.runner().core();
+    std::atomic<int> served{0};
+    std::thread asker([&] {
+        c.asker = std::this_thread::get_id();
+        for (int i = 0; i < nCalls; i++)
+            served += p.access().run([](void* v) {
+                auto* x = (Ctx*)v;
+                int32_t num;
+                kc_program_get(x->k, &num, nullptr, nullptr, nullptr);
+                if (std::this_thread::get_id() == x->asker) {   // (on the asking thread: hold it while a block comes)
+                    x->here++;
+                    x->holding = true;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                    x->holding = false;
+                } else
+                    x->audio++;
+            }, &c);
+    });
+    std::atomic<bool> taking{false};
+    std::thread taker;
+    const auto out = render(p, [&](int b) {
+        if (b < nCalls) {                         // a call waits; the render is slow: a gap past the idle threshold
+            for (int i = 0; i < 1000 && !p.access().posted(); i++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            clk.advanceMs(idle + 50);
+            for (int i = 0; i < 50 && !c.holding; i++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else if (b >= 16 && b < 20) {           // another thread holds the instance (take) as the block comes
+            if (taker.joinable()) taker.join();
+            taking = false;
+            taker = std::thread([&] {
+                p.access().take();
+                taking = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                p.access().give();
+            });
+            while (!taking) std::this_thread::yield();
+        }
+    });
+    if (taker.joinable()) taker.join();
+    asker.join();
+    p.access().setClock(nullptr);
+    size_t diff = 0;
+    for (size_t i = 0; i < out.size() && i < want.size(); i++) diff += out[i] != want[i];
+    const bool sound = rms(want.data(), want.size()) > 1e-3;
+    std::printf("offline_no_silent: %d blocks of %d offline, %d calls each after %d ms of the seam's clock (idle %d ms) "
+                "and 4 blocks while another thread holds the instance: %d served, %d on the asking thread, %d on the "
+                "audio thread, %llu silent blocks; output vs an undisturbed render: %zu of %zu samples differ (sound %d)\n",
+                nBlocks, block, nCalls, idle + 50, idle, served.load(), c.here.load(), c.audio.load(),
+                (unsigned long long)p.silentBlocks(), diff, out.size(), (int)sound);
+    CHECK(served == nCalls && c.here == 0 && c.audio == nCalls && p.silentBlocks() == 0 && out.size() == want.size() &&
+          diff == 0 && sound && p.access().ranHere() == 0);
+}
+
+// Follow-up (export dropout): offline, run() never takes the instance on the asking thread: with no block coming it
+// times out (false; the set state falls back to the last good one); a block serves it on the audio thread; back in
+// real time, the idle rule acts again (the asking thread takes it)
+static void offline_run_waits()
+{
+    Processor p;
+    p.setPlayConfigDetails(0, 2, 44100, 256);
+    p.prepareToPlay(44100, 256);
+    p.setCurrentProgram(5);
+    blocks(p, 2);
+    juce::MemoryBlock good;
+    p.getStateInformation(good);
+    const uint64_t here0 = p.access().ranHere();  // (the calls above: real time, no audio -- on this thread)
+    p.setNonRealtime(true);
+    FakeClock clk;
+    p.access().setClock(&clk);
+    struct Ctx { std::thread::id asker; std::atomic<int> here{0}, other{0}; } c;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        if (std::this_thread::get_id() == x->asker) x->here++; else x->other++;
+    };
+    auto ask = [&](const std::function<void()>& meanwhile) {
+        std::atomic<int> r{-1};
+        std::thread t([&] { c.asker = std::this_thread::get_id(); r = p.access().run(fn, &c) ? 1 : 0; });
+        meanwhile();
+        for (int i = 0; i < 3000 && r < 0; i++) {
+            clk.advanceMs(50);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        t.join();
+        return r.load();
+    };
+    const int none = ask([] {});                  // offline, no block: times out
+    const int hereNone = c.here, otherNone = c.other;
+    juce::MemoryBlock saved;                      // (the set state, no block coming: the last good one)
+    {
+        std::atomic<bool> done{false};
+        std::thread t([&] { p.getStateInformation(saved); done = true; });
+        for (int i = 0; i < 3000 && !done; i++) {
+            clk.advanceMs(50);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        t.join();
+    }
+    const int served = ask([&] {                  // offline, a block comes: served on the audio thread
+        while (!p.access().posted()) std::this_thread::yield();
+        clk.advanceMs(1000);                      // (a slow render: far past the idle threshold)
+        blocks(p, 1);
+    });
+    const int hereServed = c.here, otherServed = c.other;
+    p.setNonRealtime(false);
+    const int rt = ask([] {});                    // real time again, no block: the asking thread takes it
+    p.access().setClock(nullptr);
+    std::printf("offline_run_waits: offline, no block: run() %d (want 0, timed out), on the asking thread %d; the set "
+                "state the last good one %s; a block comes after 1000 ms: run() %d, on the audio thread %d, on the "
+                "asking thread %d; real time again, no block: run() %d, on the asking thread %d (ranHere since offline %llu)\n", none,
+                hereNone, saved == good ? "yes" : "NO", served, otherServed - otherNone, hereServed - hereNone, rt,
+                c.here - hereServed, (unsigned long long)(p.access().ranHere() - here0));
+    CHECK(none == 0 && hereNone == 0 && otherNone == 0 && saved == good && served == 1 && otherServed - otherNone == 1 &&
+          hereServed == 0 && rt == 1 && c.here == 1 && p.access().ranHere() - here0 == 1);
+}
+
 // ===============================================================================================================
 // plan Task 6: the shared library
 // ===============================================================================================================
@@ -2595,6 +2792,8 @@ int main(int argc, char** argv)
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
         {"state_timeout_keeps_last", state_timeout_keeps_last}, {"seam_idle_clamped", seam_idle_clamped},
         {"prepare_takes_instance", prepare_takes_instance}, {"transport_none", transport_none},
+        {"transport_vanishes", transport_vanishes}, {"offline_no_silent", offline_no_silent},
+        {"offline_run_waits", offline_run_waits},
         {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
         {"transport_loop", transport_loop}, {"transport_loop_tempo", transport_loop_tempo},
         {"transport_locate", transport_locate},
