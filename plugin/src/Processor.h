@@ -232,6 +232,7 @@ private:
     uint32_t pendingN_ = 0;
     bool pendingOverflow_ = false, fadeIn_ = false;
     uint64_t skipped_ = 0;                       // session samples output silent, not yet rendered
+    bool hostRolling_ = false;                   // the last block had the host's position, playing (the audio thread)
     float lastL_ = 0.0f, lastR_ = 0.0f;          // the last sample output
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Processor)
