@@ -5,7 +5,8 @@
 //   run(fn, ctx): posts fn; the audio thread runs it at the start of its next block, before that block's events (so
 //   it acts at the block's first sample, in order with everything else the audio thread does). If no block comes (the
 //   host is genuinely not processing: not prepared, stopped, offline), the asking thread takes the instance itself
-//   once the audio thread has been idle for idleMs() -- max(kIdleMs, 3 block periods), set from prepareToPlay
+//   once the audio thread has been idle for idleMs() -- max(kIdleMs, 3 block periods), at most kMaxIdleMs (a quarter
+//   of run()'s timeout: a host that is not processing is always found in time), set from prepareToPlay
 //   (setIdle), so a host with long blocks (2048 at 44.1 kHz: 46 ms apart) is never taken for idle between its
 //   callbacks -- and runs fn there. Either way fn runs once, alone with the instance.
 // The audio side is wait-free (atomics only): audioEnter / audioServe / audioExit never block, allocate or lock.
@@ -45,12 +46,18 @@ public:
     // (tests) the clock run() reads; nullptr: the steady clock. Set it while no run() is waiting
     void setClock(Clock* c) { clock_ = c ? c : &steady_; }
     static constexpr int kIdleMs = 20;            // the least idle time taken as "the host is not processing"
+    static constexpr int kTimeoutMs = 2000;       // run()'s default timeout
+    static constexpr int kMaxIdleMs = kTimeoutMs / 4;   // the most: the idle rule always acts well before a timeout
 
-    // the host's block period (prepareToPlay): idle = no block for max(kIdleMs, 3 block periods)
+    // the host's block period (prepareToPlay): idle = no block for max(kIdleMs, 3 block periods), at most kMaxIdleMs
+    // (blocks longer than ~7350 samples at 44.1 kHz: a block that long may then be taken for idle; that call runs on
+    // the asking thread and a block that comes meanwhile is output silent -- the collision path -- never a timeout
+    // because no host block is coming: run() would give up after kTimeoutMs, and the set state would not be saved)
     void setIdle(double sampleRate, int maxBlock)
     {
-        int ms = sampleRate > 0 && maxBlock > 0 ? (int)std::ceil(3000.0 * maxBlock / sampleRate) : kIdleMs;
-        idleMs_.store(ms > kIdleMs ? ms : kIdleMs, std::memory_order_relaxed);
+        double ms = sampleRate > 0 && maxBlock > 0 ? std::ceil(3000.0 * maxBlock / sampleRate) : kIdleMs;
+        ms = ms < kIdleMs ? kIdleMs : ms > kMaxIdleMs ? kMaxIdleMs : ms;
+        idleMs_.store((int)ms, std::memory_order_relaxed);
     }
     int idleMs() const { return idleMs_.load(std::memory_order_relaxed); }
 
@@ -76,8 +83,10 @@ public:
     }
 
     // ---- any other thread: fn(ctx) run once, alone with the instance; false: timed out, fn not run
-    bool run(Fn fn, void* ctx, int timeoutMs = 2000)
+    bool run(Fn fn, void* ctx, int timeoutMs = kTimeoutMs)
     {
+        const int idleMs = idleMs_.load(std::memory_order_relaxed) < timeoutMs / 4 ?
+                           idleMs_.load(std::memory_order_relaxed) : timeoutMs / 4;   // (never at the timeout)
         runs_.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> side(side_);
         fn_ = fn, ctx_ = ctx;
@@ -91,7 +100,7 @@ public:
             const int64_t now = clock_->nowUs();
             uint64_t b = blocks_.load(std::memory_order_relaxed);
             if (b != last) last = b, seen = now;
-            if (r == kPosted && now - seen >= (int64_t)idleMs() * 1000) {   // the host is not processing
+            if (r == kPosted && now - seen >= (int64_t)idleMs * 1000) {   // the host is not processing
                 int idle = kFree;
                 if (owner_.compare_exchange_strong(idle, kOther, std::memory_order_acquire)) {
                     int posted = kPosted;

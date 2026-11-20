@@ -406,7 +406,11 @@ bool Processor::differsFromBank()
 void Processor::getStateInformation(juce::MemoryBlock& dest)
 {
     Snapshot s;
-    snapshot(s);
+    const bool ok = snapshot(s);
+    if (!ok) {                                    // the instance did not answer (run() timed out, no core): the last
+        std::lock_guard<std::mutex> l(stateLock_);   // good state, never INIT in place of the set's sound
+        if (!lastState_.empty()) { dest.replaceAll(lastState_.data(), lastState_.size()); return; }
+    }                                             // (none yet: as it is, INIT -- nothing better is known)
     SetState st;
     st.number = s.number, st.program = s.program, st.seq = s.seq, st.edited = s.edited != 0;
     program_t p;
@@ -414,6 +418,10 @@ void Processor::getStateInformation(juce::MemoryBlock& dest)
     st.differs = bank_.program(s.number, &p, &q) && !ProgramBank::same(s.program, s.seq, p, q);
     const auto bytes = StateCodec::encode(st);
     dest.replaceAll(bytes.data(), bytes.size());
+    if (ok) {
+        std::lock_guard<std::mutex> l(stateLock_);
+        lastState_ = bytes;
+    }
 }
 
 void Processor::setStateInformation(const void* data, int size)
@@ -436,6 +444,10 @@ void Processor::setStateInformation(const void* data, int size)
     if (tlInProcess) fn(&c);
     else if (!access_.run(fn, &c)) return;
     if (c.rc != 0) return;
+    {                                             // the last good state now (getStateInformation's fallback)
+        std::lock_guard<std::mutex> l(stateLock_);
+        lastState_.assign((const uint8_t*)data, (const uint8_t*)data + size);
+    }
     restored_.store(-1);
     stateDiffers_.store(differs);
     // the parameters show the loaded program now (the wrappers are restoring state: JUCE's AU and VST3 wrappers send

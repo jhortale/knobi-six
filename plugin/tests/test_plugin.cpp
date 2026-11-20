@@ -1228,6 +1228,89 @@ static void state_versioned()
     CHECK(laterOk && olderOk && emptyOk && refused == 5);
 }
 
+// the set state when the instance does not answer (run() timed out: the audio thread holds it and serves nothing):
+// the last good state (the last getStateInformation or setStateInformation that worked), never INIT
+static void stuckState(Processor& p, FakeClock& clk, juce::MemoryBlock& out)
+{
+    CHECK(p.access().audioEnter());               // (an audio thread stuck mid-block: no call served, no idle)
+    std::atomic<bool> done{false};
+    std::thread t([&] { p.getStateInformation(out); done = true; });
+    for (int i = 0; i < 2000 && !done; i++) {
+        clk.advanceMs(100);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    t.join();
+    p.access().audioExit();
+}
+
+static void state_timeout_keeps_last()
+{
+    auto bank = makeBank();
+    for (int i : {7, 8}) {
+        makeProgram(i, bank->program[i], bank->seq[i], i == 7 ? "SEVEN" : "EIGHT");
+        bank->used[i] = 1;
+    }
+    Processor p;
+    p.setBank(bank.get());
+    p.setPlayConfigDetails(0, 2, 44100, 256);
+    p.prepareToPlay(44100, 256);
+    p.setCurrentProgram(7);
+    blocks(p, 2);
+    juce::MemoryBlock good;
+    p.getStateInformation(good);
+    FakeClock clk;
+    p.access().setClock(&clk);
+    juce::MemoryBlock bad1;
+    stuckState(p, clk, bad1);
+    SetState d1;
+    const bool dec1 = StateCodec::decode(bad1.getData(), bad1.getSize(), d1) == StateCodec::kOk;
+    // a state loaded (another instance's, program 8) is the last good one now
+    Processor b;
+    b.setBank(bank.get());
+    b.setCurrentProgram(8);
+    juce::MemoryBlock loaded;
+    b.getStateInformation(loaded);
+    p.access().setClock(nullptr);
+    p.setStateInformation(loaded.getData(), (int)loaded.getSize());
+    p.access().setClock(&clk);
+    juce::MemoryBlock bad2;
+    stuckState(p, clk, bad2);
+    SetState d2;
+    const bool dec2 = StateCodec::decode(bad2.getData(), bad2.getSize(), d2) == StateCodec::kOk;
+    p.access().setClock(nullptr);
+    std::printf("state_timeout_keeps_last: the instance not answering: saved state = the last good one %s (program %d, "
+                "want 7); after loading program 8's state: %s (program %d, want 8)\n", bad1 == good ? "yes" : "NO",
+                dec1 ? (int)d1.number : -1, bad2 == loaded ? "yes" : "NO", dec2 ? (int)d2.number : -1);
+    CHECK(bad1 == good && dec1 && d1.number == 7 && bad2 == loaded && dec2 && d2.number == 8);
+}
+
+// the seam's idle time never reaches run()'s timeout (2000 ms): a host with huge blocks, or none at all, is still taken
+// for idle in time (at most a quarter of the timeout), so a call never times out only because the threshold is too long
+static void seam_idle_clamped()
+{
+    CoreAccess acc;
+    acc.setIdle(44100, 1 << 20);                  // (blocks of 23.8 s: 3 periods would be 71 s)
+    const int huge = acc.idleMs();
+    FakeClock clk;
+    acc.setClock(&clk);
+    std::atomic<int> r{-1};
+    std::thread t([&] { r = acc.run([](void*) {}, nullptr) ? 1 : 0; });
+    for (int i = 0; i < 2000 && r < 0; i++) {
+        clk.advanceMs(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    t.join();
+    acc.setIdle(44100, 2048);                     // (a usual block: 3 periods, 140 ms)
+    const int usual = acc.idleMs();
+    acc.setIdle(44100, 64);                       // (a short one: kIdleMs)
+    const int shortB = acc.idleMs();
+    std::printf("seam_idle_clamped: idle for 2^20-sample blocks %d ms (want <= 500), a call with no audio %s; 2048: %d "
+                "ms (want 140), 64: %d ms (want %d)\n", huge, r == 1 ? "ran" : "TIMED OUT", usual, shortB,
+                CoreAccess::kIdleMs);
+    CHECK(huge <= 500 && huge >= CoreAccess::kIdleMs && r == 1 && acc.ranHere() == 1 && usual == 140 &&
+          shortB == CoreAccess::kIdleMs);
+}
+
 // the real-time part of Task 4: automation storms and program loads in processBlock: no allocation, no lock
 static void rt_params()
 {
@@ -2392,6 +2475,7 @@ int main(int argc, char** argv)
         {"params_layout", params_layout}, {"automation_to_core", automation_to_core}, {"core_to_host", core_to_host},
         {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
+        {"state_timeout_keeps_last", state_timeout_keeps_last}, {"seam_idle_clamped", seam_idle_clamped},
         {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
         {"transport_loop", transport_loop}, {"transport_loop_tempo", transport_loop_tempo},
         {"transport_locate", transport_locate},

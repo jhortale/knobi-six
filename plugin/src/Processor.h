@@ -60,7 +60,9 @@ public:
     void changeProgramName(int, const juce::String&) override {}
 
     // the set state (StateCodec.h): the program number, the program + sequence in play, edited, differs from bank.
-    // Loading it: the stored copy wins over the bank's program (spec "Set state"); the parameters follow
+    // Loading it: the stored copy wins over the bank's program (spec "Set state"); the parameters follow. Saving it
+    // when the instance does not answer (access().run timed out): the last state saved or loaded that worked, as it
+    // was (never INIT in place of the set's sound; INIT only if there is none yet)
     void getStateInformation(juce::MemoryBlock& dest) override;
     void setStateInformation(const void* data, int size) override;
 
@@ -200,6 +202,8 @@ private:
     int listener_ = 0;
     std::atomic<bool> namesMoved_{false};         // the bank changed: syncHost tells the host (program names)
     std::atomic<int> restored_{-1};               // restoreFactory's number (WRITE then empties the slot), -1 none
+    std::mutex stateLock_;                        // (never the audio thread's processBlock)
+    std::vector<uint8_t> lastState_;              // the last set state saved or loaded that worked (stateLock_)
 
     CoreRunner runner_;
     CoreAccess access_;
