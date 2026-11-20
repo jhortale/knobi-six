@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// web/test/fixtures/python.json: what tools/fm1_install.py answers (tests/web_fixtures.py).
+// test/fixtures/python.json: what tools/fm1_install.py answers (tests/web_fixtures.py).
 import { readFileSync } from "node:fs";
 
 type Parsed = { flags: number; addr: number; len: number } | null;

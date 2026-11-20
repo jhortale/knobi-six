@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-# Fixtures for knobi-flash (web/): what tools/fm1_install.py answers for a fixed set of inputs, so the TypeScript port
-# is checked against it (web/test/*.test.ts). package() is install_test.py's helper (that file runs its tests on import).
+# Fixtures for knobi-flash (@knobi/installer-core): what tools/fm1_install.py answers for a fixed set of inputs, so the TypeScript port
+# is checked against it (packages/installer-core/test/*.test.ts). package() is install_test.py's helper (that file runs its tests on import).
 # port of tools/fm1_install.py: Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments;
 # M. Geisler (genkigenki/makkuro)
 #   python3 tests/web_fixtures.py --out packages/installer-core/test/fixtures/python.json

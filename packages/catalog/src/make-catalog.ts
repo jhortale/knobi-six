@@ -9,7 +9,6 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { loadPackage, modelOf } from "@knobi/installer-core";
 import { validateCatalog } from "./load.ts";
 import { loadBaseCatalog, readSynth, repoRootFrom } from "./node.ts";
@@ -80,6 +79,17 @@ export async function makeCatalog(o: MakeOpts): Promise<Catalog> {
   for (const fw of cat.firmwares) {
     if (fw.id === meta.id) continue;
     for (const r of fw.releases) {
+      // another synth's committed release: its files stay in its own folder on the site, and its GPL source is
+      // published with it (a deploy replaces the whole site)
+      const own = `firmware/${fw.id}/${r.version}/`;
+      for (const f of [...r.packages.map((p) => p.file), ...(r.source ? [r.source] : [])]) {
+        if (!f.startsWith(own) || f.slice(own.length).includes("/")) {
+          throw new Error(`${fw.id} ${r.version}: ${f} must be directly under ${own}`);
+        }
+      }
+      if (r.source && !existsSync(committedPath(o.repoRoot, fw.id, r.version, r.source))) {
+        throw new Error(`${fw.id} ${r.version}: its source ${r.source} is missing from synths/${fw.id}/releases/${r.version}/`);
+      }
       for (const p of r.packages) {
         const path = committedPath(o.repoRoot, fw.id, r.version, p.file);
         if (!existsSync(path) || sha256(new Uint8Array(readFileSync(path))) !== p.sha256) {
@@ -127,9 +137,9 @@ async function main(argv: string[]) {
   for (const fw of cat.firmwares) {
     if (fw.id === a.synth) continue;
     for (const r of fw.releases) {
-      for (const p of r.packages) {
-        mkdirSync(dirname(join(site, p.file)), { recursive: true });
-        copyFileSync(committedPath(repoRoot, fw.id, r.version, p.file), join(site, p.file));
+      for (const f of [...r.packages.map((p) => p.file), ...(r.source ? [r.source] : [])]) {
+        mkdirSync(dirname(join(site, f)), { recursive: true });
+        copyFileSync(committedPath(repoRoot, fw.id, r.version, f), join(site, f));
       }
     }
   }
@@ -138,7 +148,9 @@ async function main(argv: string[]) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// import.meta.main (Node 24): true when this file is the entry point, also when it was started through a symlink
+// (node_modules/@knobi/catalog/...), where comparing import.meta.url with argv[1] silently did nothing
+if (import.meta.main) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => {
     console.error(`make-catalog: ${(e as Error).message}`);
     process.exit(1);

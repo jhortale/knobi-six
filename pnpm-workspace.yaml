@@ -4,6 +4,8 @@ packages:
   - apps/*
   - packages/*
   - synths/*
+# exact versions on every pnpm add (pnpm 12 reads this here, not from .npmrc)
+saveExact: true
 minimumReleaseAgeExclude:
   - lucide-react@1.77.0
   - tailwind-merge@3.7.1

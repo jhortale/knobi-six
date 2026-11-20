@@ -10,7 +10,7 @@ mobile later) and the tools that publish them. Design and roadmap:
 firmware/ tools/ tests/ build.sh …   upstream's layout (fc79/smk37-base, with Felucca, SLOOP, genkigenki, OberVave):
                                      the SMK platform and KNOBI-SIX's firmware app. Never moved.
 package.json pnpm-workspace.yaml     the TypeScript workspace root (pnpm 12, Turborepo); scripts only
-pnpm-lock.yaml turbo.json .npmrc
+pnpm-lock.yaml turbo.json
 apps/
   installer/      @knobi/installer        knobi-flash, the web installer page (published by release.yml)
 packages/
@@ -43,7 +43,7 @@ pnpm --filter @knobi/catalog test         # one package
 - **Upstream's paths never move** (`firmware/`, `tools/`, `tests/`, `build.sh`): `git merge upstream/main` keeps
   working. New structure grows beside them.
 - **Packages are private** (`"private": true`, scope `@knobi/`), consumed as TypeScript source (no prebuild), versions
-  pinned exactly, one lockfile (`pnpm-lock.yaml`). The lockfile must install on Linux (CI) and macOS: after changing
+  pinned exactly (`saveExact: true` in `pnpm-workspace.yaml`), one lockfile (`pnpm-lock.yaml`). The lockfile must install on Linux (CI) and macOS: after changing
   dependencies, run CI's steps in a Linux container (`docker run node:24`).
 - **No cycles** (Turborepo refuses them): tests that need the simulated keyboard live in `device-sim` or in the app.
 - **`@knobi/device-sim` never reaches a published build** (`apps/installer/test/dist.test.ts` checks).

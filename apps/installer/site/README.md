@@ -15,7 +15,8 @@ SHA-256), the release packages and `SHA256SUMS`. It is replaced on every release
 KNOBI-SIX and this installer are free software under the GNU General Public License, version 3 only (`LICENSE`).
 Each release's complete source is published next to its packages:
 `firmware/knobi-six/<version>/knobi-six-<version>-src.tar.gz` (linked from the page as "source"). The installer's
-own source is in it, under `web/`.
+own source is in it, under `apps/installer/` (the page) and `packages/` (the protocol, catalog and UI
+packages it is built from).
 
 ## Credits
 

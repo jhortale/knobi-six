@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The published build: no simulated keyboard, no "choose a file" (run after npm run build; skipped without dist/).
+// The published build: no simulated keyboard, no "choose a file" (run after the build; skipped without dist/).
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";

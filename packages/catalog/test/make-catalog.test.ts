@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -48,16 +48,19 @@ const opts = (dir: string, version = "1.0", repoRoot = tempRepo()) => ({
 });
 
 /** a second synth in the repo, with one committed release */
-function addOther(repo: string, pkgBytes: Uint8Array, hash = sha(pkgBytes)) {
+function addOther(repo: string, pkgBytes: Uint8Array, hash = sha(pkgBytes),
+  o: { file?: string; source?: string; sourceFile?: boolean } = {}) {
   const d = join(repo, "synths/other");
   mkdirSync(join(d, "releases/2.0"), { recursive: true });
   writeFileSync(join(d, "releases/2.0/other-2.0.fwsc"), pkgBytes);
   writeFileSync(join(d, "synth.json"), JSON.stringify({ id: "other", name: "Other", ident: "957",
     packageName: "other-{version}{suffix}.fwsc", models: { "": "SMK-37 Pro" }, platforms: {} }));
-  const pkg = { instrument: "smk37-pro", file: "firmware/other/2.0/other-2.0.fwsc", identity: "SMK-37 Pro_957",
+  const pkg = { instrument: "smk37-pro", file: o.file ?? "firmware/other/2.0/other-2.0.fwsc", identity: "SMK-37 Pro_957",
     sha256: hash, size: pkgBytes.length };
+  if (o.source && o.sourceFile !== false) writeFileSync(join(d, "releases/2.0", o.source.split("/").pop()!), "source");
   writeFileSync(join(d, "catalog.json"), JSON.stringify({ id: "other", name: "Other", summary: "s",
-    license: "GPL-3.0-only", notes: [], releases: [{ version: "2.0", date: "2026-11-01", packages: [pkg] }] }));
+    license: "GPL-3.0-only", notes: [], releases: [{ version: "2.0", date: "2026-11-01",
+      ...(o.source ? { source: o.source } : {}), packages: [pkg] }] }));
   return pkg;
 }
 
@@ -125,4 +128,33 @@ describe("makeCatalog", () => {
     const out = execFileSync("node", ["src/make-catalog.ts", "--help"], { cwd: join(import.meta.dirname, ".."), encoding: "utf8" });
     expect(out).toContain("--synth");
   });
+
+  it("runs when started through a symlink (as node_modules/@knobi/catalog/... is), instead of silently doing nothing", () => {
+    const link = join(mkdtempSync(join(tmpdir(), "link-")), "make-catalog.ts");
+    symlinkSync(join(import.meta.dirname, "../src/make-catalog.ts"), link);
+    const out = execFileSync("node", [link, "--help"], { encoding: "utf8" });
+    expect(out).toContain("--synth");
+  });
+
+  it("keeps another synth's GPL source archive: refused when it is missing, copied to the site when present", async () => {
+    const missing = tempRepo();
+    addOther(missing, makePackage({ product: "SMK-37 Pro_957" }), undefined,
+      { source: "firmware/other/2.0/other-2.0-src.tar.gz", sourceFile: false });
+    await expect(makeCatalog(opts(release(), "1.0", missing))).rejects.toThrow(/other-2\.0-src\.tar\.gz/);
+
+    const repo = tempRepo();
+    addOther(repo, makePackage({ product: "SMK-37 Pro_957" }), undefined, { source: "firmware/other/2.0/other-2.0-src.tar.gz" });
+    const site = mkdtempSync(join(tmpdir(), "site-"));
+    execFileSync("node", ["src/make-catalog.ts", "--synth", "knobi-six", "--version", "1.0", "--dir", release(),
+      "--out", join(site, "catalog.json"), "--files", join(site, "firmware/knobi-six/1.0"), "--repo-root", repo],
+      { cwd: join(import.meta.dirname, ".."), encoding: "utf8" });
+    expect(existsSync(join(site, "firmware/other/2.0/other-2.0-src.tar.gz"))).toBe(true);
+  });
+
+  it("refuses another synth's files outside its own firmware/<id>/<version>/ (they could overwrite this release's)", async () => {
+    const repo = tempRepo();
+    addOther(repo, makePackage({ product: "SMK-37 Pro_957" }), undefined, { file: "firmware/knobi-six/1.0/knobi-six-1.0.fwsc" });
+    await expect(makeCatalog(opts(release(), "1.0", repo))).rejects.toThrow(/firmware\/other\/2\.0\//);
+  });
 });
+

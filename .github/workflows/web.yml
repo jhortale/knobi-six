@@ -15,6 +15,9 @@ on:
       - 'turbo.json'
       - 'tests/web_fixtures.py'
       - 'tools/fm1_install.py'
+      - 'tools/build.py'
+      - 'docs/IDENTITY.md'
+      - 'docs/BACKUP.md'
       - '.github/workflows/web.yml'
   pull_request:
     paths: *paths
