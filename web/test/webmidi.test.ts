@@ -64,3 +64,27 @@ describe("WebMidiBackend", () => {
     await expect(requestBackend(nav)).rejects.toMatchObject({ code: "denied" });
   });
 });
+
+describe("WebMidiBackend ports (review minors)", () => {
+  DELAY.open = 0;
+  it("two keyboards with the same name: distinct names, the nth input pairs with the nth output", async () => {
+    const a = access(["X0X FM-1", "X0X FM-1"], ["X0X FM-1", "X0X FM-1"]);
+    const b = new WebMidiBackend(a as unknown as MIDIAccess);
+    expect(b.inputNames()).toEqual(["X0X FM-1", "X0X FM-1 #2"]);
+    expect(b.outputNames()).toEqual(["X0X FM-1", "X0X FM-1 #2"]);
+    const link = await b.open("X0X FM-1 #2", "X0X FM-1 #2");
+    expect(a.inputs.get("i1")!.connection).toBe("open");
+    expect(a.inputs.get("i0")!.connection).toBe("closed");
+    link.send(Uint8Array.of(0xf0, 0xf7));
+    expect(a.outputs.get("o1")!.sent).toHaveLength(1);
+    expect(a.outputs.get("o0")!.sent).toHaveLength(0);
+  });
+  it("an output that fails to open leaves the input closed", async () => {
+    const a = access(["X0X FM-1"], ["X0X FM-1"]);
+    a.outputs.get("o0")!.open = async () => { throw new Error("busy"); };
+    const b = new WebMidiBackend(a as unknown as MIDIAccess);
+    await expect(b.open("X0X FM-1", "X0X FM-1")).rejects.toThrow();
+    expect(a.inputs.get("i0")!.connection).toBe("closed");
+    expect(a.inputs.get("i0")!.onmidimessage).toBeNull();
+  });
+});

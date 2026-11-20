@@ -75,7 +75,8 @@ export class Updater {
 
   /** the first matching port that answers the handshake (and want(identity)) */
   async find(want?: (id: Identity) => boolean): Promise<Device | null> {
-    const outs = [...new Set(this.backend.outputNames())];
+    // only outputs that match too: pairOutput's "the only output" fallback must never pick unrelated gear
+    const outs = [...new Set(this.backend.outputNames())].filter((o) => this.opts.searchAll || this.opts.ports.test(o));
     for (const name of this.candidates()) {
       const out = pairOutput(name, outs);
       if (!out) continue;
@@ -137,8 +138,12 @@ export class Updater {
     step({ k: "start", id: dev.id.text });
     dev.link.send(UPGRADE);
     await sleep(DELAY.start);
-    const r = await this.serve(dev.link, image, FINISH_CHECK, DELAY.idleCheck, (n) => step({ k: "check", n }));
-    dev.link.close();
+    let r;
+    try {
+      r = await this.serve(dev.link, image, FINISH_CHECK, DELAY.idleCheck, (n) => step({ k: "check", n }));
+    } finally {
+      dev.link.close();    // also after a bad request, which throws
+    }
     if (!r.finished) {
       throw new InstallError(r.lost ? "lost" : "stopped",
         `the keyboard ${r.lost ? "was disconnected" : "stopped answering"} after ${r.served} requests; nothing was written`);
@@ -158,9 +163,13 @@ export class Updater {
     step({ k: "write", pct: 0 });
     ota.link.send(UPGRADE);
     await sleep(DELAY.start);
-    const r = await this.serve(ota.link, image, FINISH_WRITE, DELAY.idleWrite,
-      (_n, end) => step({ k: "write", pct: Math.min(99, Math.floor((end * 100) / image.length)) }));
-    ota.link.close();
+    let r;
+    try {
+      r = await this.serve(ota.link, image, FINISH_WRITE, DELAY.idleWrite,
+        (_n, end) => step({ k: "write", pct: Math.min(99, Math.floor((end * 100) / image.length)) }));
+    } finally {
+      ota.link.close();
+    }
     if (!r.finished) {
       throw new InstallError(r.lost ? "lost" : "stopped",
         `the loader ${r.lost ? "was disconnected" : "stopped answering"} after ${r.served} requests. Replug the USB ` +

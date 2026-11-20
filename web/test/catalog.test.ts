@@ -80,3 +80,28 @@ describe("drift: the catalog's patterns are tools/fm1_install.py's", () => {
   it("match = SMK_FAMILY", () => expect(base.families.smk37.match).toBe(lit("SMK_FAMILY")));
   it("ownLoader = OWN_LOADER_RE", () => expect(base.protocols["felucca-ota"].ownLoader).toBe(lit("OWN_LOADER_RE")));
 });
+
+describe("validateCatalog in depth (review minor)", () => {
+  const bad: [string, (c: Catalog) => void, RegExp][] = [
+    ["an instrument that is not an object", (c) => { (c.instruments as unknown[])[0] = null; }, /instrument 1: not an object/],
+    ["a release without packages", (c) => { (c.firmwares[0].releases[1] as { packages?: unknown }).packages = 7; }, /packages/],
+    ["a package that is not an object", (c) => { (c.firmwares[0].releases[1].packages as unknown[])[0] = "x"; }, /package 1: not an object/],
+    ["a firmware that is not an object", (c) => { (c.firmwares as unknown[]).push(3); }, /firmware 2: not an object/],
+    ["an absolute package URL", (c) => { c.firmwares[0].releases[1].packages[0].file = "https://evil.example/x.fwsc"; }, /relative/],
+    ["a package path leaving the site", (c) => { c.firmwares[0].releases[1].packages[0].file = "../x.fwsc"; }, /relative/],
+    ["a root-absolute source", (c) => { c.firmwares[0].releases[1].source = "/src.tar.gz"; }, /relative/],
+  ];
+  it.each(bad)("refuses %s with a listed error, not a TypeError", (_n, change, msg) => {
+    const c = withPackages();
+    change(c);
+    let err: unknown;
+    try {
+      validateCatalog(c);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect(String((err as Error).message)).toMatch(msg);
+  });
+});

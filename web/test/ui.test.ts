@@ -173,3 +173,28 @@ describe("the page", () => {
     expect(href).toBe("backup.txt");
   });
 });
+
+describe("next steps after a failure", () => {
+  it("unplugged during the check: nothing was written, no 'update mode' hint", async () => {
+    const { app, $ } = setup({ unplugAfter: 2 });
+    await app.ready;
+    await app.connect();
+    $<HTMLInputElement>("#backup").click();
+    await app.install();
+    const t = $("#error").textContent!;
+    expect(t).toContain("nothing was written");
+    expect(t).not.toContain("stays in update mode");
+    expect(t).toContain("press Connect");
+  });
+  it("the device asks outside the package: says what to do", async () => {
+    const { app, $ } = setup({ identity: "ota-SMK-37 Pro_900", name: "Felucca Update", badAddr: image.length });
+    await app.ready;
+    await app.connect();
+    $<HTMLInputElement>("#backup").click();
+    await app.install();
+    const t = $("#error").textContent!;
+    expect(t).toContain("outside the package");
+    expect(t).toContain("Install again");
+    expect(t).toContain("Copy log");
+  });
+});

@@ -107,6 +107,11 @@ export class FakeKeyboard implements MidiBackend {
     this.connected = false;
   }
 
+  /** links opened and not closed yet (the tests check none is left open) */
+  get openLinks() {
+    return this.links.filter((l) => !l.closed).length;
+  }
+
   inputNames() {
     return [...this.extraPorts, ...(this.connected ? [this.name] : [])];   // other gear first: it must be skipped
   }

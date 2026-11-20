@@ -26,6 +26,7 @@ export interface App {
 
 const NEXT_STEP: Partial<Record<string, string>> = {
   lost: "Plug the keyboard back in, press Connect and Install again: it stays in update mode until the install is done.",
+  badreq: "Replug the USB cable, press Connect and Install again. If it happens again, Copy log (under Log) and report it.",
   stopped: "Replug the USB cable, press Connect and Install again.",
   noloader: "Replug the USB cable, press Connect and Install again.",
   noreturn: "Power the keyboard off and on, then press Connect to check what it runs.",
@@ -54,7 +55,10 @@ export function startApp(root: HTMLElement, deps: AppDeps): App {
   const fail = (e: unknown) => {
     const err = e instanceof InstallError ? e : null;
     const msg = err ? err.message : String((e as Error)?.message ?? e);
-    const next = err ? NEXT_STEP[err.code] : undefined;
+    // lost before anything was written (the check step): the keyboard restarts its own firmware, not update mode
+    const next = err?.code === "lost" && err.message.includes("nothing was written")
+      ? "Plug the keyboard back in (it still runs its firmware), press Connect and Install again."
+      : err ? NEXT_STEP[err.code] : undefined;
     v.error.replaceChildren(h("strong", {}, "Stopped: "), msg, ...(next ? [h("br"), next] : []));
     log(`error${err ? ` (${err.code})` : ""}: ${msg}`);
   };

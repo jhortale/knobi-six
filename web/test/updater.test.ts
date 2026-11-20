@@ -98,3 +98,25 @@ describe("ports", () => {
     expect(dev.probed).toContain("Some Synth");
   });
 });
+
+describe("links and ports (review minors)", () => {
+  it("a bad request closes the link", async () => {
+    const r = await run({ identity: "ota-SMK-37 Pro_900", name: "Felucca Update", badAddr: image.length });
+    expect(r.error?.code).toBe("badreq");
+    expect(r.dev.openLinks).toBe(0);
+  });
+  it("never pairs a matching input with an unrelated single output", async () => {
+    const opened: string[] = [];
+    const backend = {
+      inputNames: () => ["X0X FM-1"],
+      outputNames: () => ["Some Synth"],
+      open: async (i: string, o: string) => {
+        opened.push(`${i} -> ${o}`);
+        throw new Error("no");
+      },
+    };
+    const up = new Updater(backend, { ports: PORTS, family: FAMILY, ownLoader: OWN });
+    expect(await up.find()).toBeNull();
+    expect(opened).toEqual([]);
+  });
+});
