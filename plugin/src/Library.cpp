@@ -82,6 +82,31 @@ bool writeAll(int fd, const std::vector<uint8_t>& b)
     return true;
 }
 
+// the data on the disk itself: macOS fsync leaves it in the drive's cache; F_FULLFSYNC flushes that too (fsync if the
+// file system cannot)
+bool fullSync(int fd) { return ::fcntl(fd, F_FULLFSYNC) == 0 || ::fsync(fd) == 0; }
+bool fullSyncPath(const std::string& path, int flags)
+{
+    const int fd = ::open(path.c_str(), flags | O_CLOEXEC);
+    if (fd < 0) return false;
+    const bool ok = fullSync(fd);
+    ::close(fd);
+    return ok;
+}
+// the file a (chain of) symbolic link(s) names: written in place of the link would replace the link by a file
+std::string resolveLinks(const std::string& path)
+{
+    namespace fs = std::filesystem;
+    fs::path p(path);
+    std::error_code ec;
+    for (int i = 0; i < 16 && fs::is_symlink(fs::symlink_status(p, ec)); i++) {
+        fs::path t = fs::read_symlink(p, ec);
+        if (ec) break;
+        p = t.is_absolute() ? t : p.parent_path() / t;
+    }
+    return p.lexically_normal().string();
+}
+
 } // namespace
 
 // ---- the format
@@ -134,10 +159,11 @@ Library::Decode Library::decode(const uint8_t* b, size_t n, Data& d)
             if (4u + pl + 2u > rl) return kDecBad;
             const uint32_t sl = get16(r + 4 + pl);
             if (4u + pl + 2u + sl != rl) return kDecBad;
-            if (num < KC_PROGRAMS && pl > 0) {    // (a number past the bank, or no program record: not a slot)
+            if (num < KC_PROGRAMS && pl > 0) {
                 d.prog[num].assign(r + 4, r + 4 + pl);
                 d.seq[num].assign(r + 6 + pl, r + 6 + pl + sl);
-            }
+            } else                                // (a number past the bank, or no program record: not a slot of
+                d.unknown.insert(d.unknown.end(), p, r + rl);   // this version's; kept byte for byte)
         } else if (std::memcmp(p, "GLOB", 4) == 0) {
             if (rl % 2) return kDecBad;
             for (uint32_t i = 0; i < rl; i += 2) d.globals[r[i]] = (int8_t)r[i + 1];
@@ -259,39 +285,49 @@ void Library::watch()
 
 bool Library::reload()
 {
-    std::lock_guard<std::mutex> g(readLock_);
-    const Sig now = statSig();
-    if (now == sig_) return false;                // (unchanged since read or written here; at first: no file)
-    std::vector<uint8_t> bytes;
-    bool exists = false;
-    if (!readAll(path_, bytes, exists)) return false;   // (could not read it now: the next poll tries again)
-    const Sig after = statSig();
-    if (!(after == now)) return false;            // (changed while read: read again at the next poll)
+    std::shared_ptr<const LibrarySnapshot> made;
     {
-        std::lock_guard<std::mutex> t(threadLock_);
-        reloadThread_ = std::this_thread::get_id();
+        std::lock_guard<std::mutex> g(readLock_);
+        const Sig now = statSig();
+        if (now == sig_) return false;            // (unchanged since read or written here; at first: no file)
+        std::vector<uint8_t> bytes;
+        bool exists = false;
+        if (!readAll(path_, bytes, exists)) return false;   // (could not read it now: the next poll tries again)
+        const Sig after = statSig();
+        if (!(after == now)) return false;        // (changed while read: read again at the next poll)
+        {
+            std::lock_guard<std::mutex> t(threadLock_);
+            reloadThread_ = std::this_thread::get_id();
+        }
+        sig_ = now;
+        if (exists == bytesExist_ && bytes == bytes_) return false;   // (the same content: nothing new)
+        bytes_ = bytes, bytesExist_ = exists;
+        auto s = std::make_shared<LibrarySnapshot>();
+        Data d;
+        const Decode dec = exists ? decode(bytes.data(), bytes.size(), d) : kDecOk;
+        if (dec != kDecOk) d = Data();           // unreadable: the factory layer, the file left as it is
+        makeSnapshot(d, *s);
+        s->unreadable = dec != kDecOk;
+        s->newer = dec == kDecTooNew;
+        made = publish(std::move(s));
     }
-    sig_ = now;
-    if (exists == bytesExist_ && bytes == bytes_) return false;   // (the same content: nothing new)
-    bytes_ = bytes, bytesExist_ = exists;
-    auto s = std::make_shared<LibrarySnapshot>();
-    Data d;
-    const Decode dec = exists ? decode(bytes.data(), bytes.size(), d) : kDecOk;
-    if (dec != kDecOk) d = Data();               // unreadable: the factory layer, the file left as it is
-    makeSnapshot(d, *s);
-    s->unreadable = dec != kDecOk;
-    publish(std::move(s));
+    notify(made);                                 // (no lock of the library's held but the listener lock)
     return true;
 }
 
-void Library::publish(std::shared_ptr<LibrarySnapshot> s)   // (readLock_ held: snapshots in the file's order)
+// the newest snapshot (readLock_ held: generations in the file's order); listeners told by notify(), after every lock
+// is released -- they may be told out of order, so they keep the newest generation (Processor does)
+std::shared_ptr<const LibrarySnapshot> Library::publish(std::shared_ptr<LibrarySnapshot> s)
 {
     s->generation = ++generation_;
     std::shared_ptr<const LibrarySnapshot> c = std::move(s);
-    {
-        std::lock_guard<std::mutex> g(snapLock_);
-        snap_ = c;
-    }
+    std::lock_guard<std::mutex> g(snapLock_);
+    snap_ = c;
+    return c;
+}
+
+void Library::notify(const std::shared_ptr<const LibrarySnapshot>& c)
+{
     std::lock_guard<std::mutex> g(listenLock_);
     for (auto& [id, l] : listeners_) l(c);
 }
@@ -314,12 +350,24 @@ void Library::removeListener(int id)
 Library::Result Library::mutate(const std::function<bool(Data&)>& change)
 {
     namespace fs = std::filesystem;
+    std::shared_ptr<const LibrarySnapshot> made;
+    Result res = mutateLocked(change, made);      // (every lock released when it returns: the flock too)
+    if (made) notify(made);
+    return res;
+}
+
+Library::Result Library::mutateLocked(const std::function<bool(Data&)>& change,
+                                      std::shared_ptr<const LibrarySnapshot>& made)
+{
+    namespace fs = std::filesystem;
     std::lock_guard<std::mutex> w(writeLock_);
     std::lock_guard<std::mutex> r(readLock_);
-    const fs::path file(path_), dir = file.parent_path();
+    // a symbolic link stays a link: the file it names is the one replaced (its directory has the temp file and lock)
+    const std::string target = resolveLinks(path_);
+    const fs::path file(target), dir = file.parent_path();
     std::error_code ec;
     if (!dir.empty()) fs::create_directories(dir, ec);   // (the first WRITE makes ~/Music/KNOBI-SIX)
-    const std::string lockPath = path_ + ".lock";
+    const std::string lockPath = target + ".lock";
     const int lfd = ::open(lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (lfd < 0) return kIoError;
     while (::flock(lfd, LOCK_EX) != 0)
@@ -329,21 +377,23 @@ Library::Result Library::mutate(const std::function<bool(Data&)>& change)
     // the file as it is now (another writer's change included), under the lock
     std::vector<uint8_t> bytes;
     bool exists = false;
-    if (!readAll(path_, bytes, exists)) return kIoError;
+    if (!readAll(target, bytes, exists)) return kIoError;
     Data d;
-    if (exists && decode(bytes.data(), bytes.size(), d) != kDecOk) {
+    const Decode dec = exists ? decode(bytes.data(), bytes.size(), d) : kDecOk;
+    if (dec == kDecTooNew) return kNewer;         // (a newer version's library: never replaced by this one's)
+    if (dec != kDecOk) {
         // unreadable: kept as library.knobi.bad-<time> before it is replaced (a hard link: the same bytes, atomically;
-        // else a copy)
+        // else a copy, flushed to the disk)
         char stamp[32];
         const std::time_t t = std::time(nullptr);
         std::tm tm{};
         localtime_r(&t, &tm);
         std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
-        std::string backup = path_ + ".bad-" + stamp;
-        for (int i = 2; fs::exists(backup, ec); i++) backup = path_ + ".bad-" + stamp + "-" + std::to_string(i);
-        if (::link(path_.c_str(), backup.c_str()) != 0) {
+        std::string backup = target + ".bad-" + stamp;
+        for (int i = 2; fs::exists(backup, ec); i++) backup = target + ".bad-" + stamp + "-" + std::to_string(i);
+        if (::link(target.c_str(), backup.c_str()) != 0) {
             fs::copy_file(file, backup, ec);
-            if (ec) return kIoError;              // (no backup: the bad file is not replaced)
+            if (ec || !fullSyncPath(backup, O_RDONLY)) return kIoError;   // (no backup: the bad file is not replaced)
         }
         d = Data();
     }
@@ -359,27 +409,23 @@ Library::Result Library::mutate(const std::function<bool(Data&)>& change)
         if (pid > 0 && pid != (long)::getpid() && ::kill((pid_t)pid, 0) != 0 && errno == ESRCH) fs::remove(e.path(), ec);
     }
     static std::atomic<unsigned> counter{0};
-    const std::string tmp = path_ + ".tmp-" + std::to_string((long)::getpid()) + "-" + std::to_string(++counter);
+    const std::string tmp = target + ".tmp-" + std::to_string((long)::getpid()) + "-" + std::to_string(++counter);
     const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
     if (fd < 0) return kIoError;
     struct stat st;
-    const bool ok = writeAll(fd, out) && ::fsync(fd) == 0 && ::fstat(fd, &st) == 0;
+    const bool ok = writeAll(fd, out) && fullSync(fd) && ::fstat(fd, &st) == 0;
     ::close(fd);
     if (!ok) { ::unlink(tmp.c_str()); return kIoError; }
     if (beforeRename) beforeRename();
-    if (::rename(tmp.c_str(), path_.c_str()) != 0) { ::unlink(tmp.c_str()); return kIoError; }
-    if (!dir.empty()) {                           // (the rename itself on disk)
-        const int dfd = ::open(dir.c_str(), O_RDONLY | O_CLOEXEC);
-        if (dfd >= 0) ::fsync(dfd), ::close(dfd);
-    }
+    if (::rename(tmp.c_str(), target.c_str()) != 0) { ::unlink(tmp.c_str()); return kIoError; }
+    if (!dir.empty()) fullSyncPath(dir.string(), O_RDONLY);   // (the rename itself on disk)
     // this library's snapshot at once (its watcher then sees its own file: the same identity, not read again)
     sig_.exists = true, sig_.ino = (uint64_t)st.st_ino, sig_.size = (uint64_t)st.st_size;
     sig_.mtimeNs = (int64_t)st.st_mtimespec.tv_sec * 1000000000 + st.st_mtimespec.tv_nsec;
     bytes_ = out, bytesExist_ = true;
     auto s = std::make_shared<LibrarySnapshot>();
     makeSnapshot(d, *s);
-    s->unreadable = false;
-    publish(std::move(s));
+    made = publish(std::move(s));
     return kOk;
 }
 

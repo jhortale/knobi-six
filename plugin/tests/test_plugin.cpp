@@ -76,7 +76,8 @@
 //                         rounds, and two processes (fork) 20 slots each at once: every write lands; the same slot
 //                         written by both at once: one of the two (last write wins), and both libraries end with the
 //                         file's content after their watchers reload
-//   library_corrupt       a CRC error, a bad magic, a cut file, a newer format: the factory layer, "unreadable", the
+//   library_corrupt       (fix round 1: a newer format's file refuses a WRITE, untouched; odd SLOT records kept)
+//                         a CRC error, a bad magic, a cut file, a newer format: the factory layer, "unreadable", the
 //                         file untouched (also by the watcher); a WRITE then keeps it as library.knobi.bad-<time> and
 //                         writes a good file; one slot the firmware would not store: that slot factory, counted, the
 //                         rest loaded, its bytes kept through a later WRITE of another slot
@@ -91,18 +92,26 @@
 //                         stored; WRITE then empties the slot; the browser's bank / tens / ones
 //   library_globals       a global set in one processor: in the file, in the other processor after its reload; MIDI
 //                         channel stays omni; only Library::kGlobals accepted
+//   library_write_plays_on  (fix round 1) WRITE without a load: a sequence playing with Live sounds the same, sample
+//                         for sample, as without the WRITE; number, edited, differs right after; an edit made while
+//                         the file is written stays, the program edited
+//   library_symlink       (fix round 1) a library path that is a symbolic link stays one (the file it names written,
+//                         its lock beside it); listeners are told with the file's lock released
 //   factory_gating        the default build: every factory program is the init program, named KNOBI-SIX (bundles
 //                         KNOBI-SIX.component / .vst3); KNOBI_FACTORY_LOCAL=ON: factory programs, KNOBI-SIX-local
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
 // processBlock in a real host, condition variables, semaphores and dispatch calls (not counted).
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstdio>
@@ -824,7 +833,12 @@ static bool sameRecords(const program_t& a, const seq_t& as, const program_t& b,
 struct HostSpy : juce::AudioProcessorListener {
     std::atomic<int> changed{0}, gestures{0}, programChanged{0};
     void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { changed++; }
-    void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& d) override { programChanged += d.programChanged; }
+    std::atomic<int> infoChanged{0};
+    void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& d) override
+    {
+        programChanged += d.programChanged;
+        infoChanged += d.parameterInfoChanged;
+    }
     void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int) override { gestures++; }
     void audioProcessorParameterChangeGestureEnd(juce::AudioProcessor*, int) override { gestures++; }
 };
@@ -1906,6 +1920,21 @@ static void library_corrupt()
                     "%d\n", c.what, (int)snap->unreadable, used, (int)(readFile(path) == c.bytes), (int)p.libraryUnreadable());
         bad += !ok;
     }
+    // a newer version's file: a WRITE is refused, nothing written, no backup (its slots would be lost to it)
+    {
+        writeFile(path, newer);
+        Library lib(path, 0);
+        const auto w = lib.write(6, pb, sb);
+        Processor p;
+        p.attachLibrary(std::make_shared<Library>(path, 0));
+        const bool ok = w == Library::kNewer && readFile(path) == newer && countFiles(dir, ".bad-") == 0 &&
+                        lib.snapshot()->newer && p.libraryNewer() && p.writeProgram(6) == Library::kNewer &&
+                        readFile(path) == newer;
+        std::printf("library_corrupt: a newer format: WRITE %d (3 refused), the file untouched %d, no backup %d, "
+                    "notices %d %d\n", w, (int)(readFile(path) == newer), (int)(countFiles(dir, ".bad-") == 0),
+                    (int)lib.snapshot()->newer, (int)p.libraryNewer());
+        CHECK(ok);
+    }
     // a WRITE on the unreadable file: kept as library.knobi.bad-<time> first, then a good file
     writeFile(path, flip);
     Library lib(path, 0);
@@ -1936,6 +1965,30 @@ static void library_corrupt()
     const auto bytes = readFile(path);
     const bool keptBad = Library::decode(bytes.data(), bytes.size(), back) == Library::kDecOk && back.seq[7] == d.seq[7] &&
                          back.prog[7] == d.prog[7] && !back.prog[9].empty();
+    // SLOT records this version does not use (a number past the bank, no program record): kept byte for byte
+    Library::Data odd;
+    packSlot(odd, 8, pb, sb);
+    const std::vector<uint8_t> r600 = {'S', 'L', 'O', 'T', 7, 0, 0, 0, 0x58, 0x02, 1, 0, 0xAB, 0, 0},
+                               r0 = {'S', 'L', 'O', 'T', 6, 0, 0, 0, 3, 0, 0, 0, 0, 0};
+    odd.unknown.insert(odd.unknown.end(), r600.begin(), r600.end());
+    odd.unknown.insert(odd.unknown.end(), r0.begin(), r0.end());
+    writeFile(path, Library::encode(odd));
+    {
+        Library l(path, 0);
+        l.write(9, pa, sa);
+    }
+    Library::Data oddBack;
+    const auto ob = readFile(path);
+    const auto has = [&](const std::vector<uint8_t>& r) {
+        return std::search(oddBack.unknown.begin(), oddBack.unknown.end(), r.begin(), r.end()) != oddBack.unknown.end();
+    };
+    const bool oddKept = Library::decode(ob.data(), ob.size(), oddBack) == Library::kDecOk && has(r600) && has(r0) &&
+                         !oddBack.prog[8].empty() && !oddBack.prog[9].empty();
+    std::printf("library_corrupt: SLOT 600 and a SLOT with no program record kept through a WRITE: %d\n", (int)oddKept);
+    CHECK(oddKept);
+    writeFile(path, Library::encode(d));
+    Library one2(path, 0);
+    one2.write(9, pa, sa);
     Processor p;
     p.attachLibrary(std::make_shared<Library>(path, 0));
     std::printf("library_corrupt: a slot with a broken sequence: readable %d, bad slots %d, slot 7 factory %d, slot 8 "
@@ -2079,6 +2132,13 @@ static void library_write_restore()
     program_t bp;
     seq_t bs;
     const bool bHas = b.bank().program(12, &bp, &bs) && ProgramBank::same(bp, bs, pe, se);
+    HostSpy spy;                                  // (the host told the program names changed: syncHost)
+    b.addListener(&spy);
+    b.syncHost();
+    const int info = spy.infoChanged.load();
+    b.removeListener(&spy);
+    std::printf("library_write_restore: the other processor tells its host the names changed: %d\n", info);
+    CHECK(info == 1);
     std::printf("library_write_restore: WRITE %d (0 ok): in the file %d, the other processor %d %d; after: number %d, "
                 "edited %d\n", w, (int)inFile, (int)seen, (int)bHas, num, ed);
     // WRITE to another slot: the instance plays that number
@@ -2134,6 +2194,92 @@ static void library_globals()
                 a.global(G_MIDI_CH), b.global(G_MIDI_CH));
     CHECK(r1 == Library::kOk && r2 == Library::kOk && r3 == Library::kOk && r4 == Library::kInvalid &&
           r5 == Library::kInvalid && here && there && file && a.global(G_MIDI_CH) == 0 && b.global(G_MIDI_CH) == 0);
+}
+
+
+// WRITE as the keyboard's: no load. A sequence playing with Live: the output with a WRITE in the middle equals the
+// output without it, sample for sample; then number / edited / differs right. An edit arriving while the file is
+// written stays (and leaves the program edited)
+static void library_write_plays_on()
+{
+    const std::string da = freshDir("plays_a"), db = freshDir("plays_b");
+    Processor a, b;
+    a.attachLibrary(std::make_shared<Library>(da + "/library.knobi", 0));
+    b.attachLibrary(std::make_shared<Library>(db + "/library.knobi", 0));
+    program_t pr;
+    seq_t sq;
+    makeProgram(61, pr, sq, "PLAYING");
+    pr.v[P_ARP_ON] = 0;
+    Host ha(a, 44100, 512), hb(b, 44100, 512);
+    for (Processor* p : {&a, &b}) kc_program_set(p->runner().core(), 20, &pr, &sq, 0);
+    ha.run(512 * 4), hb.run(512 * 4);
+    for (Processor* p : {&a, &b}) kc_param_set(p->runner().core(), P_FLT_FREQ, 40);   // (edited)
+    for (Processor* p : {&a, &b}) kc_seq_play(p->runner().core(), 1);
+    ha.head.playing = hb.head.playing = true;
+    ha.run(512 * 60), hb.run(512 * 60);
+    const bool editedBefore = a.edited();
+    kc_note_t nt[KC_LOG];
+    kc_notes(a.runner().core(), nt, KC_LOG);
+    const auto w = a.writeProgram(33);
+    const int32_t numAfter = a.getCurrentProgram();
+    const bool flags = w == Library::kOk && numAfter == 33 && !a.edited() && !a.differsFromBank() && a.userSlot(33) &&
+                       kc_seq_state(a.runner().core()) == 1;
+    ha.run(512 * 120), hb.run(512 * 120);
+    long diff = 0;
+    for (size_t i = 0; i < ha.out.size() && i < hb.out.size(); i++) diff += ha.out[i] != hb.out[i];
+    const uint32_t m = kc_notes(a.runner().core(), nt, KC_LOG);
+    uint32_t ons = 0;
+    for (uint32_t i = 0; i < m; i++) ons += nt[i].vel != 0;
+    std::printf("library_write_plays_on: edited before %d; WRITE to 33 while the sequence plays: %d (0 ok), number %d, "
+                "edited %d, differs %d, user slot %d, sequencer state %d; output vs no WRITE: %ld samples differ of %zu; "
+                "%u note-ons after\n", (int)editedBefore, w, numAfter, (int)a.edited(), (int)a.differsFromBank(),
+                (int)a.userSlot(33), kc_seq_state(a.runner().core()), diff, ha.out.size(), ons);
+    CHECK(editedBefore && flags && diff == 0 && ha.out.size() == hb.out.size() && ons > 0 && kc_seq_state(a.runner().core()) == 1);
+
+    // an edit (a CC's value) arriving after the snapshot, before the file is written: stays, the program edited
+    Processor::afterSnapshot = [](Processor& p) { kc_param_set(p.runner().core(), P_FLT_FREQ, 99); };
+    kc_param_set(a.runner().core(), P_FLT_FREQ, 41);
+    const auto w2 = a.writeProgram();
+    Processor::afterSnapshot = nullptr;
+    auto snap = Library(da + "/library.knobi", 0).snapshot();
+    const bool kept = w2 == Library::kOk && snap->bank.program[33].v[P_FLT_FREQ] == 41 &&
+                      kc_param_get(a.runner().core(), P_FLT_FREQ) == 99 && a.edited() && a.getCurrentProgram() == 33 &&
+                      a.differsFromBank();
+    std::printf("library_write_plays_on: an edit during the WRITE: stored %d (41), in play %d (99), edited %d, differs "
+                "%d\n", snap->bank.program[33].v[P_FLT_FREQ], kc_param_get(a.runner().core(), P_FLT_FREQ),
+                (int)a.edited(), (int)a.differsFromBank());
+    CHECK(kept);
+}
+
+// a library path that is a symbolic link stays one: the file it names is written; listeners are told with the
+// file's lock released
+static void library_symlink()
+{
+    namespace fs = std::filesystem;
+    const std::string real = freshDir("link_real"), links = freshDir("link_here");
+    const std::string target = real + "/library.knobi", link = links + "/library.knobi";
+    std::error_code ec;
+    fs::create_symlink(target, link, ec);         // (the target does not exist yet)
+    program_t p1, p2;
+    seq_t s1, s2;
+    makeProgram(71, p1, s1, "VIA LINK");
+    makeProgram(72, p2, s2, "AGAIN");
+    Library lib(link, 0);
+    std::atomic<int> lockFree{-1};
+    lib.addListener([&](const std::shared_ptr<const LibrarySnapshot>&) {
+        const int fd = ::open((target + ".lock").c_str(), O_RDWR);
+        lockFree = fd >= 0 && ::flock(fd, LOCK_EX | LOCK_NB) == 0;
+        if (fd >= 0) ::flock(fd, LOCK_UN), ::close(fd);
+    });
+    const auto w1 = lib.write(1, p1, s1), w2 = lib.write(2, p2, s2);
+    auto t = Library(target, 0).snapshot();
+    const bool ok = w1 == Library::kOk && w2 == Library::kOk && fs::is_symlink(fs::symlink_status(link)) &&
+                    fs::is_regular_file(fs::symlink_status(target)) && slotIs(*t, 1, p1, s1) && slotIs(*t, 2, p2, s2) &&
+                    slotIs(*Library(link, 0).snapshot(), 2, p2, s2) && countFiles(links, ".lock") == 0;
+    std::printf("library_symlink: writes %d %d through a link: still a link %d, the target a file with both slots %d; "
+                "listener ran with the lock free %d\n", w1, w2, (int)fs::is_symlink(fs::symlink_status(link)),
+                (int)(slotIs(*t, 1, p1, s1) && slotIs(*t, 2, p2, s2)), lockFree.load());
+    CHECK(ok && lockFree.load() == 1);
 }
 
 static void factory_gating()
@@ -2193,7 +2339,8 @@ int main(int argc, char** argv)
         {"library_two_writers", library_two_writers}, {"library_corrupt", library_corrupt},
         {"reload_off_audio_thread", reload_off_audio_thread}, {"library_snapshot_consistent", library_snapshot_consistent},
         {"library_write_restore", library_write_restore}, {"library_globals", library_globals},
-        {"factory_gating", factory_gating},
+        {"factory_gating", factory_gating}, {"library_write_plays_on", library_write_plays_on},
+        {"library_symlink", library_symlink},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

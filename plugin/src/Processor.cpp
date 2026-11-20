@@ -61,6 +61,16 @@ void Processor::syncHost()
     // (an automation write), which this plugin never sends for a core change
     if (programMoved_.exchange(false) && wrapperType == wrapperType_AudioUnit)
         updateHostDisplay(juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
+    // the bank changed (a WRITE, another instance's, the file reloaded): the program list's names. VST3: JUCE turns
+    // parameterInfoChanged into restartComponent(kParamTitlesChanged), which makes hosts re-read the program list's
+    // strings (programChanged is not used there: JUCE writes it as a gesture on its "Program" parameter). AU: there is
+    // no "factory presets changed" notification; programChanged makes hosts re-read the present preset, and the
+    // list is re-read when the host asks for it again
+    if (namesMoved_.exchange(false)) {
+        auto d = juce::AudioProcessorListener::ChangeDetails().withParameterInfoChanged(true);
+        if (wrapperType == wrapperType_AudioUnit) d = d.withProgramChanged(true);
+        updateHostDisplay(d);
+    }
 }
 
 // ---- programs
@@ -148,6 +158,7 @@ bool Processor::takeSnapshot(const std::shared_ptr<const LibrarySnapshot>& s)
         libGen_ = s->generation;
         collectLocked();
     }
+    namesMoved_.store(true);                      // (the host's program list: syncHost tells it)
     std::lock_guard<std::mutex> g(namesLock_);
     namesValid_ = false;
     return true;
@@ -194,6 +205,12 @@ bool Processor::libraryUnreadable()
     return held_ && held_->unreadable;
 }
 
+bool Processor::libraryNewer()
+{
+    std::lock_guard<std::mutex> b(bankLock_);
+    return held_ && held_->newer;
+}
+
 int Processor::libraryBadSlots()
 {
     std::lock_guard<std::mutex> b(bankLock_);
@@ -210,7 +227,8 @@ bool Processor::userSlot(int n)
 
 Library::Result Processor::setGlobal(int g, int v)
 {
-    return lib_ ? lib_->setGlobal(g, v) : Library::kIoError;   // (this instance follows through its listener)
+    if (!lib_ || tlInProcess) return Library::kIoError;   // (file I/O: never the audio thread)
+    return lib_->setGlobal(g, v);                 // (this instance follows through its listener)
 }
 
 int32_t Processor::global(int g)
@@ -249,10 +267,22 @@ Library::Result Processor::writeProgram(int n)
     seq_t fs;
     const bool factory = restored_.load() == n && s.number == n && bank_.factory(n, &fp, &fs) &&
                          ProgramBank::same(s.program, s.seq, fp, fs);
+    if (afterSnapshot) afterSnapshot(*this);      // (tests: an edit arriving while the file is written)
     const Library::Result r = factory ? lib_->clear(n) : lib_->write(n, s.program, s.seq);
     if (r != Library::kOk) return r;
     restored_.store(-1);
-    loadAs(n, s.program, s.seq, 0);               // (program n now, as stored: not edited)
+    // as the keyboard's WRITE: the edit buffer is now program n, no load (the sound, the sequencer, the arp play on);
+    // "edited" clears unless the edit buffer changed since the snapshot (an edit made meanwhile stays an edit).
+    // Refused only when a load is on its way (kc_program_pending): that load replaces the edit buffer anyway
+    struct Ctx { Processor* p; int n; const program_t* prog; const seq_t* seq; } c{this, n, &s.program, &s.seq};
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        kc_program_mark_stored(x->p->runner_.core(), x->n, x->prog, x->seq);
+        x->p->scanCore();
+        x->p->programMoved_.store(false);         // (asked for here)
+    };
+    access_.run(fn, &c);
+    if (juce::MessageManager::existsAndIsCurrentThread()) params_.syncToHost();
     return Library::kOk;
 }
 

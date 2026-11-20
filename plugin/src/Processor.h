@@ -80,8 +80,9 @@ public:
     // program browser (the panel, Task 7): number = bank * 100 + tens * 10 + ones (bank 0..4), as the keyboard
     void attachLibrary(std::shared_ptr<Library> lib);   // (the tests: another file; nullptr: none)
     Library* library() { return lib_.get(); }
-    // WRITE: the program in play + its sequence into slot n (-1: its own number); the instance then plays program n,
-    // not edited (as the keyboard's WRITE; the sequencer stops: a load). The content stored is always the content
+    // WRITE: the program in play + its sequence into slot n (-1: its own number); the instance's program is then n, not
+    // edited, with no load (as the keyboard's WRITE: the sound and the sequencer play on; kc_program_mark_stored; an
+    // edit made while the file is written stays an edit). The content stored is always the content
     // of the number reported (a program change still waiting for the engine: that program as the bank gives it,
     // kc_program_pending). After restoreFactory on n and no change since, WRITE n empties the slot (factory)
     Library::Result writeProgram(int n = -1);
@@ -90,7 +91,10 @@ public:
     bool restoreFactory();
     Library::Result setGlobal(int g, int v);    // one of Library::kGlobals: into the file, every instance follows
     int32_t global(int g);                       // the instance's value now
-    bool libraryUnreadable();                    // the file could not be read: the factory layer (notice)
+    // the file could not be read: the factory layer. The panel (Task 7) shows the notice and asks before the first
+    // WRITE over it (a WRITE keeps the bad file as library.knobi.bad-<time> first)
+    bool libraryUnreadable();
+    bool libraryNewer();                         // (unreadable) a newer version's file: WRITE refused (Library::kNewer)
     int libraryBadSlots();                       // slots the firmware would not store: their factory program (notice)
     bool userSlot(int n);                        // slot n holds a WRITE (else: the factory program)
     static int bankOf(int n) { return n / 100; }
@@ -100,6 +104,7 @@ public:
     // the bank release (the message thread; syncHost calls it): snapshots replaced and no longer read are freed
     void collectBanks();
     size_t heldBanks();                          // (tests) snapshots held: the current one + those not yet released
+    static inline void (*afterSnapshot)(Processor&) = nullptr;   // (tests) called by writeProgram after its snapshot
 
     CoreAccess& access() { return access_; }
     CoreRunner& runner() { return runner_; }     // (the audio thread, or inside access().run)
@@ -136,6 +141,7 @@ private:
     uint64_t libGen_ = 0;                         // (bankLock_) the library snapshot taken last
     std::shared_ptr<Library> lib_;
     int listener_ = 0;
+    std::atomic<bool> namesMoved_{false};         // the bank changed: syncHost tells the host (program names)
     std::atomic<int> restored_{-1};               // restoreFactory's number (WRITE then empties the slot), -1 none
 
     CoreRunner runner_;

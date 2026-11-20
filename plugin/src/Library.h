@@ -13,18 +13,23 @@
 //     "GLOB"  n x (u8 id, i8 value): firmware globals (params/globals.h G_*) the plugin keeps: kGlobals; ids it does
 //             not know or values out of GLOB_MIN..GLOB_MAX are kept in the file and not used
 //   u32 CRC-32 (IEEE, reflected 0xEDB88320) of everything before it
-// Readers: a bad magic, a cut file, a body length or CRC that does not match, minReader > 1: "unreadable" (the
-// factory layer, notice unreadable(); the file is left exactly as it is until a WRITE, which first keeps it as
-// library.knobi.bad-<YYYYMMDD-HHMMSS>). A slot whose records the firmware would not store (kc_program_valid: a broken
-// or newer record): that slot is the factory program, counted in badSlots(); its bytes stay in the file.
+// Readers: a bad magic, a cut file, a body length or CRC that does not match: "unreadable" (the factory layer, the
+// snapshot's notice; the file is left exactly as it is until a WRITE, which first keeps it as
+// library.knobi.bad-<YYYYMMDD-HHMMSS>). minReader > 1 (a newer version's file): unreadable too, and never replaced:
+// a WRITE is refused (kNewer). SLOT records past the bank or without a program record are kept like unknown tags.
+// A slot whose records the firmware would not store (kc_program_valid: a broken or newer record): that slot is the
+// factory program, counted in badSlots; its bytes stay in the file.
 //
 // Writing (WRITE, RESTORE FACTORY + WRITE, a global): read-modify-write under an exclusive flock(2) on
 // library.knobi.lock beside it (processes and instances alike): the file is read again under the lock, the one change
-// made, the whole file written to a temp file in the same directory (library.knobi.tmp-<pid>-<n>), fsync'd and renamed
+// made, the whole file written to a temp file in the same directory (library.knobi.tmp-<pid>-<n>), flushed to the disk
+// (F_FULLFSYNC: macOS fsync leaves it in the drive's cache) and renamed
 // over library.knobi (atomic: a reader sees the old file or the new one, never a part; a crash before the rename
 // leaves the old file and a stale temp file, removed by the next WRITE once its process is gone). So two instances
 // writing different slots at once both land; two writing the same slot: the later lock holder's wins (last write wins).
-// The directory is created on the first write. Nothing writes the file but write / clear / setGlobal.
+// The directory is created on the first write. Nothing writes the file but write / clear / setGlobal. A path that is a
+// symbolic link stays one: the file it names is replaced (temp file, lock and backups beside that file).
+// Listeners are told after every lock (the flock, the write and read locks) is released.
 //
 // Reloading: a watcher thread polls the file's identity (inode, size, modification time) every pollMs; a change
 // (another instance's or another process's write) is read on that thread (never the audio thread) into a new
@@ -50,6 +55,7 @@ struct LibrarySnapshot {
     kc_bank_t bank;                               // the user layer: used[n] 0 = the factory program (kc_bank_set)
     int8_t globals[G_COUNT];                      // kGlobals from the file, the others (and any missing) the defaults
     bool unreadable = false;                      // the file exists but cannot be read: the factory layer
+    bool newer = false;                           // (unreadable) written by a newer version: WRITE refused (kNewer)
     int badSlots = 0;                             // slots the firmware would not store: the factory program instead
     uint64_t generation = 0;                      // this Library's count of snapshots made (1 = the first)
 };
@@ -60,7 +66,9 @@ public:
     // channel is omni in the plugin, not kept
     static constexpr int kGlobals[] = {G_TUNE, G_TRANSPOSE, G_VEL_CURVE, G_AT_CURVE, G_STEREO};
     static constexpr uint16_t kVersion = 1;
-    enum Result { kOk, kInvalid, kIoError };      // write / clear / setGlobal
+    // write / clear / setGlobal. kNewer: the file is a newer version's (minReader above ours): never replaced by this
+    // version (its slots would be lost to it); nothing written
+    enum Result { kOk, kInvalid, kIoError, kNewer };
     enum Decode { kDecOk, kDecBad, kDecTooNew };
 
     // loads path now (on this thread) and starts the watcher (pollMs > 0; 0: no watcher, reload() by hand)
@@ -85,7 +93,8 @@ public:
     bool reload();                                // read the file if it changed (the watcher's call); true: a new snapshot
 
     // listeners get each new snapshot (the watcher's thread or the writing thread; never the audio thread), not under
-    // any lock of the library's but its listener lock (removeListener waits for a call in progress)
+    // any lock of the library's but its listener lock (removeListener waits for a call in progress). Two threads'
+    // snapshots may arrive out of order: a listener keeps the highest generation
     using Listener = std::function<void(const std::shared_ptr<const LibrarySnapshot>&)>;
     int addListener(Listener l);
     void removeListener(int id);
@@ -108,7 +117,9 @@ private:
     struct Sig { bool exists = false; uint64_t ino = 0, size = 0; int64_t mtimeNs = 0; bool operator==(const Sig&) const; };
     Sig statSig() const;
     Result mutate(const std::function<bool(Data&)>& change);
-    void publish(std::shared_ptr<LibrarySnapshot> s);
+    Result mutateLocked(const std::function<bool(Data&)>& change, std::shared_ptr<const LibrarySnapshot>& made);
+    std::shared_ptr<const LibrarySnapshot> publish(std::shared_ptr<LibrarySnapshot> s);   // (readLock_ held)
+    void notify(const std::shared_ptr<const LibrarySnapshot>& s);                         // (no library lock held)
     void watch();
 
     const std::string path_;
