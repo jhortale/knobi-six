@@ -172,6 +172,7 @@ public:
     std::function<void()> onPress, onRelease;
     void setLit(bool l) { if (lit_ != l) lit_ = l, repaint(); }
     bool lit() const { return lit_; }
+    bool isDown() const { return down_; }         // pressed, not let go yet
     void press() { down_ = isEnabled(); if (down_ && onPress) onPress(); }   // (tests: as a click)
     void paint(juce::Graphics& g) override;
     void release() { if (down_ && onRelease) onRelease(); down_ = false; }   // (tests: the mouse let go)

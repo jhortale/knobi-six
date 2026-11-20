@@ -148,7 +148,7 @@ BPM on a red display (drag up / down).
     piano (`<` `>` an octave; notes C0–C8, 12–108) — click a key to add the note, a lit key to remove it (6 notes at
     most); each note's velocity bar (drag it; sent when you let go) and X; REST; TIE (ties it to the step before: it
     then carries a copy of that step's notes and follows them; refused on step 1 and after a rest, the reason shown in
-    red; TIE again unties it); `<` `>` the step before / after; CLOSE. LENGTH: `-` `+` or drag the number (1–64; new
+    red; TIE again unties it; a tied step's velocities are its chain's first step's); `<` `>` the step before / after; CLOSE. LENGTH: `-` `+` or drag the number (1–64; new
     steps are rests). A change is an edit of the program, as on the keyboard: EDITED lights, WRITE stores it with the
     program, a program change loses it. While the sequence plays, an edit is heard from the next step.
   - **SEQ REC** (step entry, the keyboard's rules, `docs/CONTROLS.md` "Recording"): click it, then play notes in Live
@@ -157,7 +157,11 @@ BPM on a red display (drag up / down).
     step (again: one more), with none held = the last step held on (not on step 1, not after a rest); **BACK** erases
     the last step. The sequence is replaced at the first entry (ending with none leaves it as it was); recording stops
     by itself at 64 steps; SEQ REC again, SEQ PLAY, a program change end it. The grid shows the steps as they come and
-    is read-only meanwhile. The computer keyboard is not used (Live keeps the keys for itself in most cases).
+    is read-only meanwhile. Notes from the **computer keyboard**: turn on Live's Computer MIDI Keyboard (press `M` in
+    Live, the track armed or monitored): its notes reach KNOBI-SIX as Live MIDI and are recorded like any other.
+  - **To empty a sequence** (the grid's LENGTH is 1–64): SEQ REC, one entry (a note or REST), BACK, SEQ REC — the
+    sequence is then empty (length 0). There is **no undo** for grid edits: a program change (or loading the program
+    again) drops them, WRITE keeps them.
   - **Transpose**: while the sequence plays, **hold SEQ REC** (mouse button down) and play a note in Live: the sequence
     is transposed by the note minus C4 (60), from the next step; that note is neither played nor recorded; let go: it
     stays (XP shows it on the grid). A click without a note while it plays stops the sequence and starts recording, as

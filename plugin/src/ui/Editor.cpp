@@ -90,6 +90,22 @@ SequencerSection::SequencerSection(Processor& p) : p_(p), grid_(p)
     for (Pad* x : {&rest_, &tie_, &back_}) x->setEnabled(false);
 }
 
+SequencerSection::~SequencerSection() { dropHold(); }
+
+void SequencerSection::visibilityChanged()
+{
+    if (!isVisible()) dropHold();
+}
+
+void SequencerSection::dropHold()
+{
+    if (!rec_.isDown()) return;
+    rec_.onRelease = nullptr;                     // (its release: no action)
+    rec_.release();
+    p_.seqRecButton(-1);
+    rec_.onRelease = [this] { p_.seqRecButton(0); refresh(); };
+}
+
 juce::String SequencerSection::stateText() const
 {
     if (rec_on_) return "RECORDING";

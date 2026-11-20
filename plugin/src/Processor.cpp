@@ -562,13 +562,15 @@ bool Processor::seqGet(seq_t& out)
     return access_.run(fn, &c);
 }
 
-int Processor::seqSet(const seq_t& s)
+int Processor::seqSet(const seq_t& s, int64_t expect)
 {
-    struct Ctx { Processor* p; const seq_t* s; int rc; } c{this, &s, -3};
+    struct Ctx { Processor* p; const seq_t* s; int64_t expect; int rc; } c{this, &s, expect, -3};
     if (!runner_.ok()) return -3;
     auto fn = [](void* v) {
         auto* x = (Ctx*)v;
-        x->rc = kc_seq_set(x->p->runner_.core(), x->s);
+        kc_t* k = x->p->runner_.core();
+        if (x->expect >= 0 && kc_seq_version(k) != (uint32_t)x->expect) x->rc = -4;   // (changed since read)
+        else x->rc = kc_seq_set(k, x->s);
         x->p->scanCore();                         // (edited, the version: shown at once)
     };
     if (tlInProcess) fn(&c);
@@ -576,9 +578,9 @@ int Processor::seqSet(const seq_t& s)
     return c.rc;
 }
 
-void Processor::seqRecButton(bool down)
+void Processor::seqRecButton(int down)
 {
-    struct Ctx { Processor* p; int down; } c{this, down ? 1 : 0};
+    struct Ctx { Processor* p; int down; } c{this, down < 0 ? -1 : down ? 1 : 0};
     if (!runner_.ok()) return;
     auto fn = [](void* v) {
         auto* x = (Ctx*)v;

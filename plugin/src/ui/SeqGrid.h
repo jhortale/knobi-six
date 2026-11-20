@@ -21,8 +21,8 @@
 //   - REST makes the step a rest; TIE ties it to the step before (it then carries a copy of that step's notes: synth/
 //     seq.h), refused on step 1 ("NO TIE ON STEP 1") and after a rest ("NO TIE AFTER A REST"), TIE on a tied step unties
 //     it (it keeps the notes, played anew); < > the step before / after; CLOSE.
-//   - a tied step's notes are the copy: changing them (a key, X) unties it first; its velocities are the step before's
-//     (a drag is refused, "TIED: SET IT ON STEP n").
+//   - a tied step's notes are the copy: changing them (a key, X) unties it first; its velocities are the chain's first
+//     step's (a drag is refused, "TIED: SET IT ON STEP n", n that first step).
 //   Every edit keeps the sequence one the firmware stores (seqedit::fixTies: a tie that comes to follow a rest is
 //   untied, keeping its notes; a tie after a changed step carries the new copy), so kc_seq_set never refuses one.
 // LENGTH: - / + (1..64; new steps are rests, steps cut off are gone), or drag the number up / down (sent when let go).
@@ -31,7 +31,10 @@
 //
 // Cost: the grid polls on the panel's 15 Hz timer: Processor::seqVersion / seqStep / seqRecState / seqXp (atomics);
 // the sequence is read through access() only when seqVersion moved, so nothing changing means no access() call. Edits
-// go through access() (one call each; a drag: one call when let go).
+// go through access() (one call each; a drag: one call when let go). An edit is never made on an old copy: if the
+// sequence's version moved since the grid read it (a program change, a recorded step), checked again inside the call
+// that sets it (Processor::seqSet's expect), the edit is refused, the sequence read again, "THE SEQUENCE CHANGED: TRY
+// AGAIN"; a drag begun before such a change is refused when let go.
 #pragma once
 #include "../Processor.h"
 #include "Widgets.h"
@@ -40,6 +43,7 @@ namespace knobi::ui {
 
 // the edit operations on a sequence (pure: no processor), each leaving a sequence seq_unpack accepts
 namespace seqedit {
+juce::String tiedMessage(const seq_t& s, int step);   // "TIED: SET IT ON STEP n" (n: the first step of the chain)
 struct Result {
     bool changed = false;                         // the sequence changed
     juce::String why;                             // refused: the reason shown (empty: done)
@@ -58,7 +62,7 @@ Result setLength(seq_t& s, int len);              // 1..64
 class SeqGrid;
 
 // the STEP editor (over the grid while a step is chosen)
-class StepEditor final : public juce::Component {
+class StepEditor final : public juce::Component, public juce::SettableTooltipClient {
 public:
     static constexpr int kNoteW = 46, kNotesX = 8, kBarTop = 50, kBarH = 96;
     static constexpr int kPianoX = 312, kPianoY = 34, kWhiteW = 27, kWhiteH = 108, kBlackH = 66;
@@ -90,11 +94,12 @@ private:
     SeqGrid& g_;
     int step_ = 0, base_ = 48;
     int dragIndex_ = -1, dragVel_ = -1;
+    uint32_t dragVer_ = 0;                        // the sequence's version when the drag began
     Pad rest_{"REST", true}, tie_{"TIE", true}, close_{"CLOSE", true}, prev_{"<", true}, next_{">", true},
         octDown_{"<", true}, octUp_{">", true};
 };
 
-class SeqGrid final : public juce::Component {
+class SeqGrid final : public juce::Component, public juce::SettableTooltipClient {
 public:
     static constexpr int kCols = 16, kRows = 4, kHeader = 22;
     explicit SeqGrid(Processor& p);
@@ -126,8 +131,11 @@ public:
     Pad& lengthUp() { return lenUp_; }
     uint64_t fetches() const { return fetches_; }  // (tests) sequence reads through access()
 
-    // an edit: op on a copy of the sequence, sent if it changed (kc_seq_set); false: refused or not sent (message)
+    // an edit: op on a copy of the sequence, sent if it changed (kc_seq_set); false: refused or not sent (message).
+    // The sequence changed since it was read (the version moved: a program change, a recorded step; checked again in
+    // the call that sets it): refused, read again, "THE SEQUENCE CHANGED: TRY AGAIN" -- never an edit of an old copy
     bool edit(const std::function<seqedit::Result(seq_t&)>& op);
+    uint32_t version() const { return ver_; }     // the version of sequence()
     void openStep(int step);                      // (the mouse: a click on a step)
     void say(const juce::String& m);              // the message line
 private:
@@ -140,6 +148,7 @@ private:
     uint32_t ver_ = 0;
     int step_ = -1, rec_ = 0, xp_ = 0;
     int dragLen_ = -1, dragFrom_ = 0, dragY_ = 0;
+    uint32_t dragVer_ = 0;
     uint64_t fetches_ = 0;
     juce::String msg_;
     Pad lenDown_{"-", true}, lenUp_{"+", true};

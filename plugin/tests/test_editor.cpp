@@ -54,6 +54,9 @@
 //                         range), the grid read-only meanwhile and showing the steps; TIE with nothing held ties the last
 //                         step; refusals with their reasons; SEQ REC held while playing + a note: a transpose; tapped:
 //                         stop and record
+//   grid_races            (fix round 1) a chained tie's message names its first step; an edit whose sequence changed
+//                         under it (a program change between the check and the set; a drag across a MIDI program
+//                         load) refused, nothing edited; the editor closed with SEQ REC held drops the hold
 //   grid_playing_edits    40 grid edits while the sequence plays with Live: the core's sequence the grid's, the step
 //                         playing inside it; stopped: every note-on has its note-off, the output silent
 // Every library file is in a temporary directory, never ~/Music.
@@ -1180,6 +1183,76 @@ static void grid_playing_edits()
     CHECK(edits >= 15 && logged > 30 && bad == 0 && sounding == 0 && unpaired == 0 && peak == 0.0f);
 }
 
+// races and leftovers (Task 8 fix round 1): a chained tie's message names the chain's first step; an edit whose
+// sequence changed under it (a program change in the window between the grid's check and the set; a velocity drag
+// across a program load) is refused, nothing edited; the editor closed while SEQ REC is held drops the hold (Live's
+// notes play again, no tap, no transpose)
+static void grid_races()
+{
+    Processor p;
+    Host h(p);
+    seq_t a;
+    seq_clear(&a);
+    const uint8_t n60[1] = {60}, n62[1] = {62}, v[1] = {100};
+    seq_rec_step(&a, n60, v, 1), seq_rec_tie(&a), seq_rec_tie(&a), seq_rec_step(&a, n62, v, 1);
+    loadSeq(p, h, a, 12);
+    auto ed = makeEditor(p);
+    auto& sec = ed->panel().sequencer();
+    auto& g = sec.grid();
+    auto& se = g.editor();
+    ed->poll();
+    click(g, g.cellBounds(2).getCentre());
+    se.mouseDown(mouseAt(se, se.barBounds(0).getCentre()));
+    se.mouseUp(mouseAt(se, se.barBounds(0).getCentre()));
+    const juce::String chain = g.message();
+    // a program change between the grid's check and the set (the core's version moved, not yet published)
+    click(g, g.cellBounds(3).getCentre());
+    kc_program_select(p.runner().core(), 40);
+    click(se, se.keyBounds(64).getCentre());
+    const juce::String why = g.message();
+    h.run(2);
+    ed->poll();
+    seq_t c;
+    p.seqGet(c);
+    const bool refused = why == "THE SEQUENCE CHANGED: TRY AGAIN" && !p.edited() && p.getCurrentProgram() == 40 &&
+                         std::memcmp(&c, &g.sequence(), sizeof c) == 0 && c.len != a.len;
+    // a velocity drag across a MIDI program change from Live
+    loadSeq(p, h, a, 12);
+    ed->poll();
+    click(g, g.cellBounds(3).getCentre());
+    const auto bar = se.barBounds(0);
+    se.mouseDown(mouseAt(se, bar.getCentre()));
+    seq_t b = a;                                  // (another program, its step 4 there too: the drag would apply)
+    b.step[3].notes[0] = 65, b.step[3].vels[0] = 40;
+    loadSeq(p, h, b, 41);                         // (a load in Live's time while the mouse is held)
+    ed->poll();
+    se.mouseUp(mouseAt(se, {bar.getCentreX(), bar.getY()}));
+    h.run(1);
+    ed->poll();
+    p.seqGet(c);
+    const bool dragRefused = !p.edited() && p.getCurrentProgram() == 41 && std::memcmp(&c, &b, sizeof c) == 0 &&
+                             g.message() == "THE SEQUENCE CHANGED: TRY AGAIN";
+    // SEQ REC held while the sequence plays, the editor closed: the hold dropped
+    loadSeq(p, h, demoSeq(), 12);
+    ed->poll();
+    sec.playPad().press();
+    h.head.playing = true;
+    h.run(8);
+    sec.recPad().press();                         // (held, never let go)
+    ed.reset();
+    h.midi.clear();
+    h.midi.addEvent(juce::MidiMessage::noteOn(1, 67, (juce::uint8)100), 0);
+    p.processBlock(h.buf, h.midi);
+    h.run(4);
+    const bool dropped = p.seqXp() == 0 && !(p.seqRecState() & KC_REC_ON) && p.seqPlaying();
+    h.head.playing = false;
+    std::printf("grid_races: a chained tie's velocity: '%s' (want STEP 1); a program change in the window: '%s', nothing "
+                "edited, program 40 shown %d; a velocity drag across a program load refused %d; the editor "
+                "closed with SEQ REC held: the hold dropped (a note not a transpose, not recording, playing) %d\n",
+                chain.toRawUTF8(), why.toRawUTF8(), refused, dragRefused, dropped);
+    CHECK(chain == "TIED: SET IT ON STEP 1" && refused && dragRefused && dropped);
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -1196,7 +1269,7 @@ int main(int argc, char** argv)
         {"panel_restore", panel_restore}, {"panel_clock", panel_clock}, {"panel_sequencer", panel_sequencer},
         {"panel_globals", panel_globals}, {"panel_rt", panel_rt}, {"panel_idle", panel_idle}, {"panel_screenshots", panel_screenshots},
         {"grid_shows", grid_shows}, {"grid_mouse", grid_mouse}, {"grid_step_entry", grid_step_entry},
-        {"grid_playing_edits", grid_playing_edits},
+        {"grid_playing_edits", grid_playing_edits}, {"grid_races", grid_races},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

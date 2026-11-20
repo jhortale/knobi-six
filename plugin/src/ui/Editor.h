@@ -27,6 +27,8 @@ class SequencerSection final : public juce::Component {
 public:
     static constexpr int kGridW = 728, kGridH = 208;
     explicit SequencerSection(Processor& p);
+    ~SequencerSection() override;                 // SEQ REC still held: the hold dropped (no tap, no transpose)
+    void visibilityChanged() override;            // (hidden while held: the same)
     void refresh();
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -38,7 +40,8 @@ public:
     SeqGrid& grid() { return grid_; }
     juce::String stateText() const;               // "OFF", "PLAYING", "WAITING FOR LIVE", "RECORDING"
 private:
-    void recResult(int rc, const char* what);     // REST / TIE / BACK refused: why, on the grid's message line
+    void recResult(int rc, const char* what);
+    void dropHold();     // REST / TIE / BACK refused: why, on the grid's message line
     Processor& p_;
     Pad play_{"SEQ PLAY", true}, rec_{"SEQ REC", true}, rest_{"REST", true}, tie_{"TIE", true}, back_{"BACK", true};
     SeqGrid grid_;

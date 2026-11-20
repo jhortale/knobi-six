@@ -149,9 +149,12 @@ public:
     // / let go (while playing: tap = stop and record, held + a Live MIDI note = transpose); seqRecRest / Tie / Back the
     // panel's REST, TIE, BACK (1 changed, 0 not recording, -1 refused, -3 no answer). While recording, Live's MIDI notes
     // are recorded (the core's MIDI in)
+    // seqSet with expect >= 0: refused (-4, nothing set) when the sequence's version is no longer expect (it changed
+    // since the caller read it: a program change, a recorded step); checked in the same call as the set.
+    // seqRecButton(-1): the hold dropped with no action (the panel closed while SEQ REC was held)
     bool seqGet(seq_t& out);
-    int seqSet(const seq_t& s);
-    void seqRecButton(bool down);
+    int seqSet(const seq_t& s, int64_t expect = -1);
+    void seqRecButton(int down);
     int seqRecRest();
     int seqRecTie();
     int seqRecBack();

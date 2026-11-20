@@ -33,7 +33,7 @@ target_compile_definitions(test_editor PRIVATE $<TARGET_PROPERTY:KnobiSix,COMPIL
 target_compile_options(test_editor PRIVATE -O2 -Wno-float-equal -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-conversion)
 foreach(t panel_covers_params panel_roundtrip panel_resizable panel_browser panel_write panel_restore panel_clock
         panel_sequencer panel_globals panel_rt panel_idle panel_screenshots
-        grid_shows grid_mouse grid_step_entry grid_playing_edits)
+        grid_shows grid_mouse grid_step_entry grid_playing_edits grid_races)
     add_test(NAME ${t} COMMAND test_editor ${t})
 endforeach()
 

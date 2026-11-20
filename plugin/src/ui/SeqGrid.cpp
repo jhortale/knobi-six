@@ -43,6 +43,13 @@ void fixTies(seq_t& s)
 
 static bool inside(const seq_t& s, int step) { return step >= 0 && step < s.len; }
 
+juce::String tiedMessage(const seq_t& s, int step)
+{
+    int j = step;
+    while (j > 0 && s.step[j].tie) j--;           // (the chain's first step: the one its notes come from)
+    return "TIED: SET IT ON STEP " + juce::String(j + 1);
+}
+
 static void compact(seq_step_t& st)               // (unused slots zero)
 {
     for (int k = st.count; k < (int)SEQ_MAX_NOTES; k++) st.notes[k] = st.vels[k] = 0;
@@ -82,7 +89,7 @@ Result setVelocity(seq_t& s, int step, int index, int vel)
 {
     Result r;
     if (!inside(s, step) || index < 0 || index >= s.step[step].count) return r;
-    if (s.step[step].tie) { r.why = "TIED: SET IT ON STEP " + juce::String(step); return r; }
+    if (s.step[step].tie) { r.why = tiedMessage(s, step); return r; }
     const uint8_t v = (uint8_t)juce::jlimit(1, 127, vel);
     if (s.step[step].vels[index] == v) return r;
     s.step[step].vels[index] = v;
@@ -144,6 +151,7 @@ StepEditor::StepEditor(SeqGrid& g) : g_(g)
     next_.onPress = [this] { if (step_ + 1 < g_.length()) g_.openStep(step_ + 1); };
     octDown_.onPress = [this] { if (base_ > 12) base_ -= 12, repaint(); };
     octUp_.onPress = [this] { if (base_ < 84) base_ += 12, repaint(); };
+    setTooltip("Note names: 60 = C4 here = C3 in Live");
     rest_.setTooltip("REST: the step plays nothing");
     tie_.setTooltip("TIE: the step before held on through this one (not on step 1, not after a rest); again: untie");
     setVisible(false);
@@ -216,8 +224,8 @@ void StepEditor::mouseDown(const juce::MouseEvent& e)
             return;
         }
         if (barBounds(k).expanded(4, 6).contains(p)) {
-            if (st.tie) { g_.say("TIED: SET IT ON STEP " + juce::String(step_)); return; }
-            dragIndex_ = k, dragVel_ = velAt(p.y);
+            if (st.tie) { g_.say(seqedit::tiedMessage(g_.seq_, step_)); return; }
+            dragIndex_ = k, dragVel_ = velAt(p.y), dragVer_ = g_.ver_;
             repaint();
             return;
         }
@@ -236,6 +244,7 @@ void StepEditor::mouseUp(const juce::MouseEvent&)
     if (dragIndex_ < 0) return;
     const int k = dragIndex_, v = dragVel_;
     dragIndex_ = -1, dragVel_ = -1;
+    if (g_.ver_ != dragVer_) { g_.say("THE SEQUENCE CHANGED: TRY AGAIN"); repaint(); return; }   // (read again since)
     g_.edit([this, k, v](seq_t& s) { return seqedit::setVelocity(s, step_, k, v); });
     repaint();
 }
@@ -324,6 +333,7 @@ SeqGrid::SeqGrid(Processor& p) : p_(p), editor_(*this)
     addChildComponent(editor_);
     lenDown_.onPress = [this] { setLengthNow(seq_.len - 1); };
     lenUp_.onPress = [this] { setLengthNow(seq_.len + 1); };
+    setTooltip("Click a step to edit it. Note names: 60 = C4 here = C3 in Live");
     lenDown_.setTooltip("LENGTH - 1");
     lenUp_.setTooltip("LENGTH + 1 (a rest added)");
 }
@@ -386,18 +396,26 @@ void SeqGrid::say(const juce::String& m)
 bool SeqGrid::edit(const std::function<seqedit::Result(seq_t&)>& op)
 {
     if (recording()) { say("RECORDING: THE STEP ENTRY HAS THE SEQUENCE (SEQ REC ENDS IT)"); return false; }
-    if (!have_ || p_.seqVersion() != ver_) fetch();   // (changed meanwhile: a load, a recorded step)
+    if (!have_ || p_.seqVersion() != ver_) {      // changed meanwhile (a load, a recorded step): not an old copy's edit
+        fetch();
+        shownSeq_ = seq_;
+        if (editing() && editor_.step() >= seq_.len) editor_.setVisible(false);
+        editor_.repaint(), repaint();
+        say("THE SEQUENCE CHANGED: TRY AGAIN");
+        return false;
+    }
     seq_t t = seq_;
     const auto r = op(t);
     if (r.why.isNotEmpty()) { say(r.why); return false; }
     if (!r.changed) return false;
     jassert(seqedit::valid(t));
-    const int rc = p_.seqSet(t);
+    const int rc = p_.seqSet(t, (int64_t)ver_);
     if (rc == 0 || rc == 1) {
         seq_ = t, ver_ = p_.seqVersion(), have_ = true;
         say({});
     } else {
-        say(rc == -2 ? "RECORDING: THE STEP ENTRY HAS THE SEQUENCE (SEQ REC ENDS IT)"
+        say(rc == -4 ? "THE SEQUENCE CHANGED: TRY AGAIN"
+            : rc == -2 ? "RECORDING: THE STEP ENTRY HAS THE SEQUENCE (SEQ REC ENDS IT)"
             : rc == -1 ? "REFUSED: NOT A SEQUENCE THE SYNTH STORES" : "NO ANSWER FROM THE ENGINE: TRY AGAIN");
         fetch();
     }
@@ -430,7 +448,7 @@ void SeqGrid::mouseDown(const juce::MouseEvent& e)
     const auto p = e.getPosition();
     if (lengthBounds().contains(p)) {
         if (recording()) { say("RECORDING: THE STEP ENTRY HAS THE SEQUENCE (SEQ REC ENDS IT)"); return; }
-        dragLen_ = dragFrom_ = juce::jmax(1, (int)seq_.len), dragY_ = p.y;
+        dragLen_ = dragFrom_ = juce::jmax(1, (int)seq_.len), dragY_ = p.y, dragVer_ = ver_;
         return;
     }
     for (int i = 0; i < (int)SEQ_MAX_STEPS; i++)
@@ -449,6 +467,7 @@ void SeqGrid::mouseUp(const juce::MouseEvent&)
     if (dragLen_ < 0) return;
     const int len = dragLen_;
     dragLen_ = -1;
+    if (ver_ != dragVer_) { say("THE SEQUENCE CHANGED: TRY AGAIN"); return; }
     setLengthNow(len);
 }
 
