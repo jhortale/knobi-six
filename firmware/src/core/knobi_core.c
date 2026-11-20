@@ -455,6 +455,36 @@ int kc_program_select(kc_t *k, int32_t number)
     return 0;
 }
 
+int kc_program_mark_stored(kc_t *k, int32_t number, const program_t *p, const seq_t *s)
+{
+    kc_binding_t was;
+    int same;
+    if (number < 0 || number >= (int32_t)PROG_COUNT || !p || !s) return -1;
+    was = kc_bind(k);
+    kc_apply_pending(k);
+    if (ctl_prog_want >= 0) { kc_unbind(was); return -1; }   /* (a program change on its way: content not known) */
+    if (k->pend) {                              /* a kc_program_set not taken yet: that load is program number */
+        uint32_t id;
+        same = memcmp(&k->pend_s, s, sizeof *s) == 0 &&
+               memcmp(k->pend_p.chord, p->chord, sizeof p->chord) == 0;
+        for (id = 0; id < P_COUNT_RESERVED; id++)
+            if (P_IS_LIVE(id) && k->pend_p.v[id] != p->v[id]) same = 0;
+        k->pend_n = number, k->pend_edited = (uint8_t)!same;
+        kc_unbind(was);
+        return same ? 0 : 1;
+    }
+    kc_track_load(k);
+    ctl_prog = number, ctl_manual = 0;
+    k->base = *p;                               /* (kc_edited: the live values and the chord against what was stored) */
+    k->base_pw = eng_pw, k->forced_edit = 0;
+    same = memcmp(edit_seq(), s, sizeof *s) == 0;
+    es_set(number, 0, 0, 0);                    /* (the sequence: this program's, clean as of now) */
+    if (!same) es_dirty = 1;                    /* (changed since it was read: still an edit) */
+    same = kc_edited(k) ? 1 : 0;
+    kc_unbind(was);
+    return same;
+}
+
 int kc_program_pending(const kc_t *k)
 {
     kc_binding_t was = kc_bind(k);

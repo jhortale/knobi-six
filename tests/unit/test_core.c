@@ -32,6 +32,10 @@
  *                         kc_program_pending says so (1) until a block has loaded it (0: within two); a kc_program_set is
  *                         never pending (reported consistently); the later of a kc_program_set still waiting and a
  *                         MIDI program change deferred behind it wins (the program change), as the other way round
+ *   program_mark_stored   (plugin WRITE) kc_program_mark_stored: the number moves, "edited" clears, no load: the
+ *                         sequence keeps playing, no note released; an edit made after what was written stays edited
+ *                         (program value, or the sequence); a kc_program_set not taken yet: that load marked; refused
+ *                         while a program change waits (its content not known yet)
  *   first_render_no_alloc (macOS) the core as a dylib (dlopen'd, as in the plugin bundle): a thread's first kc_render
  *                         allocates nothing (malloc zone statistics; a lazily allocated thread-local would)
  * Sample-accurate events (plan Task 3, kc_render_exact):
@@ -933,6 +937,74 @@ static void program_pending(void)
     kc_destroy(k);
 }
 
+static void program_mark_stored(void)
+{
+    kc_t *k = kc_create();
+    static program_t w;
+    static seq_t ws, t;
+    static const uint8_t nt[1] = {60}, vl[1] = {100};
+    int16_t buf[2 * KC_BLOCK];
+    kc_note_t notes[KC_LOG];
+    int32_t num = -1;
+    int ed = -1, bad = 0, i, r, playing;
+    if (!k) { printf("program_mark_stored: no instance\n"); CHECK(0); return; }
+    program_init(&w);
+    seq_clear(&t);
+    for (i = 0; i < 8; i++) (void)seq_rec_step(&t, nt, vl, 1);
+    if (kc_program_set(k, 4, &w, &t, 0)) bad++;
+    for (i = 0; i < 4; i++) kc_render(k, buf, KC_BLOCK);
+    kc_seq_play(k, 1);
+    kc_param_set(k, P_FLT_FREQ, 12);            /* (an edit: program 4 edited) */
+    for (i = 0; i < 40; i++) kc_render(k, buf, KC_BLOCK);
+    (void)kc_notes(k, notes, KC_LOG);
+    kc_program_get(k, &num, &w, &ws, &ed);
+    if (ed != 1 || !kc_seq_playing(k)) bad++, printf("  before: edited %d, playing %d\n", ed, kc_seq_playing(k));
+    r = kc_program_mark_stored(k, 77, &w, &ws);   /* (WRITE to 77: the edit buffer as written) */
+    kc_program_get(k, &num, NULL, NULL, &ed);
+    if (r != 0 || num != 77 || ed != 0) bad++, printf("  marked: %d, number %d, edited %d\n", r, num, ed);
+    for (i = 0; i < 4; i++) kc_render(k, buf, KC_BLOCK);   /* (no load: the player runs on) */
+    playing = kc_seq_playing(k) && kc_seq_state(k) == 1 && kc_param_get(k, P_FLT_FREQ) == 12;
+    if (!playing) bad++, printf("  after: playing %d state %d\n", kc_seq_playing(k), kc_seq_state(k));
+    kc_param_set(k, P_FLT_FREQ, 12);            /* (the same value: still as written) */
+    kc_program_get(k, &num, NULL, NULL, &ed);
+    if (ed != 0) bad++;
+    /* an edit after the snapshot: the mark keeps it edited */
+    kc_param_set(k, P_FLT_FREQ, 90);
+    r = kc_program_mark_stored(k, 78, &w, &ws);
+    kc_program_get(k, &num, NULL, NULL, &ed);
+    if (r != 1 || num != 78 || ed != 1 || kc_param_get(k, P_FLT_FREQ) != 90) bad++, printf("  later edit: %d %d %d\n", r, num, ed);
+    /* the sequence changed after the snapshot: edited too */
+    kc_program_get(k, NULL, &w, &ws, NULL);
+    ws.step[0].vels[0] = 50;                    /* (what was "written" differs from the edit buffer's sequence) */
+    r = kc_program_mark_stored(k, 79, &w, &ws);
+    kc_program_get(k, &num, NULL, NULL, &ed);
+    if (r != 1 || num != 79 || ed != 1) bad++, printf("  sequence differs: %d %d %d\n", r, num, ed);
+    /* a load waiting: refused, nothing changed */
+    kc_program_select(k, 5);
+    kc_program_select(k, 6);                    /* (the engine busy with 5: 6 deferred) */
+    r = kc_program_pending(k) ? kc_program_mark_stored(k, 80, &w, &ws) : -2;
+    if (r != -1) bad++, printf("  pending: %d\n", r);
+    if (kc_program_mark_stored(k, 500, &w, &ws) != -1) bad++;
+    {                                           /* a kc_program_set the engine has not taken yet: that one marked */
+        kc_t *j = kc_create();
+        if (!j) bad++;
+        else {
+            kc_program_set(j, 9, &w, &ws, 1);   /* (pending: the engine holds kc_create's load; edited) */
+            r = kc_program_mark_stored(j, 10, &w, &ws);
+            kc_program_get(j, &num, NULL, NULL, &ed);
+            if (r != 0 || num != 10 || ed != 0) bad++, printf("  pending set: %d %d %d\n", r, num, ed);
+            for (i = 0; i < 3; i++) kc_render(j, buf, KC_BLOCK);
+            kc_program_get(j, &num, NULL, NULL, &ed);
+            if (num != 10 || ed != 0) bad++, printf("  pending set, taken: %d %d\n", num, ed);
+            kc_destroy(j);
+        }
+    }
+    printf("program_mark_stored: WRITE without a load (number, edited cleared, the sequence plays on), later edits stay "
+           "edited, refused while a load waits: %d wrong\n", bad);
+    CHECK(bad == 0);
+    kc_destroy(k);
+}
+
 static void bank_validated(void)
 {
     kc_t *k = kc_create();
@@ -1389,6 +1461,7 @@ int main(void)
     param_while_pending();
     bank_validated();
     program_pending();
+    program_mark_stored();
     first_render_no_alloc();
     split_matches_host();
     exact_aligned();

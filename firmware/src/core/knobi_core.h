@@ -102,6 +102,15 @@ KC_API int kc_program_pending(const kc_t *k);   /* 1: a load chosen by a MIDI pr
                                            * so a caller storing number + program (the plugin's WRITE, its set state)
                                            * takes program number's content from the bank instead. 0: number and edit
                                            * buffer agree (kc_program_set is never pending: reported as set) */
+KC_API int kc_program_mark_stored(kc_t *k, int32_t number, const program_t *p, const seq_t *s);   /* the caller stored
+                                           * p + s (read from kc_program_get) as program number (the plugin's WRITE):
+                                           * the edit buffer is now program number, with no load (the sound, the
+                                           * sequencer and the arp play on). "edited" clears only if the edit buffer
+                                           * still is p + s (the program's values and chord, the sequence); an edit made
+                                           * since stays edited (a kc_program_set the engine has not taken yet: that
+                                           * load is marked the same way). 0 marked unedited, 1 marked still edited, -1
+                                           * refused (number not 0..499, NULL, or a program change still waiting:
+                                           * kc_program_pending -- its content is not known yet) */
 typedef struct {
     uint8_t used[KC_PROGRAMS];            /* 0: the factory program (or init) */
     program_t program[KC_PROGRAMS];
