@@ -276,22 +276,28 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   wrap uses the core's tempo exactly (quantised to 1/64 BPM) and a host still just before the loop's end after a
   predicted wrap counts as wrapped, so no step is doubled or skipped (`transport_loop_tempo`). The arp's pattern is not
   reset at a loop's wrap. No MIDI clock out. A host that gives no position (no play head, or no ppq) gives the clock
-  nothing: the firmware's clock as on the keyboard (SEQ PLAY plays at once, never armed; `transport_none`).
+  nothing: the firmware's clock as on the keyboard (SEQ PLAY plays at once, never armed; `transport_none`). A host
+  that stops giving a position while playing is taken as stopped once (notes released, the sequencer armed), then the
+  clock is internal (`transport_vanishes`).
 - `src/StateCodec.*`: the set state: `KN6S`, version, minimum reader version, then tagged records (program number,
   flags, the firmware's packed program record, its packed sequence record); unknown records are skipped, older program
   record versions load. The stored copy wins over the bank on load. If the instance does not answer when Live saves
   (the call timed out), the last state saved or loaded is saved again as it was, never INIT.
 - `tests/`: CTest, one test a name (the list with what each checks: the head of `tests/test_plugin.cpp` and of
-  `tests/test_editor.cpp`). `test_plugin.cpp`, the processor without a host: rendering and timing (`render_*`,
-  `midi_sample_accurate`, `events_ordered`), real time (`rt_no_alloc`: an allocation and lock counter around
-  `processBlock`; `rt_params`), the threading seam (`seam`, `seam_idle_clamped`, `silent_block`,
-  `prepare_keeps_pending`, `prepare_takes_instance`), the parameters (`params_layout`, `automation_to_core`,
-  `core_to_host`), the set state (`state_*`, incl. `state_timeout_keeps_last`), the clock from the host (`transport_*`
-  with a fake AudioPlayHead, incl. `transport_none` for a host without one; `bpm_param_greyed`), the shared library
-  (`library_*`, `reload_off_audio_thread`, every file in a temporary directory) and `factory_gating`; `test_editor.cpp`
-  (plan Tasks 7 and 8, the panel made offscreen): `panel_*` (incl. `panel_idle`, `panel_rt`, `panel_screenshots`) and
-  the sequencer grid `grid_*`; `bundle_exports` (the bundles export none of the firmware's symbols); `auval` (with
-  `-DKNOBI_TEST_AUVAL=ON`).
+  `tests/test_editor.cpp`). The groups:
+  - rendering (`render_44k_bitexact`, `render_48k`, `midi_sample_accurate`, `events_ordered`);
+  - real time (`rt_no_alloc`: an allocation and lock counter around `processBlock`; `rt_params`);
+  - the threading seam (`seam`, `seam_idle_clamped`, `silent_block`, `prepare_keeps_pending`,
+    `prepare_takes_instance`; offline: `offline_no_silent`, `offline_run_waits`);
+  - the parameters (`params_layout`, `automation_to_core`, `core_to_host`);
+  - the set state (`state_*`, incl. `state_timeout_keeps_last`);
+  - the clock from the host (`transport_*` with a fake AudioPlayHead, incl. `transport_none` for a host without one
+    and `transport_vanishes` for one that stops giving a position; `bpm_param_greyed`);
+  - the shared library (`library_*`, `reload_off_audio_thread`, every file in a temporary directory) and
+    `factory_gating`;
+  - the panel, `test_editor.cpp` (plan Tasks 7 and 8, made offscreen): `panel_*` (incl. `panel_idle`, `panel_rt`,
+    `panel_screenshots`) and the sequencer grid `grid_*`;
+  - `bundle_exports` (the bundles export none of the firmware's symbols); `auval` (with `-DKNOBI_TEST_AUVAL=ON`).
 - What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
   audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone
   allocators, so `operator new`) and pthread mutexes / rwlocks / `os_unfair_lock`. Not covered: what JUCE's AU / VST3
@@ -301,6 +307,11 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   that block fades out to silence over 64 samples, its MIDI is replayed at the start of the next block (in order;
   more than 256 messages: all notes off), the missed samples are rendered then (output dropped) so the timeline stays
   the host's, and the next block fades in over 64 samples. A note shorter than the missed block collapses to its start.
+- Offline (an export or a freeze: the host's `isNonRealtime`): never a collision. A call from another thread (the
+  panel's poll, a set state) is always served by the audio thread between blocks, however slow the render, and a block
+  that finds the instance held (a call that started before, `prepareToPlay`) waits for it instead of being output
+  silent (`offline_no_silent`, `offline_run_waits`). With no block coming while offline, a call times out after 2 s as
+  with a stuck host (a set state saved then is the last good one).
 
 ## Licence
 
