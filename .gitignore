@@ -4,3 +4,9 @@ __pycache__/
 .superpowers/
 # the OB-6 factory bank, generated locally by tools/ob6_import.py: Sequential's data, never committed (docs/FACTORY_BANK.md)
 firmware/gen/factory_bank.h
+
+# the TypeScript workspace (docs/MONOREPO.md)
+node_modules/
+.turbo/
+apps/*/dist/
+packages/*/dist/

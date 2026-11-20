@@ -1,0 +1,10 @@
+# The TypeScript side of the monorepo (docs/MONOREPO.md). Upstream's layout (firmware/, tools/, tests/, build.sh)
+# is not part of the workspace.
+packages:
+  - apps/*
+  - packages/*
+  - synths/*
+  - web
+minimumReleaseAgeExclude:
+  - lucide-react@1.77.0
+  - tailwind-merge@3.7.1
