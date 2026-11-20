@@ -39,9 +39,6 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
-    // an offline render (export, freeze: the host's isNonRealtime) never outputs a silent block: processBlock waits for
-    // the instance instead, and the seam never takes it on an asking thread meanwhile (CoreAccess::setOffline)
-    void setNonRealtime(bool isNonRealtime) noexcept override;
     using juce::AudioProcessor::processBlock;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -232,7 +229,8 @@ private:
     uint32_t pendingN_ = 0;
     bool pendingOverflow_ = false, fadeIn_ = false;
     uint64_t skipped_ = 0;                       // session samples output silent, not yet rendered
-    bool hostRolling_ = false;                   // the last block had the host's position, playing (the audio thread)
+    bool hostRolling_ = false;                   // the last block had the host's position, playing (the audio thread;
+                                                 // kept across prepareToPlay: the core and its clock are kept too)
     float lastL_ = 0.0f, lastR_ = 0.0f;          // the last sample output
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Processor)

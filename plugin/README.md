@@ -307,11 +307,11 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   that block fades out to silence over 64 samples, its MIDI is replayed at the start of the next block (in order;
   more than 256 messages: all notes off), the missed samples are rendered then (output dropped) so the timeline stays
   the host's, and the next block fades in over 64 samples. A note shorter than the missed block collapses to its start.
-- Offline (an export or a freeze: the host's `isNonRealtime`): never a collision. A call from another thread (the
-  panel's poll, a set state) is always served by the audio thread between blocks, however slow the render, and a block
-  that finds the instance held (a call that started before, `prepareToPlay`) waits for it instead of being output
-  silent (`offline_no_silent`, `offline_run_waits`). With no block coming while offline, a call times out after 2 s as
-  with a stuck host (a set state saved then is the last good one).
+- Offline (an export or a freeze: the host's `isNonRealtime`): never a silent block. A block that finds the instance
+  held (a call taken on the asking thread after the idle time -- a slow render's gap -- or `prepareToPlay`) waits for
+  it and renders as usual, so the file is sample for sample an undisturbed render (`offline_no_silent`). With no block
+  coming (a frozen track, a host left flagged offline) a call runs on the asking thread after the idle time, as in
+  real time: no 2 s stall (`offline_run_waits`).
 
 ## Licence
 

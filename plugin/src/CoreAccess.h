@@ -13,10 +13,10 @@
 // audioEnter fails only while another thread is running fn itself (the host was idle for idleMs() and resumed during
 // fn): Processor then outputs that block faded to silence, keeps its MIDI for the next block and keeps the timeline
 // (Processor.cpp, test silent_block). fn must itself be real-time safe (it may run on the audio thread): copies only.
-// Offline (setOffline: the host renders an export or a freeze, AudioProcessor::isNonRealtime): a render slower than real
-// time has gaps past the idle time between its blocks, so run() never takes the instance on the asking thread then --
-// it waits for a block to serve it (or times out: false, as with a stuck host) -- and Processor waits for the instance
-// (audioEnterWait: a take() or a call that started before) instead of outputting a silent block into the file.
+// Offline (the host renders an export or a freeze, AudioProcessor::isNonRealtime): a render slower than real time has
+// gaps past the idle time between its blocks, so a call may be taken on the asking thread as a block comes; Processor
+// then waits for the instance (audioEnterWait) instead of outputting a silent block into the file. The idle rule is
+// the same offline: with no block coming (a frozen track, a host left flagged offline) a call never stalls 2 s.
 // The asking side takes a mutex (several non-audio threads queue up there), never the audio thread.
 // Time: the asking side's idle and timeout measures read a Clock (production: the monotonic clock, polled every
 // 500 us; tests: a clock they advance themselves, setClock, so the idle rule is exercised without real sleeps). The
@@ -64,9 +64,6 @@ public:
         idleMs_.store((int)ms, std::memory_order_relaxed);
     }
     int idleMs() const { return idleMs_.load(std::memory_order_relaxed); }
-    // offline render (Processor::setNonRealtime): run() never takes the instance on the asking thread
-    void setOffline(bool on) { offline_.store(on, std::memory_order_release); }
-    bool offline() const { return offline_.load(std::memory_order_acquire); }
 
     // ---- the audio thread, around each block
     bool audioEnter()                             // false: another thread holds the instance (output silence)
@@ -111,8 +108,7 @@ public:
             const int64_t now = clock_->nowUs();
             uint64_t b = blocks_.load(std::memory_order_relaxed);
             if (b != last) last = b, seen = now;
-            if (r == kPosted && now - seen >= (int64_t)idleMs * 1000 &&   // the host is not processing (offline:
-                !offline_.load(std::memory_order_acquire)) {                // never -- a slow render, wait for it)
+            if (r == kPosted && now - seen >= (int64_t)idleMs * 1000) {   // the host is not processing
                 int idle = kFree;
                 if (owner_.compare_exchange_strong(idle, kOther, std::memory_order_acquire)) {
                     int posted = kPosted;
@@ -154,7 +150,6 @@ private:
     std::atomic<int> owner_{kFree}, req_{kIdle};
     std::atomic<uint64_t> blocks_{0};
     std::atomic<int> idleMs_{kIdleMs};
-    std::atomic<bool> offline_{false};
     Fn fn_ = nullptr;
     void* ctx_ = nullptr;
     std::mutex side_;

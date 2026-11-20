@@ -472,12 +472,6 @@ void Processor::prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBl
     setLatencySamples(latency);
 }
 
-void Processor::setNonRealtime(bool isNonRealtime) noexcept
-{
-    juce::AudioProcessor::setNonRealtime(isNonRealtime);
-    access_.setOffline(isNonRealtime);
-}
-
 void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;

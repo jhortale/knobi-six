@@ -115,10 +115,11 @@
 //   transport_vanishes    a host that gave a position while playing stops giving one: the core is told "stopped" once
 //                         (notes released, the sequencer armed, not following), then nothing
 //   offline_no_silent     an offline render (isNonRealtime) slower than real time, calls arriving past the idle threshold
-//                         and another thread holding the instance as blocks come: no call on the asking thread, no
-//                         silent block, the output sample for sample an undisturbed render's
-//   offline_run_waits     offline, run() never runs on the asking thread: no block, it times out (the set state the last
-//                         good one); a block serves it; real time again, the idle rule takes it on the asking thread
+//                         (taken on the asking thread) and another thread holding the instance as blocks come: no
+//                         silent block (the block waits), the output sample for sample an undisturbed render's
+//   offline_run_waits     offline with no block coming, a call does not stall: run() succeeds after the idle time (no
+//                         2 s timeout), the set state is the instance's; a block during it waits (not silent, the same
+//                         output); with blocks coming the audio thread serves it
 // rt_no_alloc (and silent_block, for the silent path and its replay) covers processBlock as this file calls it (the
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
@@ -1873,8 +1874,8 @@ static void transport_vanishes()
 
 // Follow-up (export dropout): an offline render (isNonRealtime) slower than real time, while calls arrive from another
 // thread (the panel's 15 Hz poll) and another thread takes the instance (prepareToPlay's take()): the gaps between the
-// blocks on the seam's clock are past the idle threshold, yet no call runs on the asking thread and no block is silent:
-// the output is sample for sample the same as an undisturbed offline render
+// blocks on the seam's clock are past the idle threshold, so calls run on the asking thread holding the instance as a
+// block comes -- that block waits for it, none is silent: the output is sample for sample an undisturbed render's
 static void offline_no_silent()
 {
     const int block = 2048, nBlocks = 24, nCalls = 14;
@@ -1963,70 +1964,100 @@ static void offline_no_silent()
                 "audio thread, %llu silent blocks; output vs an undisturbed render: %zu of %zu samples differ (sound %d)\n",
                 nBlocks, block, nCalls, idle + 50, idle, served.load(), c.here.load(), c.audio.load(),
                 (unsigned long long)p.silentBlocks(), diff, out.size(), (int)sound);
-    CHECK(served == nCalls && c.here == 0 && c.audio == nCalls && p.silentBlocks() == 0 && out.size() == want.size() &&
-          diff == 0 && sound && p.access().ranHere() == 0);
+    CHECK(served == nCalls && c.here > 0 && c.here + c.audio == nCalls && p.silentBlocks() == 0 &&
+          out.size() == want.size() && diff == 0 && sound);
 }
 
-// Follow-up (export dropout): offline, run() never takes the instance on the asking thread: with no block coming it
-// times out (false; the set state falls back to the last good one); a block serves it on the audio thread; back in
-// real time, the idle rule acts again (the asking thread takes it)
+// Follow-up (export dropout): offline with no block coming (a frozen track, a host left flagged offline), a call does
+// not stall: run() takes the instance on the asking thread after the usual idle time (no 2 s timeout), the set state
+// saved is the instance's own; a block that comes during such a call waits for it (not silent) and renders the same
+// samples as an undisturbed offline render; a call with blocks coming is served by the audio thread
 static void offline_run_waits()
 {
-    Processor p;
-    p.setPlayConfigDetails(0, 2, 44100, 256);
-    p.prepareToPlay(44100, 256);
-    p.setCurrentProgram(5);
-    blocks(p, 2);
-    juce::MemoryBlock good;
-    p.getStateInformation(good);
-    const uint64_t here0 = p.access().ranHere();  // (the calls above: real time, no audio -- on this thread)
-    p.setNonRealtime(true);
+    auto make = [](Processor& p) {
+        p.setNonRealtime(true);
+        p.setPlayConfigDetails(0, 2, 44100, 256);
+        p.prepareToPlay(44100, 256);
+    };
+    Processor p, ref;
+    make(p), make(ref);
     FakeClock clk;
     p.access().setClock(&clk);
-    struct Ctx { std::thread::id asker; std::atomic<int> here{0}, other{0}; } c;
+    const int idle = p.access().idleMs();
+    struct Ctx { std::thread::id asker; std::atomic<int> here{0}, other{0}; std::atomic<bool> holding{false}, release{true}; } c;
     auto fn = [](void* v) {
         auto* x = (Ctx*)v;
-        if (std::this_thread::get_id() == x->asker) x->here++; else x->other++;
+        if (std::this_thread::get_id() != x->asker) { x->other++; return; }
+        x->here++;
+        x->holding = true;
+        while (!x->release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        x->holding = false;
     };
-    auto ask = [&](const std::function<void()>& meanwhile) {
-        std::atomic<int> r{-1};
-        std::thread t([&] { c.asker = std::this_thread::get_id(); r = p.access().run(fn, &c) ? 1 : 0; });
-        meanwhile();
-        for (int i = 0; i < 3000 && r < 0; i++) {
-            clk.advanceMs(50);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        t.join();
-        return r.load();
-    };
-    const int none = ask([] {});                  // offline, no block: times out
-    const int hereNone = c.here, otherNone = c.other;
-    juce::MemoryBlock saved;                      // (the set state, no block coming: the last good one)
-    {
-        std::atomic<bool> done{false};
-        std::thread t([&] { p.getStateInformation(saved); done = true; });
-        for (int i = 0; i < 3000 && !done; i++) {
-            clk.advanceMs(50);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        t.join();
-    }
-    const int served = ask([&] {                  // offline, a block comes: served on the audio thread
-        while (!p.access().posted()) std::this_thread::yield();
-        clk.advanceMs(1000);                      // (a slow render: far past the idle threshold)
-        blocks(p, 1);
-    });
-    const int hereServed = c.here, otherServed = c.other;
-    p.setNonRealtime(false);
-    const int rt = ask([] {});                    // real time again, no block: the asking thread takes it
+    // 1. no block: after exactly the idle time on the seam's clock, never near the timeout
+    std::atomic<int> r{-1};
+    const auto t0 = std::chrono::steady_clock::now();
+    std::thread t([&] { c.asker = std::this_thread::get_id(); r = p.access().run(fn, &c) ? 1 : 0; });
+    while (!p.access().posted()) std::this_thread::yield();
+    clk.advanceMs(idle);
+    for (int i = 0; i < 1000 && r < 0; i++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (r < 0) clk.advanceMs(CoreAccess::kTimeoutMs);   // (still waiting after 1 s: let it time out, a FAIL)
+    t.join();
+    const double wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    const int here1 = c.here;
+    // the set state, no block coming: the instance's own (program 5), not a fallback
     p.access().setClock(nullptr);
-    std::printf("offline_run_waits: offline, no block: run() %d (want 0, timed out), on the asking thread %d; the set "
-                "state the last good one %s; a block comes after 1000 ms: run() %d, on the audio thread %d, on the "
-                "asking thread %d; real time again, no block: run() %d, on the asking thread %d (ranHere since offline %llu)\n", none,
-                hereNone, saved == good ? "yes" : "NO", served, otherServed - otherNone, hereServed - hereNone, rt,
-                c.here - hereServed, (unsigned long long)(p.access().ranHere() - here0));
-    CHECK(none == 0 && hereNone == 0 && otherNone == 0 && saved == good && served == 1 && otherServed - otherNone == 1 &&
-          hereServed == 0 && rt == 1 && c.here == 1 && p.access().ranHere() - here0 == 1);
+    p.setCurrentProgram(5);
+    juce::MemoryBlock saved;
+    p.getStateInformation(saved);
+    SetState d;
+    const bool dec = StateCodec::decode(saved.getData(), saved.getSize(), d) == StateCodec::kOk;
+    p.access().setClock(&clk);
+    ref.setCurrentProgram(5);
+    // 2. a block comes while such a call holds the instance: it waits; the output is the reference's
+    juce::AudioBuffer<float> buf(2, 256), rb(2, 256);
+    juce::MidiBuffer midi, rm;
+    auto note = [](juce::MidiBuffer& m, int b) {
+        m.clear();
+        if (b == 0) m.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)110), 3);
+    };
+    size_t diff = 0;
+    double level = 0;
+    for (int b = 0; b < 8; b++) {
+        std::thread holder;
+        if (b == 2) {                             // (the block after a gap: a call taken, holding as the block comes)
+            c.release = false;
+            holder = std::thread([&] { c.asker = std::this_thread::get_id(); p.access().run(fn, &c); });
+            while (!p.access().posted()) std::this_thread::yield();
+            clk.advanceMs(idle);
+            for (int i = 0; i < 1000 && !c.holding; i++) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::thread([&] { std::this_thread::sleep_for(std::chrono::milliseconds(20)); c.release = true; }).detach();
+        }
+        note(midi, b), note(rm, b);
+        p.processBlock(buf, midi);
+        ref.processBlock(rb, rm);
+        if (holder.joinable()) holder.join();
+        for (int ch = 0; ch < 2; ch++)
+            for (int i = 0; i < 256; i++) {
+                diff += buf.getSample(ch, i) != rb.getSample(ch, i);
+                level = std::max(level, (double)std::fabs(rb.getSample(ch, i)));
+            }
+    }
+    const int here2 = c.here - here1;
+    // 3. blocks coming: a call served by the audio thread
+    const int other0 = c.other;
+    std::atomic<int> r3{-1};
+    std::thread t3([&] { c.asker = std::this_thread::get_id(); r3 = p.access().run(fn, &c) ? 1 : 0; });
+    while (!p.access().posted()) std::this_thread::yield();
+    blocks(p, 1);
+    t3.join();
+    p.access().setClock(nullptr);
+    std::printf("offline_run_waits: offline, no block: run() %d after %d ms of the seam's clock (%.0f ms real), on the "
+                "asking thread %d; the set state program %d (want 5); a block during a call on the asking thread (%d): "
+                "%llu silent, %zu samples differ from an undisturbed render (level %.3f); blocks coming: run() %d, on "
+                "the audio thread %d\n", r.load(), idle, wallMs, here1, dec ? (int)d.number : -1, here2,
+                (unsigned long long)p.silentBlocks(), diff, level, r3.load(), c.other - other0);
+    CHECK(r == 1 && here1 == 1 && wallMs < 1000 && dec && d.number == 5 && here2 == 1 && p.silentBlocks() == 0 &&
+          diff == 0 && level > 1e-3 && r3 == 1 && c.other - other0 == 1);
 }
 
 // ===============================================================================================================
