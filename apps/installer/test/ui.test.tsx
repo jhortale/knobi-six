@@ -15,8 +15,8 @@ import { makePackage } from "@knobi/device-sim";
 import { mergeCatalog, type Catalog } from "@knobi/catalog";
 
 const base = mergeCatalog(
-  JSON.parse(readFileSync(`${import.meta.dirname}/../../packages/catalog/instruments.json`, "utf8")),
-  [JSON.parse(readFileSync(`${import.meta.dirname}/../../synths/knobi-six/catalog.json`, "utf8"))]);
+  JSON.parse(readFileSync(`${import.meta.dirname}/../../../packages/catalog/instruments.json`, "utf8")),
+  [JSON.parse(readFileSync(`${import.meta.dirname}/../../../synths/knobi-six/catalog.json`, "utf8"))]);
 const pkg = makePackage({ product: "SMK-37 Pro_956" });
 const { image } = loadPackage(pkg);
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");

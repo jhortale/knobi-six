@@ -13,7 +13,7 @@ export default defineConfig({
     name: "knobi-backup-doc",
     generateBundle() {
       this.emitFile({ type: "asset", fileName: "backup.txt",
-        source: readFileSync(new URL("../docs/BACKUP.md", import.meta.url), "utf8") });
+        source: readFileSync(new URL("../../docs/BACKUP.md", import.meta.url), "utf8") });
     },
   }],
   build: { sourcemap: true },

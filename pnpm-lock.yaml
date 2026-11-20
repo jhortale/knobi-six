@@ -205,6 +205,73 @@ importers:
         specifier: 2.11.13
         version: 2.11.13
 
+  apps/installer:
+    dependencies:
+      '@knobi/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
+      '@knobi/installer-core':
+        specifier: workspace:*
+        version: link:../../packages/installer-core
+      '@knobi/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@knobi/web-midi':
+        specifier: workspace:*
+        version: link:../../packages/web-midi
+      react:
+        specifier: 19.3.1
+        version: 19.3.1
+      react-dom:
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
+    devDependencies:
+      '@knobi/device-sim':
+        specifier: workspace:*
+        version: link:../../packages/device-sim
+      '@knobi/synth-knobi-six':
+        specifier: workspace:*
+        version: link:../../synths/knobi-six
+      '@knobi/tsconfig':
+        specifier: workspace:*
+        version: link:../../packages/tsconfig
+      '@tailwindcss/vite':
+        specifier: 4.3.5
+        version: 4.3.5(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
+      '@testing-library/dom':
+        specifier: 10.4.2
+        version: 10.4.2
+      '@testing-library/react':
+        specifier: 16.3.3
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      '@vitejs/plugin-react':
+        specifier: 6.3.0
+        version: 6.3.0(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
+      jsdom:
+        specifier: 26.1.0
+        version: 26.1.0
+      tailwindcss:
+        specifier: 4.3.5
+        version: 4.3.5
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vite:
+        specifier: 8.3.8
+        version: 8.3.8(@types/node@24.19.2)(jiti@2.7.0)
+      vitest:
+        specifier: 5.1.1
+        version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
+
   packages/catalog:
     dependencies:
       '@knobi/installer-core':
@@ -323,73 +390,6 @@ importers:
         version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
 
   synths/knobi-six: {}
-
-  web:
-    dependencies:
-      '@knobi/catalog':
-        specifier: workspace:*
-        version: link:../packages/catalog
-      '@knobi/installer-core':
-        specifier: workspace:*
-        version: link:../packages/installer-core
-      '@knobi/ui':
-        specifier: workspace:*
-        version: link:../packages/ui
-      '@knobi/web-midi':
-        specifier: workspace:*
-        version: link:../packages/web-midi
-      react:
-        specifier: 19.3.1
-        version: 19.3.1
-      react-dom:
-        specifier: 19.3.1
-        version: 19.3.1(react@19.3.1)
-    devDependencies:
-      '@knobi/device-sim':
-        specifier: workspace:*
-        version: link:../packages/device-sim
-      '@knobi/synth-knobi-six':
-        specifier: workspace:*
-        version: link:../synths/knobi-six
-      '@knobi/tsconfig':
-        specifier: workspace:*
-        version: link:../packages/tsconfig
-      '@tailwindcss/vite':
-        specifier: 4.3.5
-        version: 4.3.5(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
-      '@testing-library/dom':
-        specifier: 10.4.2
-        version: 10.4.2
-      '@testing-library/react':
-        specifier: 16.3.3
-        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@types/node':
-        specifier: 24.19.2
-        version: 24.19.2
-      '@types/react':
-        specifier: 19.3.0
-        version: 19.3.0
-      '@types/react-dom':
-        specifier: 19.3.0
-        version: 19.3.0(@types/react@19.3.0)
-      '@vitejs/plugin-react':
-        specifier: 6.3.0
-        version: 6.3.0(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
-      jsdom:
-        specifier: 26.1.0
-        version: 26.1.0
-      tailwindcss:
-        specifier: 4.3.5
-        version: 4.3.5
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vite:
-        specifier: 8.3.8
-        version: 8.3.8(@types/node@24.19.2)(jiti@2.7.0)
-      vitest:
-        specifier: 5.1.1
-        version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
 
 packages:
 
