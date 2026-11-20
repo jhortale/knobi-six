@@ -73,7 +73,7 @@
 //   library_atomic        a child process killed (SIGKILL) between the temp file's fsync and the rename: the file is
 //                         the old one byte for byte, readable; the stale temp file is removed by the next WRITE
 //   library_two_writers   two libraries on one file (as two instances / processes) WRITE different slots at once, 40
-//                         rounds, and two processes (fork) 20 slots each at once: every write lands; the same slot
+//                         rounds, and two processes (posix_spawn) 20 slots each at once: every write lands; the same slot
 //                         written by both at once: one of the two (last write wins), and both libraries end with the
 //                         file's content after their watchers reload
 //   library_corrupt       (fix round 1: a newer format's file refuses a WRITE, untouched; odd SLOT records kept)
@@ -106,6 +106,8 @@
 // processor's own code, CoreRunner, the core, CoreAccess's audio side): allocations (malloc family, typed and zone allocators, operator new) and pthread
 // mutexes / rwlocks / os_unfair_lock. Not covered: what the plugin wrappers (JUCE's AU / VST3 glue) do around
 // processBlock in a real host, condition variables, semaphores and dispatch calls (not counted).
+#include <spawn.h>
+extern char** environ;
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1991,6 +1993,24 @@ static void library_atomic()
     CHECK(killed && after == before && !before.empty() && temps == 1 && old && w == Library::kOk && tempsAfter == 0 && both);
 }
 
+// library_two_writers' other process (test_plugin --child-write PATH FIRST): writes slots FIRST..FIRST+19 with the
+// programs the parent expects (makeProgram(n + 3), "W nnn"); exit status: the writes that failed
+static std::string gSelf;                         // this program's path (main: argv[0])
+static int childWrite(const char* path, int first)
+{
+    Library c(path, 0);
+    int f = 0;
+    for (int n = first; n < first + 20; n++) {
+        program_t p;
+        seq_t q;
+        char name[21];
+        std::snprintf(name, sizeof name, "W %03d", n);
+        makeProgram(n + 3, p, q, name);
+        f += c.write(n, p, q) != Library::kOk;
+    }
+    return f;
+}
+
 static void library_two_writers()
 {
     const std::string dir = freshDir("two"), path = dir + "/library.knobi";
@@ -2019,18 +2039,16 @@ static void library_two_writers()
         std::thread t2([&] { go++; while (go.load() < 2) {} failed += b.write(499, y, ys) != Library::kOk; });
         t1.join(), t2.join();
     }
-    // two processes at once (flock across processes): the child writes 300..319, this process 320..339
-    const pid_t child = fork();
-    if (child == 0) {
-        Library c(path, 0);
-        int f = 0;
-        for (int n = 300; n < 320; n++) f += c.write(n, ps[(size_t)n], ss[(size_t)n]) != Library::kOk;
-        _exit(f);
-    }
+    // two processes at once (flock across processes): the child writes 300..319, this process 320..339. The child is
+    // this program started afresh (posix_spawn, childWrite), not a fork: a, b's watcher threads run here meanwhile
+    const std::string slots = "300", pathArg = path;
+    char* args[] = {(char*)gSelf.c_str(), (char*)"--child-write", (char*)pathArg.c_str(), (char*)slots.c_str(), nullptr};
+    pid_t child = -1;
+    const int spawned = posix_spawn(&child, gSelf.c_str(), nullptr, nullptr, args, environ);
     for (int n = 320; n < 340; n++) failed += a.write(n, ps[(size_t)n], ss[(size_t)n]) != Library::kOk;
     int st = 0;
-    waitpid(child, &st, 0);
-    const bool childOk = WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    if (spawned == 0) waitpid(child, &st, 0);
+    const bool childOk = spawned == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0;
     // the file's content, read fresh; both libraries end with it (their watchers reload)
     Library f(path, 0);
     auto file = f.snapshot();
@@ -2548,6 +2566,8 @@ static void factory_gating()
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if (argc == 4 && std::strcmp(argv[1], "--child-write") == 0) return childWrite(argv[2], std::atoi(argv[3]));
+    gSelf = std::filesystem::absolute(argv[0]).string();
     juce::ScopedJuceInitialiser_GUI juce;           // (JUCE's statics; no window is opened)
     Processor::startHostSyncTimer = false;              // (no JUCE timer thread in this process: the tests call syncHost)
     // every library file in a temporary directory, the processors' default one too: never ~/Music
