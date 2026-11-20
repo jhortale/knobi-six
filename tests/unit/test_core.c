@@ -27,6 +27,11 @@
  *                         pthread key (kc_key*: made once, read-only after): nm / objdump
  *   param_while_pending   kc_param_set after a kc_program_set the engine could not take yet edits the program set
  *   bank_validated        kc_bank_set refuses a bank with an entry the firmware would not store; kc_bank_in_use
+ *   program_pending       (plugin plan Task 6) a program change the engine cannot take yet (a load still held):
+ *                         kc_program_get already reports its number with the previous edit buffer, and
+ *                         kc_program_pending says so (1) until a block has loaded it (0: within two); a kc_program_set is
+ *                         never pending (reported consistently); the later of a kc_program_set still waiting and a
+ *                         MIDI program change deferred behind it wins (the program change), as the other way round
  *   first_render_no_alloc (macOS) the core as a dylib (dlopen'd, as in the plugin bundle): a thread's first kc_render
  *                         allocates nothing (malloc zone statistics; a lazily allocated thread-local would)
  * Sample-accurate events (plan Task 3, kc_render_exact):
@@ -862,6 +867,72 @@ static void param_while_pending(void)
     kc_destroy(k);
 }
 
+static void program_pending(void)
+{
+    kc_t *k = kc_create();
+    static kc_bank_t bank;
+    static program_t q;
+    static seq_t t;
+    program_t p;
+    seq_t s;
+    int16_t buf[2 * KC_BLOCK];
+    int32_t num = -1;
+    int ed = -1, bad = 0, during, after, set;
+    if (!k) { printf("program_pending: no instance\n"); CHECK(0); return; }
+    program_init(&q);
+    memcpy(q.name, "PENDING", 8);
+    q.v[P_FLT_FREQ] = 33;
+    seq_clear(&t);
+    bank.used[7] = 1, bank.program[7] = q, bank.seq[7] = t;
+    kc_bank_set(k, &bank);
+    if (kc_program_pending(k) != 0) bad++;      /* (kc_create's init load is the edit buffer already) */
+    kc_program_select(k, 7);                    /* (the engine still holds kc_create's load: deferred) */
+    during = kc_program_pending(k);
+    kc_program_get(k, &num, &p, &s, &ed);
+    if (during != 1 || num != 7 || !strcmp(p.name, "PENDING")) bad++;   /* (the window this flag exists for) */
+    after = 0;                                  /* (blocks until it is taken: the first block's pass still finds the
+                                                 * engine busy, the second loads it) */
+    while (kc_program_pending(k) && after < 8) {
+        kc_program_get(k, &num, &p, &s, &ed);
+        if (num != 7 || !strcmp(p.name, "PENDING")) bad++;
+        kc_render(k, buf, KC_BLOCK), after++;
+    }
+    kc_program_get(k, &num, &p, &s, &ed);
+    if (after < 1 || after > 2 || num != 7 || strcmp(p.name, "PENDING") || p.v[P_FLT_FREQ] != 33) bad++;
+    kc_program_select(k, 3);                    /* (a load queued: the engine's buffer busy until the next block) */
+    if (kc_program_set(k, 9, &q, &t, 0)) bad++;   /* (a kc_program_set: reported as set, at once) */
+    set = kc_program_pending(k);
+    kc_program_get(k, &num, &p, NULL, NULL);
+    if (set != 0 || num != 9 || strcmp(p.name, "PENDING")) bad++;
+    {                                           /* the later load wins, whichever way round: a kc_program_set still
+                                                 * waiting (right after kc_create: the engine holds init), then a MIDI
+                                                 * program change deferred behind it -> the program change; and a
+                                                 * deferred program change, then a kc_program_set -> the set */
+        static const uint8_t pc7[2] = {0xC0, 7};
+        kc_t *j = kc_create();
+        int i;
+        if (!j) bad++;
+        else {
+            kc_bank_set(j, &bank);
+            if (kc_program_set(j, 9, &q, &t, 0)) bad++;   /* (pending: the engine holds kc_create's load) */
+            kc_midi(j, pc7, 2);
+            kc_render(j, buf, KC_BLOCK);
+            kc_program_get(j, &num, &p, NULL, NULL);
+            if (num != 7 || kc_program_pending(j) != (strcmp(p.name, "PENDING") != 0)) bad++, printf("  set then PC: %d %s\n", num, p.name);
+            for (i = 0; i < 3; i++) kc_render(j, buf, KC_BLOCK);
+            kc_program_get(j, &num, &p, NULL, NULL);
+            if (num != 7 || strcmp(p.name, "PENDING") || kc_program_pending(j)) bad++, printf("  set then PC, later: %d %s\n", num, p.name);
+            kc_bank_set(j, NULL);
+            kc_destroy(j);
+        }
+    }
+    printf("program_pending: during the deferred load %d (1), taken after %d block(s) (1..2), after kc_program_set %d (0): %d wrong\n",
+           during, after, set, bad);
+    CHECK(bad == 0);
+    kc_bank_set(k, NULL);
+    kc_destroy(k);
+}
+
 static void bank_validated(void)
 {
     kc_t *k = kc_create();
@@ -1317,6 +1388,7 @@ int main(void)
     no_mutable_globals();
     param_while_pending();
     bank_validated();
+    program_pending();
     first_render_no_alloc();
     split_matches_host();
     exact_aligned();

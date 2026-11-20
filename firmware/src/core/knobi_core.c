@@ -224,9 +224,13 @@ static void kc_track_load(kc_t *k)             /* a program load queued since: i
     if (eng_pw == k->base_pw) return;
     k->base = eng_edit, k->base_pw = eng_pw, k->forced_edit = 0;
 }
+/* a kc_program_set still waiting is the load in play, unless a program change (ctl_prog_select deferred: ctl_prog_want)
+ * came after it: kc_program_set clears ctl_prog_want, so one standing beside k->pend is the later of the two, and wins
+ * (kc_apply_pending then drops the set) */
+static int kc_pend_live(const kc_t *k) { return k->pend && ctl_prog_want < 0; }
 static int kc_edited(const kc_t *k)
 {
-    if (k->pend) return k->pend_edited;
+    if (kc_pend_live(k)) return k->pend_edited;
     if (k->forced_edit || es_dirty || es_hash() != es_sum) return 1;
     for (uint32_t id = 0; id < P_COUNT_RESERVED; id++) if (P_IS_LIVE(id) && eng_edit.v[id] != k->base.v[id]) return 1;
     return memcmp(eng_edit.chord, k->base.chord, sizeof eng_edit.chord) != 0;
@@ -235,6 +239,7 @@ static int kc_edited(const kc_t *k)
 /* kc_program_set's load, as ctl_prog_select does one (the engine busy with another load: next block) */
 static void kc_apply_pending(kc_t *k)
 {
+    if (k->pend && ctl_prog_want >= 0) k->pend = 0;   /* (a program change after it: the later load wins) */
     if (!k->pend || ctl_wr != 0 || eng_program(&k->pend_p)) return;
     ctl_rec_forget();
     ctl_prog = k->pend_n, ctl_manual = 0, ctl_want_factory = 0, ctl_restore_ask = -1, ctl_prog_want = -1;
@@ -386,7 +391,7 @@ void kc_param_set(kc_t *k, uint16_t id, int32_t v)
     if (kc_param_info(id, NULL)) return;
     was = kc_bind(k);
     kc_apply_pending(k);                        /* (an edit after a set program: on that program) */
-    if (k->pend) k->pend_p.v[id] = param_clamp(id, v);   /* (the engine still busy: the program set takes it) */
+    if (kc_pend_live(k)) k->pend_p.v[id] = param_clamp(id, v);   /* (the engine still busy: the program set takes it) */
     else ctl_set(&eng_edit, id, v, 0);
     kc_unbind(was);
 }
@@ -395,9 +400,8 @@ int32_t kc_param_get(const kc_t *k, uint16_t id)
     kc_binding_t was;
     int32_t v;
     if (kc_param_info(id, NULL)) return 0;
-    if (k->pend) return k->pend_p.v[id];
-    was = kc_bind(k);
-    v = eng_edit.v[id];
+    was = kc_bind(k);                           /* (ctl_prog_want, kc_pend_live: the instance's state) */
+    v = kc_pend_live(k) ? k->pend_p.v[id] : eng_edit.v[id];
     kc_unbind(was);
     return v;
 }
@@ -421,6 +425,7 @@ int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, 
     program_set_seq_gen(&k->pend_p, 0);
     k->pend = 1, k->pend_n = number, k->pend_edited = (uint8_t)(edited != 0);
     was = kc_bind(k);
+    ctl_prog_want = -1, ctl_want_factory = 0;   /* (a program change still deferred is older: this load wins) */
     kc_apply_pending(k);
     kc_unbind(was);
     return 0;
@@ -428,12 +433,13 @@ int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, 
 void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int *edited)
 {
     kc_binding_t was = kc_bind(k);
-    if (number) *number = k->pend ? k->pend_n : ctl_prog;
+    const int live = kc_pend_live(k);
+    if (number) *number = live ? k->pend_n : ctl_prog;
     if (p) {
-        *p = k->pend ? k->pend_p : eng_edit;
+        *p = live ? k->pend_p : eng_edit;
         program_set_seq_gen(p, 0);
     }
-    if (s) *s = k->pend ? k->pend_s : *edit_seq();
+    if (s) *s = live ? k->pend_s : *edit_seq();
     if (edited) *edited = kc_edited(k);
     kc_unbind(was);
 }
@@ -447,6 +453,14 @@ int kc_program_select(kc_t *k, int32_t number)
     kc_track_load(k);
     kc_unbind(was);
     return 0;
+}
+
+int kc_program_pending(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int r = !kc_pend_live(k) && ctl_prog_want >= 0;   /* (ctl_prog_select deferred: ctl_prog moved, eng_edit not yet) */
+    kc_unbind(was);
+    return r;
 }
 
 /* any thread: validated here, taken by the instance's next call (kc_bind) */

@@ -96,6 +96,12 @@ KC_API int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq
                                            * not 0..499, or p / s not records the firmware would store */
 KC_API void kc_program_get(const kc_t *k, int32_t *number, program_t *p, seq_t *s, int *edited);   /* any pointer may be NULL */
 KC_API int kc_program_select(kc_t *k, int32_t number);   /* load program number from the bank, as a program change: 0 ok */
+KC_API int kc_program_pending(const kc_t *k);   /* 1: a load chosen by a MIDI program change or kc_program_select
+                                           * waits for the engine (busy with an earlier load: a later block takes it);
+                                           * meanwhile kc_program_get reports its number with the previous edit buffer,
+                                           * so a caller storing number + program (the plugin's WRITE, its set state)
+                                           * takes program number's content from the bank instead. 0: number and edit
+                                           * buffer agree (kc_program_set is never pending: reported as set) */
 typedef struct {
     uint8_t used[KC_PROGRAMS];            /* 0: the factory program (or init) */
     program_t program[KC_PROGRAMS];
