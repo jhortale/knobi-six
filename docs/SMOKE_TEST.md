@@ -135,32 +135,36 @@ reads). Stock: M-Vave's package or your dump, as in §4.
 
 ## 6. Sequencer (Phase 3: the step sequencer and its storage)
 
-Nothing here has run on a keyboard; the emulator and the host tests cover the logic and the flows
+Written before any keyboard run (the run is noted below); the emulator and the host tests cover the logic and the flows
 ([MEASUREMENTS.md](MEASUREMENTS.md) "Phase 3"), not the flash and not the ear. Same safety rules as §0 (**the backup
 first**, the way back ready, and **João installs it himself**: no agent runs `fm1_install.py`, flashes, or uses the
 USB rescue). **Package**: the `knobi-six-pro` artifact of the last green `phase3` CI run (the run and its SHA-256 are
 named in MEASUREMENTS.md "Phase 3" once the branch is final); a `-local` package (your imported OB-6 bank) only on your
 own keyboard. Run §2 first with it (items 1-12 are unchanged; item 10 now also stores a sequence, below).
 
+**Run on hardware 2026-11-20 (João, SMK-37 Pro): S1-S13 passed, S14 not run**, with the regular `knobi-six-pro`
+package of CI run 44450085801 (the one §2 passed with). Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "Sequencer on
+the device".
+
 Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer screen; SEQ REC arms recording (lit);
 `<` / `>` = DEC / INC on that screen while recording.
 
 | # | Check | Expect | Result |
 |---|---|---|---|
-| S1 | SEQ: the Sequencer screen; SEQ again: back | STOP, STEP --, LEN 0, XP 0 (a program with no sequence); `SEQ n KB / m KB` shows the store | |
-| S2 | **Record**: SEQ REC, then play C, E, G one at a time; `>`; two keys held and a third added, all let go; `<` | each key sounds as it is played; the grid gets a red dot a step, a dash for the rest, a stack of dots for the chord; `<` erases the last step | |
-| S3 | Record a tie: hold a note, press `>` twice, let go | the step plus two blue tie bars; SEQ REC again ends it (lit off) | |
-| S4 | **Play**: SEQ PLAY at 120 BPM, 1/16 | steps in time with BPM and DIVISION (change both while it plays), a short note each (gate half the step), the rest silent, the tie one long note with no retrigger, then it loops; STEP follows | |
-| S5 | **Transpose**: while it plays hold SEQ REC and press a key a fifth above C4 (G4); then C4 | from the next note it plays a fifth up; that key makes no sound and records nothing; C4 = back to normal. With UNISON on a key alone does it | |
-| S6 | SEQ REC **tapped** while it plays | it stops, recording arms (the screen says REC); a second tap ends it. The sequence is kept if no key was pressed | |
-| S7 | Arp and sequencer | SEQ PLAY with ARP on turns the arp off; ARP ON stops the sequence | |
-| S8 | **WRITE with a sequence** (record or load one, then WRITE, ENTER; once with it playing, once stopped) | the same fade, a gap and fade-in as item 10 but longer: **time it** (stopwatch or recording); STORED; the sequence plays on afterwards; no stuck note | |
-| S9 | **Power-cycle** | the program is back with its sequence (LEN, SEQ PLAY plays the same notes, ties and rests). A program change loads that program's own sequence and stops the playing one; a sequence edited and not written is gone after a program change | |
-| S10 | MIDI notes in while recording (a DAW or keyboard on USB) | recorded like the keys; with LOCAL OFF only the MIDI notes are | |
-| S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | |
-| S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | |
-| S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | |
-| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | |
+| S1 | SEQ: the Sequencer screen; SEQ again: back | STOP, STEP --, LEN 0, XP 0 (a program with no sequence); `SEQ n KB / m KB` shows the store | pass |
+| S2 | **Record**: SEQ REC, then play C, E, G one at a time; `>`; two keys held and a third added, all let go; `<` | each key sounds as it is played; the grid gets a red dot a step, a dash for the rest, a stack of dots for the chord; `<` erases the last step | pass (`<` erased the chord) |
+| S3 | Record a tie: hold a note, press `>` twice, let go | the step plus two blue tie bars; SEQ REC again ends it (lit off) | pass |
+| S4 | **Play**: SEQ PLAY at 120 BPM, 1/16 | steps in time with BPM and DIVISION (change both while it plays), a short note each (gate half the step), the rest silent, the tie one long note with no retrigger, then it loops; STEP follows | pass |
+| S5 | **Transpose**: while it plays hold SEQ REC and press a key a fifth above C4 (G4); then C4 | from the next note it plays a fifth up; that key makes no sound and records nothing; C4 = back to normal. With UNISON on a key alone does it | pass |
+| S6 | SEQ REC **tapped** while it plays | it stops, recording arms (the screen says REC); a second tap ends it. The sequence is kept if no key was pressed | pass |
+| S7 | Arp and sequencer | SEQ PLAY with ARP on turns the arp off; ARP ON stops the sequence | pass |
+| S8 | **WRITE with a sequence** (record or load one, then WRITE, ENTER; once with it playing, once stopped) | the same fade, a gap and fade-in as item 10 but longer: **time it** (stopwatch or recording); STORED; the sequence plays on afterwards; no stuck note | pass; the gap felt short (not timed) |
+| S9 | **Power-cycle** | the program is back with its sequence (LEN, SEQ PLAY plays the same notes, ties and rests). A program change loads that program's own sequence and stops the playing one; a sequence edited and not written is gone after a program change | pass |
+| S10 | MIDI notes in while recording (a DAW or keyboard on USB) | recorded like the keys; with LOCAL OFF only the MIDI notes are | pass |
+| S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | pass (Ableton) |
+| S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | pass (Ableton) |
+| S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | sequenced CPU 70 % / PEAK 70 %, held by hand 65 % / 75 %, SHED 0: no extra cost |
+| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | not run (needs a local build) |
 
 **Not part of the checklist**: `SEQ FULL: NOTHING STORED` needs the store to be full (about 76 KB: 76 full
 64-step six-note sequences, the largest there are; a sequence of 16 single-note steps takes 64 B, so every one of the

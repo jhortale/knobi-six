@@ -20,7 +20,8 @@ one core (the default package, no DUAL CORE). Read off the Globals CPU line whil
   after a power cycle. Rescue screen (OCTAVE- at power-on): shows.
 - The keyboard ran a non-stock build before (`SMK-37 Pro_900`, port "X0X FM-1", USB 1209:0001); the full flash was
   read twice and verified (`verify_dump.py` OK, `trimdat` at 0xC1224) before the install, which João ran himself.
-- Not run yet: the sequencer (§6).
+- The sequencer (§6): S1-S13 passed on 2026-11-20 (below, "Sequencer on the device"); S14 not run (it needs a
+  local build with the imported bank).
 
 ### CPU1 probe on the device (SMOKE_TEST §5, 2026-11-20): passed
 
@@ -51,8 +52,8 @@ All five steps passed, read off the Globals probe lines (photos kept by João):
 
 ## Phase 3 status (the sequencer)
 
-Emulator and host-test evidence only: **the sequencer has not been tried on a keyboard** (the Phase 3 build passed
-SMOKE_TEST §2 on 2026-11-19, "First device run" above; §6 not run yet). The sequencer's own cost is small beside the
+Emulator and host-test evidence below; **on a keyboard since 2026-11-20**: SMOKE_TEST §6 S1-S13 passed ("Sequencer
+on the device" under "First device run" above). The sequencer's own cost is small beside the
 voices, and a WRITE with a sequence works end to end in the emulator; what is left is the device ([SMOKE_TEST.md](SMOKE_TEST.md)
 §6, and "What only the device can confirm" below).
 
@@ -118,7 +119,27 @@ job that already took 19 to 38 min on earlier runs).
 450 ms and the others to 300 ms. These are `tests/wav_check.py` readings of the host's WAV, where an erase costs what the
 model says it costs.
 
+### Sequencer on the device (SMOKE_TEST §6, 2026-11-20): S1-S13 passed
+
+The regular `knobi-six-pro` package of CI run 44450085801 (the same as §2), João's SMK-37 Pro.
+
+- Recording (notes, rests, chords, ties, `<` erasing the last step), playback with BPM and DIVISION changed live,
+  transpose, REC tapped while playing, arp / sequencer exclusion: as specified.
+- WRITE with a sequence, playing and stopped: STORED, the sequence plays on, no stuck note; the gap **felt short**
+  (not timed). After a power cycle the program came back with its sequence; a program change loads its own.
+- MIDI in while recording, MIDI out to Ableton (every note ended, none hanging after a stop mid-chord), MIDI CLOCK IN
+  from Ableton (start on the downbeat, stop, continue): passed by ear and in Ableton's recorded clip.
+- **CPU (S13)**: a heavy patch (cutoff fader 25, resonance fader 62, sync, X-Mod), a 6-note chord each step at
+  250 BPM 1/16: CPU 70 %, PEAK 70 %, SHED 0. The same patch with the six notes held by hand: CPU 65 %, PEAK 75 %,
+  SHED 0. **The sequencer adds nothing measurable**, as the emulator said. (That patch costs more than §2 item 9's
+  60 %: its filter settings differ. At PEAK 75 % it is the closest the device came to the CPU guard's 80 %.)
+
 ### What only the device can confirm (Phase 3)
+
+**Device run 2026-11-20** (above): 1 partly (sequences stored, read back and kept across power cycles; no power cut
+during a WRITE tried, wear not tested); 2 felt short, not timed, no compacting WRITE seen; 3 MIDI clock in from
+Ableton stayed in time by ear, jitter not measured; 4 not run (S14 needs a local build); 5 the sequencer adds
+nothing measurable (S13).
 
 1. **The sequence store on the real flash**, including a power cut during WRITE (tested on the host by cutting at
    every flash operation: the old pair or the new, never a mix), weak cells, wear.
