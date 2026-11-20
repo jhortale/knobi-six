@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "Processor.h"
+#include <cstring>
+#include "ui/Editor.h"
 
 namespace knobi {
 
@@ -42,6 +44,8 @@ void Processor::scanCore()
     kc_program_get(k, &num, nullptr, nullptr, &ed);
     if (program_.exchange(num, std::memory_order_acq_rel) != num) programMoved_.store(true);
     edited_.store(ed != 0, std::memory_order_release);
+    seqPlaying_.store(kc_seq_playing(k) != 0, std::memory_order_release);   // (the panel's SEQ PLAY and state)
+    seqState_.store(kc_seq_state(k), std::memory_order_release);
 }
 
 void Processor::applyHostChanges()
@@ -117,6 +121,7 @@ bool Processor::setBank(const kc_bank_t* bank)
         if (held_) retired_.push_back(std::move(held_));      // (a caller's bank now: the snapshot released later)
         collectLocked();
     }
+    bankGen_.fetch_add(1, std::memory_order_acq_rel);
     std::lock_guard<std::mutex> g(namesLock_);
     namesValid_ = false;
     return true;
@@ -342,6 +347,35 @@ bool Processor::snapshot(Snapshot& s)
     return true;
 }
 
+void Processor::seqPlay(bool on)
+{
+    struct Ctx { Processor* p; int on; } c{this, on ? 1 : 0};
+    if (!runner_.ok()) return;
+    auto fn = [](void* v) {                      // (it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        kc_seq_play(x->p->runner_.core(), x->on);
+        x->p->scanCore();
+    };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+}
+
+bool Processor::programInfo(ProgramInfo& out)
+{
+    Snapshot s;
+    if (!snapshot(s)) return false;
+    char name[PROGRAM_NAME_LEN + 1];
+    std::memcpy(name, s.program.name, PROGRAM_NAME_LEN);
+    name[PROGRAM_NAME_LEN] = 0;
+    out.number = s.number, out.name = name, out.edited = s.edited != 0;
+    while (!out.name.empty() && out.name.back() == ' ') out.name.pop_back();
+    program_t p;
+    seq_t q;
+    out.differs = bank_.program(s.number, &p, &q) && !ProgramBank::same(s.program, s.seq, p, q);
+    out.user = userSlot(s.number);
+    return true;
+}
+
 bool Processor::differsFromBank()
 {
     Snapshot s;
@@ -469,7 +503,7 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
             const auto ppq = pos->getPpqPosition();
             tr.playing = pos->getIsPlaying() && ppq.hasValue();   // (no position: as stopped)
             if (ppq) tr.ppq = *ppq;
-            if (const auto bpm = pos->getBpm()) tr.bpm = *bpm;
+            if (const auto bpm = pos->getBpm()) tr.bpm = *bpm, hostBpm_.store(*bpm, std::memory_order_release);
             if (const auto loop = pos->getLoopPoints(); loop && pos->getIsLooping())
                 tr.looping = true, tr.loopStart = loop->ppqStart, tr.loopEnd = loop->ppqEnd;
         }
@@ -497,25 +531,8 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     access_.audioExit();
 }
 
-// ---- a placeholder window until the panel (plan Task 7)
-namespace {
-class PlaceholderEditor : public juce::AudioProcessorEditor {
-public:
-    explicit PlaceholderEditor(Processor& p) : juce::AudioProcessorEditor(p) { setSize(480, 160); }
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(juce::Colour(0xff1b1b1b));
-        g.setColour(juce::Colour(0xffe8e2d4));
-        g.setFont(juce::FontOptions(28.0f, juce::Font::bold));
-        g.drawText(JucePlugin_Name, getLocalBounds().removeFromTop(90), juce::Justification::centred);
-        g.setFont(juce::FontOptions(14.0f));
-        g.drawText("the KNOBI-SIX firmware's engine - play it from MIDI; the panel comes later",
-                   getLocalBounds().removeFromBottom(70), juce::Justification::centred);
-    }
-};
-} // namespace
-
-juce::AudioProcessorEditor* Processor::createEditor() { return new PlaceholderEditor(*this); }
+// ---- the panel (plan Task 7; src/ui/Editor.h)
+juce::AudioProcessorEditor* Processor::createEditor() { return new ui::Editor(*this); }
 
 } // namespace knobi
 

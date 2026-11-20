@@ -9,8 +9,12 @@ bank select + program change); every sound parameter is a Live parameter (73: au
 program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
 edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate); the
 500-program bank is shared by every instance through one library file (plan Task 6: WRITE / RESTORE FACTORY are there
-for the panel; the globals). Not yet: panel (Task 7; the window is a placeholder, so WRITE has no button yet), sequencer
-grid (Task 8).
+and on the panel; the globals); the window is the OB-6-style panel (plan Task 7, below). Not yet: the sequencer grid
+and SEQ REC step entry (Task 8; the panel has their place).
+
+> **AU recommended in Live.** The VST3 works, but JUCE's VST3 wrapper reports program loads and CC changes to Live in
+> a way Live may record as automation (or that switches a parameter's automation off), and it cannot tell Live that
+> program names changed (see "Checking it in Live", point 10, and "The library file"). The AU has neither problem.
 
 ## Build
 
@@ -78,7 +82,8 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 
 ## Checking it in Live (by hand, not automated)
 
-1. Drop KNOBI-SIX (AU or VST3) on a MIDI track; its window opens (a placeholder until the panel).
+1. Drop KNOBI-SIX (AU or VST3) on a MIDI track; its window opens: the panel (below). Turn a knob: Live's parameter
+   follows (and the other way round: automation moves the knob).
 2. Play notes from a keyboard or a clip: a held chord, the mod wheel, pitch bend, sustain. It should sound like the
    keyboard's init program, six voices.
 3. Change the session rate (Settings → Audio: 44.1, 48, 88.2, 96 kHz): it keeps the pitch and sounds the same.
@@ -92,7 +97,7 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 7. Programs: the device's program menu lists `000 INIT` … `499 INIT` (the default build); choosing one loads it. A MIDI
    program change in a clip changes it too.
 8. Save the set with an edited sound, close, reopen: the same sound (program number, values, sequence) comes back.
-9. The clock from Live (the arp with a chord held, or a sequence playing: SEQ PLAY comes with the panel, Task 7/8):
+9. The clock from Live (the arp with a chord held, or a sequence playing: SEQ PLAY on the panel):
    press play from bar 1, from the middle of a bar, loop 1 or 2 bars, jump around while playing, automate the tempo:
    the steps stay on Live's grid next to a drum clip, a loop's wrap plays the loop start's step, no note hangs. Stop
    Live: the sequence stops (SEQ PLAY stays on, armed: the next play starts it on the song's step); the arp still plays
@@ -105,6 +110,45 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
    change and no gesture; for AU, JUCE's notification is the one Live and Logic are reported not to record; for VST3 it
    is a `performEdit` without `beginEdit`, which Live is reported to record while recording. If it does, prefer the AU
    in Live.
+
+## The panel
+
+![The panel at 100 %](docs/panel-100.png)
+
+(`docs/panel-100.png`, `docs/panel-200.png`, `docs/panel-globals.png`: rendered by the `panel_screenshots` test,
+`build/plugin/tests/test_editor panel_screenshots plugin/docs`.) After the approved mockups
+(`docs/design/standalone-ui/panel-style-v2.html`, `sections-v2.html`): every section at once, in the panel's order —
+VCO 1, VCO 2, MIXER, FILTER, ENVELOPES; LFO, X-MOD, AFTERTOUCH, MISC; PROGRAM, EFFECTS (distortion), ARPEGGIATOR,
+CLOCK; SEQUENCER. Every Live parameter has exactly one control: knobs (drag up / down or sideways, double-click: the
+default; the value shows while dragging), red pads for switches (lit = on), red LED lists for choices (click one), the
+BPM on a red display (drag up / down).
+
+- **Size**: drag the window's corner: 100 % (1280 × 760, fits a 1440-wide screen) to 200 %, the layout scaled as a whole.
+  The instance remembers the size while it is loaded.
+- **PROGRAM**, as the keyboard: two digit pads = tens then ones in the bank shown; BANK then 0–4 = the same number in
+  that bank; `<` `>` step. Loading a program drops the edit buffer (as on the keyboard: WRITE first). Lights: EDITED
+  (changed since loaded), DIFFERS FROM BANK (not what the bank holds for this number — an edit, an older set's copy, or
+  another instance's WRITE since), USER SLOT (the slot holds a WRITE; else the factory program).
+- **WRITE**: press WRITE (lit, the number blinks), choose the slot with BANK / digits / `<` `>` (nothing loads), press
+  WRITE again; CANCEL leaves. The message line says what happened: "PROGRAM 045 STORED"; "STORED IN 045; THE INSTANCE
+  MOVED ON TO PROGRAM 7" (a program change arrived while the file was written: the slot has what you wrote, the
+  instance plays the newer load); "LIBRARY FROM A NEWER VERSION - NOT WRITTEN"; "WRITE FAILED - NOTHING CHANGED".
+  If the library file could not be read (a red notice at the top), the first WRITE asks first: the unreadable file is
+  kept as `library.knobi.bad-<date-time>` beside it, then a new library is written.
+- **RESTORE FACTORY**: the factory program of the number in play into the edit buffer (edited); nothing is stored
+  until WRITE (which then empties the slot: the factory program again).
+- **CLOCK**: the BPM display shows the program's BPM; greyed, showing Live's tempo, while Live plays (the clock follows
+  Live). DIVISION: the step length of the arp and the sequencer.
+- **SEQUENCER**: SEQ PLAY (lit when on) and the state: OFF, WAITING FOR LIVE (on, Live stopped: it starts on Live's
+  play), PLAYING. SEQ REC and the 64-step grid come with plan Task 8 (shown, not active yet).
+- **GLOBALS** (top right): master tune (cents), transpose (semitones), velocity and aftertouch curves, stereo / mono —
+  kept in the library file, so every instance follows.
+- Font: the mockups' *Arial Rounded MT Bold*, a macOS system font, asked for by name at run time; nothing is embedded
+  (no font file in this repository or the bundles). The red displays are drawn segment by segment.
+- The panel never calls the core: it reads and writes Live's parameters and the processor's own API. It polls them on
+  a 15 Hz timer of the message thread (no listener on the parameters: the AU / VST3 wrappers call parameter listeners
+  on the audio thread during automation, and JUCE's attachments would post messages from there), so the audio thread
+  never waits for, or allocates for, the panel (test `panel_rt`).
 
 ## The library file
 
@@ -187,7 +231,10 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   `params_layout`, `automation_to_core`, `core_to_host`, `state_roundtrip`, `state_bank_changed`, `state_versioned`,
   `rt_params` (automation storms and program loads: no allocation, no lock), `transport_start_bar`,
   `transport_aligned`, `transport_loop`, `transport_loop_tempo`, `transport_locate`, `transport_tempo_ramp`, `transport_stop_internal`,
-  `bpm_param_greyed` (a fake AudioPlayHead), `bundle_exports` (the bundles export none of the firmware's symbols).
+  `bpm_param_greyed` (a fake AudioPlayHead), `bundle_exports` (the bundles export none of the firmware's symbols);
+  `tests/test_editor.cpp` (plan Task 7, the panel made offscreen): `panel_covers_params`, `panel_roundtrip`,
+  `panel_resizable`, `panel_browser`, `panel_write`, `panel_restore`, `panel_clock`, `panel_sequencer`,
+  `panel_globals`, `panel_rt`, `panel_screenshots`.
 - What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
   audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone
   allocators, so `operator new`) and pthread mutexes / rwlocks / `os_unfair_lock`. Not covered: what JUCE's AU / VST3

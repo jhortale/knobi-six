@@ -124,6 +124,24 @@ public:
     // the clock follows the host's transport (Live playing): P_BPM is not used, the panel shows it greyed (plan Task
     // 7). Any thread; as of the last block
     bool followingHost() const { return following_.load(std::memory_order_acquire); }
+    // the host's tempo as of the last block (the panel shows it in place of P_BPM while followingHost())
+    double hostBpm() const { return hostBpm_.load(std::memory_order_acquire); }
+
+    // ---- the panel (plan Task 7; src/ui). It never calls the core: these (and the parameters) are its only way in
+    // SEQ PLAY, as the panel's button (kc_seq_play: recording ends first); through access(). The state as of the last
+    // block (or this call): seqPlaying() the button's state, seqState() 0 stopped / 1 playing / 2 armed (waiting for
+    // Live's play)
+    void seqPlay(bool on);
+    bool seqPlaying() const { return seqPlaying_.load(std::memory_order_acquire); }
+    int seqState() const { return seqState_.load(std::memory_order_acquire); }
+    // the program browser's line: the program in play (number, name, edited) and whether it differs from the bank's
+    // program of its number; one snapshot through access() (the message thread; it may wait for the next block, or
+    // the seam's idle time with no audio running: call it sparingly). false: the instance did not answer
+    struct ProgramInfo { int number = 0; std::string name; bool edited = false, differs = false, user = false; };
+    bool programInfo(ProgramInfo& out);
+    uint32_t bankGeneration() const { return bankGen_.load(std::memory_order_acquire); }   // +1 each bank change
+    // the editor's size (1.0 .. 2.0 of its default), kept while the instance lives (not in the set state)
+    std::atomic<float> editorScale{1.0f};
 
 private:
     void timerCallback() override { syncHost(); }
@@ -165,6 +183,10 @@ private:
     std::array<int32_t, Params::kLimit> lastCore_{};   // the core's values as last scanned (alone with the core)
     std::atomic<int> program_{0};
     std::atomic<bool> programMoved_{false}, edited_{false}, stateDiffers_{false}, following_{false};
+    std::atomic<bool> seqPlaying_{false};
+    std::atomic<int> seqState_{0};
+    std::atomic<double> hostBpm_{120.0};
+    std::atomic<uint32_t> bankGen_{0};
     std::array<juce::String, KC_PROGRAMS> names_;    // (the message thread; filled on first use, cleared by setBank)
     bool namesValid_ = false;
     std::mutex namesLock_;

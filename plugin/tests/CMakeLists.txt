@@ -25,6 +25,17 @@ foreach(t render_44k_bitexact render_48k midi_sample_accurate rt_no_alloc seam s
     add_test(NAME ${t} COMMAND test_plugin ${t})
 endforeach()
 
+# the panel (plan Task 7): the editor offscreen, its components inspected and driven
+add_executable(test_editor test_editor.cpp)
+target_link_libraries(test_editor PRIVATE KnobiSix alloc_hook)
+target_include_directories(test_editor PRIVATE $<TARGET_PROPERTY:KnobiSix,INCLUDE_DIRECTORIES>)
+target_compile_definitions(test_editor PRIVATE $<TARGET_PROPERTY:KnobiSix,COMPILE_DEFINITIONS>)
+target_compile_options(test_editor PRIVATE -O2 -Wno-float-equal -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-conversion)
+foreach(t panel_covers_params panel_roundtrip panel_resizable panel_browser panel_write panel_restore panel_clock
+        panel_sequencer panel_globals panel_rt panel_screenshots)
+    add_test(NAME ${t} COMMAND test_editor ${t})
+endforeach()
+
 add_test(NAME bundle_exports
     COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/check_exports.sh" "$<TARGET_FILE:knobi_core>"
             "$<TARGET_FILE:KnobiSix_AU>" "$<TARGET_FILE:KnobiSix_VST3>")
