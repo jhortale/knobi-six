@@ -82,9 +82,10 @@ PROBE = False                       # --probe-cpu1 (main): the CPU1 probe build 
 FACTORY_H = FW / "gen" / "factory_bank.h"   # the user's own imported OB-6 bank (never committed, never published)
 
 
-# Test-only macros: a release build refuses them in DINGHY_DEFS (the host tests, the emulator hooks, the probes).
+# Test-only macros: a release build refuses them in DINGHY_DEFS (the host tests, the emulator hooks, the probes, and
+# the plugin's core build: KNOBI_CORE, CLOCK_HOST -- firmware/src/core/knobi_core.c; never on the device).
 TEST_DEFS = re.compile(r"-D(KNOBI_\w*(TEST|PROBE)\w*|KNOBI_CPU1|KNOBI_NO_FACTORY|KNOBI_WRITE_(SLICED|NOFADE)|"
-                       r"DINGHY_\w+|FELUCCA_OTA_(DRYRUN|RAMONLY))\b")
+                       r"KNOBI_CORE|CLOCK_HOST|DINGHY_\w+|FELUCCA_OTA_(DRYRUN|RAMONLY))\b")
 
 
 def defs_guard(release, defs=None):

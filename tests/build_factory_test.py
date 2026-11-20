@@ -109,7 +109,8 @@ with tempfile.TemporaryDirectory() as td:
 import os  # noqa: E402
 
 for d in ("-DKNOBI_CPU1_TEST=1", "-DKNOBI_SEQ_TEST", "-DKNOBI_PROBE_TEST=1", "-DDINGHY_HOST", "-DKNOBI_CPU1_PROBE=1",
-          "-DKNOBI_NO_FACTORY", "-DKNOBI_CPU1=1", "-DFELUCCA_OTA_DRYRUN=1"):
+          "-DKNOBI_NO_FACTORY", "-DKNOBI_CPU1=1", "-DFELUCCA_OTA_DRYRUN=1", "-DKNOBI_CORE=1", "-DKNOBI_CORE",
+          "-DCLOCK_HOST=1", "-DCLOCK_HOST"):
     try:
         build.defs_guard("1.0", "-DFELUCCA_UAC=0 " + d)
         check(False, f"release with {d}: refused")
