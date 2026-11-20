@@ -67,6 +67,18 @@
  *   core_no_stuck_notes   a tied sequence across loop wraps, locates, a stop and a restart (stopped with SEQ PLAY on: no
  *                         note until the host plays, then the song's step); the arp with a chord across
  *                         a loop, a locate and a stop: every note-on has its note-off, the output silent at the end
+ * The sequence on the panel (plan Task 8):
+ *   core_seq_set_get      kc_seq_get / set: a set sequence comes back, edited, the version moved; the same one again does
+ *                         nothing; sequences the firmware would not store refused (tie at step 1 / after a rest, 7
+ *                         notes, a note below 12, a velocity above 127, 65 steps); a set program waiting: its sequence;
+ *                         recording: refused
+ *   core_seq_rec_equiv    the step entry: the same notes (MIDI in), INC and DEC given to the firmware's recorder
+ *                         (ui/seq_rec.h) and to the core give the same sequence, edited exactly when it changed (chords,
+ *                         rests, ties, DEC first, DEC under a tied chord, 7 notes, out of range, the 64-step end)
+ *   core_seq_rec_buttons  the panel's REST / TIE / BACK (TIE with nothing held ties the last step; refused at step 1 and
+ *                         after a rest; REST refused with a note held); SEQ REC held while playing + a MIDI note: a
+ *                         transpose (the note not played), tapped: stop and record
+ *   core_seq_edit_playing 40 sequences set while it plays: the step shown inside the sequence; stopped: no stuck note
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
 #include <stdio.h>
@@ -1475,6 +1487,278 @@ static void core_no_stuck_notes(void)
     kc_destroy(k);
 }
 
+/* ---- the sequence on the panel (plugin plan Task 8): kc_seq_get / set, the step entry, edits while playing */
+static seq_t sq_demo(int len, int base)
+{
+    seq_t s;
+    seq_clear(&s);
+    for (int i = 0; i < len; i++) {
+        uint8_t n[3] = {(uint8_t)(base + i % 12), (uint8_t)(base + 4 + i % 12), (uint8_t)(base + 7 + i % 12)};
+        uint8_t v[3] = {100, 90, 80};
+        if (i % 5 == 3) seq_rec_rest(&s);
+        else if (i % 5 == 4 && s.step[s.len - 1].count) seq_rec_tie(&s);
+        else seq_rec_step(&s, n, v, 1 + i % 3);
+    }
+    return s;
+}
+static void sq_render(kc_t *k, uint32_t frames)
+{
+    while (frames) {
+        uint32_t n = frames > 2048u ? 2048u : frames;
+        kc_render(k, tr_buf, n);
+        frames -= n;
+    }
+}
+static void sq_load(kc_t *k, const seq_t *s)
+{
+    program_t p;
+    int32_t num;
+    kc_program_get(k, &num, &p, NULL, NULL);
+    p.v[P_CLK_DIV] = CLK_DIV_16TH;
+    CHECK(kc_program_set(k, 0, &p, s, 0) == 0);
+    sq_render(k, 512);
+}
+
+/* kc_seq_get / kc_seq_set: a set sequence comes back, the program edited, the version moved; the same again: 1,
+ * nothing (not edited); refused (-1, nothing changed): a tie at step 1, a tie after a rest, 7 notes, a note below 12, a
+ * velocity above 127, a length above 64; a kc_program_set still waiting: its sequence replaced (edited); recording:
+ * -2 */
+static void core_seq_set_get(void)
+{
+    kc_t *k = kc_create();
+    seq_t a = sq_demo(20, 48), b = sq_demo(7, 60), got, bad;
+    int ed = -1, rc, refused = 0, unchanged = 1;
+    uint32_t v0;
+    sq_load(k, &a);
+    kc_seq_get(k, &got);
+    CHECK(memcmp(&got, &a, sizeof a) == 0);
+    kc_program_get(k, NULL, NULL, NULL, &ed);
+    CHECK(ed == 0);
+    rc = kc_seq_set(k, &a);
+    kc_program_get(k, NULL, NULL, NULL, &ed);
+    printf("core_seq_set_get: the same sequence: rc %d (want 1), edited %d (want 0)\n", rc, ed);
+    CHECK(rc == 1 && ed == 0);
+    v0 = kc_seq_version(k);
+    rc = kc_seq_set(k, &b);
+    kc_seq_get(k, &got);
+    kc_program_get(k, NULL, NULL, NULL, &ed);
+    printf("core_seq_set_get: another: rc %d, comes back %d, edited %d, version moved %d\n", rc,
+           memcmp(&got, &b, sizeof b) == 0, ed, kc_seq_version(k) != v0);
+    CHECK(rc == 0 && memcmp(&got, &b, sizeof b) == 0 && ed == 1 && kc_seq_version(k) != v0);
+    for (int c = 0; c < 6; c++) {
+        bad = b;
+        if (c == 0) bad.step[0].tie = 1;
+        if (c == 1) bad.step[4].tie = 1;                 /* (step 4 follows sq_demo's rest at 3) */
+        if (c == 2) bad.step[0].count = 7;
+        if (c == 3) bad.step[1].notes[0] = 11;
+        if (c == 4) bad.step[2].vels[0] = 128;
+        if (c == 5) bad.len = 65;
+        v0 = kc_seq_version(k);
+        refused += kc_seq_set(k, &bad) == -1;
+        kc_seq_get(k, &got);
+        unchanged &= memcmp(&got, &b, sizeof b) == 0 && kc_seq_version(k) == v0;
+    }
+    printf("core_seq_set_get: invalid sequences refused %d / 6, nothing changed %d\n", refused, unchanged);
+    CHECK(refused == 6 && unchanged);
+    {                                                    /* a set program not taken yet (a block not rendered) */
+        program_t p;
+        program_init(&p);
+        CHECK(kc_program_set(k, 7, &p, &a, 0) == 0);
+        rc = kc_seq_set(k, &b);
+        kc_seq_get(k, &got);
+        kc_program_get(k, NULL, NULL, NULL, &ed);
+        const int pend = memcmp(&got, &b, sizeof b) == 0 && ed == 1;
+        sq_render(k, 1024);
+        kc_seq_get(k, &got);
+        kc_program_get(k, NULL, NULL, NULL, &ed);
+        printf("core_seq_set_get: with a program set: rc %d, its sequence replaced, edited %d; after the load %d\n", rc,
+               pend, memcmp(&got, &b, sizeof b) == 0 && ed == 1);
+        CHECK(rc == 0 && pend && memcmp(&got, &b, sizeof b) == 0 && ed == 1);
+    }
+    kc_seq_rec(k, 1);
+    rc = kc_seq_set(k, &a);
+    kc_seq_get(k, &got);
+    printf("core_seq_set_get: recording: rc %d (want -2), unchanged %d\n", rc, memcmp(&got, &b, sizeof b) == 0);
+    CHECK(rc == -2 && memcmp(&got, &b, sizeof b) == 0);
+    kc_seq_rec(k, 0);
+    CHECK(kc_seq_set(k, &a) == 0);
+    kc_destroy(k);
+}
+
+/* the step entry: the same inputs to the firmware's recorder (ui/seq_rec.h, a seqrec_t of the test's own on a copy of
+ * the old sequence) and to the core (MIDI notes in through kc_midi, each in its block; INC / DEC: kc_seq_rec_inc / dec;
+ * SEQ REC on / off) give the same sequence, edited exactly when the recorder changed it */
+static seq_t sq_ref;
+static int sq_muts;
+static seq_t *sq_mut(void) { sq_muts++; return &sq_ref; }
+typedef struct { char op; uint8_t note, vel; } sq_op_t;   /* 'n' a note (vel 0: off), 'i' INC, 'd' DEC */
+static int sq_script(const char *name, const sq_op_t *ops, int n, int *on_after)
+{
+    kc_t *k = kc_create();
+    seq_t old = sq_demo(5, 50), got;
+    seqrec_t r;
+    int ed = -1, ok;
+    sq_load(k, &old);
+    sq_ref = old, sq_muts = 0;
+    seqrec_start(&r, sq_mut);
+    kc_seq_rec(k, 1);
+    for (int i = 0; i < n; i++) {
+        if (ops[i].op == 'n') {
+            uint8_t m[3] = {(uint8_t)(ops[i].vel ? 0x90 : 0x80), ops[i].note, ops[i].vel};
+            seqrec_note(&r, ops[i].note, ops[i].vel);
+            kc_midi(k, m, 3);
+            sq_render(k, 256);
+        } else if (ops[i].op == 'i') { seqrec_inc(&r); kc_seq_rec_inc(k); }
+        else if (ops[i].op == 'd') { seqrec_dec(&r); kc_seq_rec_dec(k); }
+    }
+    if (on_after) *on_after = (kc_seq_rec_state(k) & KC_REC_ON) != 0 && r.on;
+    if (on_after && !r.on) *on_after = -((kc_seq_rec_state(k) & KC_REC_ON) != 0);   /* (r ended: 0 if the core did too) */
+    seqrec_stop(&r);
+    kc_seq_rec(k, 0);
+    kc_seq_get(k, &got);
+    kc_program_get(k, NULL, NULL, NULL, &ed);
+    ok = memcmp(&got, &sq_ref, sizeof got) == 0 && ed == (sq_muts > 0);
+    printf("core_seq_rec_equiv: %-26s length %2u (recorder %2u), same %d, edited %d (recorder changed it %d)\n", name,
+           got.len, sq_ref.len, memcmp(&got, &sq_ref, sizeof got) == 0, ed, sq_muts > 0);
+    kc_destroy(k);
+    return ok;
+}
+#define N(n, v) {'n', n, v}
+static void core_seq_rec_equiv(void)
+{
+    static const sq_op_t a[] = {N(60, 100), N(60, 0), N(62, 90), N(64, 80), N(62, 0), N(64, 0), {'i', 0, 0},
+                                N(67, 70), {'i', 0, 0}, {'i', 0, 0}, N(67, 0), {'d', 0, 0}, N(5, 50), N(5, 0),
+                                N(72, 127), N(74, 1), N(72, 0), N(76, 64)};   /* (stopped with 74, 76 held) */
+    static const sq_op_t b[] = {{'d', 0, 0}, N(70, 0)};                   /* nothing recorded: as it was */
+    static const sq_op_t c[] = {N(60, 100), {'i', 0, 0}, {'d', 0, 0}, {'d', 0, 0}, N(60, 0), {'i', 0, 0},
+                                N(61, 30), {'i', 0, 0}, {'d', 0, 0}, {'i', 0, 0}, N(61, 0)};   /* DEC under a tied chord */
+    static const sq_op_t d[] = {N(48, 10), N(50, 20), N(52, 30), N(53, 40), N(55, 50), N(57, 60), N(59, 70), N(48, 80),
+                                N(48, 0), N(50, 0), N(52, 0), N(53, 0), N(55, 0), N(57, 0), N(59, 0), N(109, 9),
+                                N(109, 0), {'i', 0, 0}, N(108, 127), N(12, 1), N(108, 0), N(12, 0)};   /* 6 kept */
+    sq_op_t full[140];
+    int nf = 0, on = 1;
+    for (int i = 0; i < 66; i++) {                      /* 64 entries end it; the rest are not recorded */
+        if (i % 3 == 2) full[nf++] = (sq_op_t){'i', 0, 0};
+        else full[nf++] = (sq_op_t){'n', (uint8_t)(40 + i), 100}, full[nf++] = (sq_op_t){'n', (uint8_t)(40 + i), 0};
+    }
+    CHECK(sq_script("notes, chords, rest, ties", a, (int)(sizeof a / sizeof a[0]), NULL));
+    CHECK(sq_script("DEC first: nothing", b, (int)(sizeof b / sizeof b[0]), NULL));
+    CHECK(sq_script("DEC under a tied chord", c, (int)(sizeof c / sizeof c[0]), NULL));
+    CHECK(sq_script("7 notes, out of range", d, (int)(sizeof d / sizeof d[0]), NULL));
+    CHECK(sq_script("64 steps: it ends", full, nf, &on));
+    printf("core_seq_rec_equiv: at 64 steps both recorders ended %d\n", on == 0);
+    CHECK(on == 0);
+}
+#undef N
+
+/* the panel's REST / TIE / BACK: TIE with nothing held ties the last step (refused at step 1, after a rest: nothing
+ * changed, nothing edited); REST refused while a note is held, TIE then = INC (recorded, tied); BACK = DEC. SEQ REC
+ * held while the sequence plays + a MIDI note: a transpose (the note neither played nor recorded), its release does
+ * nothing; tapped: stops and records */
+static void core_seq_rec_buttons(void)
+{
+    kc_t *k = kc_create();
+    seq_t old = sq_demo(4, 50), got;
+    int ed = -1, r1, r2, r3, r4, r5, r6, r7, r8;
+    uint8_t on60[3] = {0x90, 60, 100}, off60[3] = {0x80, 60, 0}, on62[3] = {0x90, 62, 90}, off62[3] = {0x80, 62, 0};
+    sq_load(k, &old);
+    kc_seq_rec(k, 1);
+    r1 = kc_seq_rec_tie(k);                              /* (fresh: step 1) */
+    kc_seq_get(k, &got);
+    kc_program_get(k, NULL, NULL, NULL, &ed);
+    printf("core_seq_rec_buttons: TIE first: %d (want -1), the old sequence kept %d, edited %d; state fresh %d\n", r1,
+           memcmp(&got, &old, sizeof got) == 0, ed, (kc_seq_rec_state(k) & KC_REC_FRESH) != 0);
+    CHECK(r1 == -1 && memcmp(&got, &old, sizeof got) == 0 && ed == 0 && (kc_seq_rec_state(k) & KC_REC_FRESH));
+    kc_midi(k, on60, 3), sq_render(k, 256), kc_midi(k, off60, 3), sq_render(k, 256);
+    r2 = kc_seq_rec_tie(k);                              /* (nothing held: the last step tied) */
+    r3 = kc_seq_rec_rest(k);
+    r4 = kc_seq_rec_tie(k);                              /* (after a rest) */
+    kc_midi(k, on62, 3), sq_render(k, 256);
+    const int held = KC_REC_HELD(kc_seq_rec_state(k));
+    r5 = kc_seq_rec_rest(k);                             /* (a note held) */
+    r6 = kc_seq_rec_tie(k);                              /* (= INC: 62 recorded and tied) */
+    kc_midi(k, off62, 3), sq_render(k, 256);
+    r7 = kc_seq_rec_back(k);
+    kc_seq_get(k, &got);
+    printf("core_seq_rec_buttons: TIE %d REST %d TIE after the rest %d; 62 held (%d held): REST %d TIE %d; BACK %d; "
+           "length %u\n", r2, r3, r4, held, r5, r6, r7, got.len);
+    CHECK(r2 == 1 && r3 == 1 && r4 == -1 && held == 1 && r5 == -1 && r6 == 1 && r7 == 1);
+    CHECK(got.len == 4 && got.step[0].notes[0] == 60 && got.step[1].tie && got.step[1].notes[0] == 60 &&
+          got.step[2].count == 0 && got.step[3].notes[0] == 62 && !got.step[3].tie);
+    kc_seq_rec(k, 0);
+    r8 = kc_seq_rec_rest(k);
+    CHECK(r8 == 0 && kc_seq_rec_state(k) == 0);
+    {                                                    /* transpose: a sequence of rests plays (silent) */
+        seq_t rests;
+        int quiet = 1, rec, playing;
+        uint8_t on65[3] = {0x90, 65, 100}, off65[3] = {0x80, 65, 0};
+        seq_clear(&rests);
+        for (int i = 0; i < 4; i++) seq_rec_rest(&rests);
+        sq_load(k, &rests);
+        kc_seq_play(k, 1);
+        sq_render(k, 8192);
+        kc_seq_rec_button(k, 1);
+        kc_midi(k, on65, 3);
+        sq_render(k, 4096);
+        for (int i = 0; i < 2 * 2048; i++) quiet &= tr_buf[i] == 0;
+        const int xp = kc_seq_xp(k);
+        kc_midi(k, off65, 3);
+        sq_render(k, 512);
+        kc_seq_rec_button(k, 0);
+        rec = kc_seq_rec_state(k), playing = kc_seq_playing(k);
+        printf("core_seq_rec_buttons: SEQ REC held + note 65 while playing: transpose %d (want 5), not played %d; "
+               "released: recording %d (want 0), playing %d\n", xp, quiet, rec, playing);
+        CHECK(xp == 5 && quiet && rec == 0 && playing == 1);
+        kc_seq_rec_button(k, 1);
+        kc_seq_rec_button(k, 0);
+        sq_render(k, 512);
+        rec = kc_seq_rec_state(k), playing = kc_seq_playing(k);
+        printf("core_seq_rec_buttons: tapped while playing: recording %d (want 1), playing %d (want 0)\n", rec & 1,
+               playing);
+        CHECK((rec & KC_REC_ON) && !playing);
+        kc_seq_rec_button(k, 1);                         /* (pressed while recording: ends it) */
+        kc_seq_rec_button(k, 0);
+        CHECK(kc_seq_rec_state(k) == 0);
+    }
+    kc_destroy(k);
+}
+
+/* edits while the sequence plays (the internal clock): 40 sequences of other lengths (0 included), chords, ties and
+ * rests set while it plays; the step reported always inside the sequence; then stopped: every note-on has its
+ * note-off, the output silent */
+static void core_seq_edit_playing(void)
+{
+    kc_t *k = kc_create();
+    seq_t s = sq_demo(16, 40);
+    int bad, left, inside = 1, seen = 0, quiet = 1;
+    sq_load(k, &s);
+    kc_param_set(k, P_BPM, 240);
+    kc_seq_play(k, 1);
+    tr_nn = 0;
+    for (int i = 0; i < 40; i++) {
+        seq_t t = sq_demo((i * 7) % 23, 36 + i % 30);
+        sq_render(k, 1500 + (uint32_t)(i * 97) % 3000);
+        tr_take_notes(k);
+        CHECK(kc_seq_set(k, &t) >= 0);
+        sq_render(k, 256);
+        const int st = kc_seq_step(k);
+        seen += st >= 0;
+        inside &= st < (int)t.len || (t.len == 0 && st == -1) || st == -1;
+    }
+    sq_render(k, 20000);
+    kc_seq_play(k, 0);
+    sq_render(k, 1024);
+    tr_take_notes(k);
+    left = tr_sounding(&bad);
+    sq_render(k, 3u * 44100u);
+    kc_render(k, tr_buf, 2048);
+    for (int i = 0; i < 4096; i++) quiet &= tr_buf[i] == 0;
+    printf("core_seq_edit_playing: %u notes logged; steps shown %d, inside the sequence %d; stopped: %d sounding, %d "
+           "unpaired, silent %d; not playing: step %d\n", tr_nn, seen, inside, left, bad, quiet, kc_seq_step(k));
+    CHECK(tr_nn > 60u && seen > 20 && inside && left == 0 && bad == 0 && quiet && kc_seq_step(k) == -1);
+    kc_destroy(k);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1510,6 +1794,10 @@ int main(void)
     core_transport_tempo_ramp();
     core_transport_stop_internal();
     core_no_stuck_notes();
+    core_seq_set_get();
+    core_seq_rec_equiv();
+    core_seq_rec_buttons();
+    core_seq_edit_playing();
 #endif
     if (fails) { printf("test_core: %d FAILED\n", fails); return 1; }
     printf("test_core: all passed\n");

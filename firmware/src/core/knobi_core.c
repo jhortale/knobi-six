@@ -199,6 +199,8 @@ struct kc {
     kc_note_t notes[KC_LOG];                    /* kc_notes' log */
     uint32_t notes_w, notes_r;
     uint32_t ring_r;                            /* the arp's MIDI out ring read so far (eng_arp.out_w) */
+    uint32_t seq_edits;                         /* kc_seq_set's edits of a kc_program_set still waiting (kc_seq_version) */
+    uint32_t xp_keys[4];                        /* MIDI notes that transposed (SEQ REC held): their note-offs swallowed */
 };
 
 /* the instance k runs on this thread until kc_unbind (every kc_* call that touches the shared code: bound on entry,
@@ -270,6 +272,24 @@ static void kc_pass(kc_t *k)                   /* app.c app_main's pass, without
     eng_wheel(ctl_midi_wheel);                  /* (its mod wheel at rest: 0; the higher of the two) */
 }
 
+/* plugin plan Task 8: a MIDI note while the panel's SEQ REC is held (the sequence playing) is the keyboard's key held
+ * with it (app.c: controls_seq_key, a transpose): swallowed, its note-off too. MIDI in alone never transposes on the
+ * firmware; here Live's notes are the plugin's keys, but only with SEQ REC held (not the UNISON rule: kc_seq_rec_button) */
+static int kc_seq_key(kc_t *k, const uint8_t *m)
+{
+    const uint32_t ty = m[0] & 0xF0u, note = m[1] & 127u, bit = 1u << (note & 31u);
+    uint32_t *x = &k->xp_keys[note >> 5];
+    if ((ty != 0x90u && ty != 0x80u) || (ctl_glob[G_MIDI_CH] && (m[0] & 15u) != ctl_glob[G_MIDI_CH] - 1u)) return 0;
+    if (ty == 0x90u && m[2]) {
+        if (!ctl_rec_xhold || !controls_seq_key((int)note)) return 0;
+        *x |= bit;
+        return 1;
+    }
+    if (!(*x & bit)) return 0;
+    *x &= ~bit;
+    return 1;
+}
+
 /* one internal block of n frames (KC_BLOCK; kc_render_exact: 1..KC_BLOCK) into to[] */
 static void kc_block_n(kc_t *k, int16_t *to, uint32_t n)
 {
@@ -278,6 +298,7 @@ static void kc_block_n(kc_t *k, int16_t *to, uint32_t n)
         const uint8_t *m = k->mq[k->mq_r % KC_MIDI_QUEUE];
         const uint32_t pw = eng_pw;
         const int32_t want = ctl_prog_want;
+        if (kc_seq_key(k, m)) { k->mq_r++; continue; }   /* (SEQ REC held: a transpose, swallowed as app.c does) */
         controls_midi(m[0], m[1], m[2]);
         if (eng_pw != pw || (ctl_prog_want >= 0 && ctl_prog_want != want)) k->loads++;   /* (a program change) */
         kc_track_load(k);
@@ -608,4 +629,124 @@ uint32_t kc_notes(kc_t *k, kc_note_t *out, uint32_t max)
     uint32_t n = 0;
     for (; k->notes_r != k->notes_w && n < max; k->notes_r++) out[n++] = k->notes[k->notes_r % KC_LOG];
     return n;
+}
+
+/* ---- the sequence on the panel (plugin plan Task 8; knobi_core.h). Host only: the firmware's own code, driven as its
+ * keyboard drives it (ui/controls.c) */
+void kc_seq_get(const kc_t *k, seq_t *out)
+{
+    kc_binding_t was = kc_bind(k);
+    *out = kc_pend_live(k) ? k->pend_s : *edit_seq();
+    kc_unbind(was);
+}
+int kc_seq_set(kc_t *k, const seq_t *s)
+{
+    seq_t t;
+    kc_binding_t was;
+    int rc;
+    if (!s || kc_copy_seq(s, &t)) return -1;     /* (the firmware's record format: its limits and tie rules) */
+    was = kc_bind(k);
+    kc_apply_pending(k);
+    if (ctl_rec.on || ctl_rec_arm) rc = -2;      /* (the recorder owns it) */
+    else if (kc_pend_live(k)) {                  /* (a set program waiting: its sequence, edited) */
+        rc = memcmp(&k->pend_s, &t, sizeof t) == 0;
+        if (!rc) k->pend_s = t, k->pend_edited = 1, k->seq_edits++;
+    } else {
+        rc = memcmp(edit_seq(), &t, sizeof t) == 0;
+        if (!rc) *edit_seq_mut() = t;            /* (edited; the player takes it at the next pass: kc_pass) */
+    }
+    kc_unbind(was);
+    return rc;
+}
+uint32_t kc_seq_version(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    uint32_t v = edit_seq_ver() + k->loads + k->seq_edits;   /* (each only grows: the sum moves when one does) */
+    kc_unbind(was);
+    return v;
+}
+int kc_seq_step(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int st = eng_seq_state == 1 && eng_seqp.cur != SEQ_NO_STEP && eng_seqp.cur < eng_seqd.len ? (int)eng_seqp.cur : -1;
+    kc_unbind(was);
+    return st;
+}
+int kc_seq_xp(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int xp = eng_seqp.xp;
+    kc_unbind(was);
+    return xp;
+}
+/* SEQ REC as controls_poll handles BTN_REC (pressed / released), then ctl_seq_poll at once: the recording starts now
+ * (the stop queued first), not at the next block */
+void kc_seq_rec_button(kc_t *k, int down)
+{
+    kc_binding_t was = kc_bind(k);
+    if (down) {
+        if (!ctl_rec.on && !ctl_rec_arm && ctl_seq_on()) ctl_rec_xhold = 1, ctl_rec_xused = 0;
+        else ctl_seq_rec_press(&k->screen);
+    } else if (ctl_rec_xhold) {
+        ctl_rec_xhold = 0;
+        if (!ctl_rec_xused && ctl_seq_on()) ctl_seq_rec_press(&k->screen);
+    }
+    ctl_seq_poll(&eng_edit);
+    kc_unbind(was);
+}
+void kc_seq_rec(kc_t *k, int on)
+{
+    kc_binding_t was = kc_bind(k);
+    ctl_rec_xhold = 0;
+    if ((on != 0) != (ctl_rec.on || ctl_rec_arm)) ctl_seq_rec_press(&k->screen);
+    ctl_seq_poll(&eng_edit);
+    kc_unbind(was);
+}
+int kc_seq_rec_inc(kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int rc = seqrec_inc(&ctl_rec);
+    kc_unbind(was);
+    return rc;
+}
+int kc_seq_rec_dec(kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int rc = seqrec_dec(&ctl_rec);
+    kc_unbind(was);
+    return rc;
+}
+int kc_seq_rec_back(kc_t *k) { return kc_seq_rec_dec(k); }
+int kc_seq_rec_rest(kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int rc = !ctl_rec.on ? 0 : ctl_rec.n || ctl_rec.in ? -1 : seqrec_inc(&ctl_rec);   /* (notes held: INC would tie) */
+    kc_unbind(was);
+    return rc;
+}
+int kc_seq_rec_tie(kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int rc;
+    if (!ctl_rec.on) rc = 0;
+    else if (ctl_rec.n || ctl_rec.in) rc = seqrec_inc(&ctl_rec);   /* (notes held: the keyboard's INC) */
+    else {                                       /* nothing held: the last step tied (seq_rec_tie's rules) */
+        const seq_t *s = edit_seq();
+        if (ctl_rec.fresh || !s->len || s->len >= SEQ_MAX_STEPS || !s->step[s->len - 1].count) rc = -1;
+        else {
+            seq_t *m = seqrec_seq(&ctl_rec);
+            rc = seq_rec_tie(m) < 0 ? -1 : 1;
+            seqrec_full(&ctl_rec, m);
+        }
+    }
+    kc_unbind(was);
+    return rc;
+}
+int kc_seq_rec_state(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int st = ctl_rec.on || ctl_rec_arm ? KC_REC_ON | (ctl_rec.fresh || ctl_rec_arm ? KC_REC_FRESH : 0) |
+                                         seqrec_held(&ctl_rec) << 8 : 0;
+    kc_unbind(was);
+    return st;
 }

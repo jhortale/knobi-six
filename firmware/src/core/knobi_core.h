@@ -165,6 +165,50 @@ KC_API void kc_seq_play(kc_t *k, int on);
 KC_API int kc_seq_playing(const kc_t *k);
 KC_API int kc_seq_state(const kc_t *k);   /* 0 stopped, 1 playing, 2 armed (SEQ PLAY on, waiting: the host stopped or
                                            * the clock not running), as of the last block */
+
+/* The sequence on the panel (plugin plan Task 8: the 64-step grid's mouse editing and the step entry). Host only: these
+ * calls exist in the core alone, the firmware's files are unchanged.
+ * kc_seq_get: the edit buffer's sequence (a kc_program_set the engine has not taken yet: its sequence), steps past
+ * the length zero. kc_seq_set: the sequence as an edit of the edit buffer (params/prog_seq.h edit_seq_mut: the program
+ * is then edited, WRITE stores it), checked through the firmware's record format first (seq_pack / seq_unpack: 64
+ * steps, 6 notes, notes 12..108, velocities 0..127, the tie rules of synth/seq.h). The player takes it at the next
+ * block as it takes any change (engine.c eng_seq_load; seq.h "The player": the notes sounding are its own list, every
+ * note-on gets its note-off, a shorter sequence is followed). 0 set; 1 the same sequence: nothing done (not edited);
+ * -1 refused (not a sequence the firmware would store); -2 refused: recording (or armed) -- the step entry owns it.
+ * kc_seq_version: changes whenever the sequence may have (an edit, a recorded step, a load, a WRITE): cheap, for the
+ * audio thread to publish. kc_seq_step: the step playing (0-based, the one played last), -1 when not playing.
+ * kc_seq_xp: the transpose playing (semitones; 0 none) */
+KC_API void kc_seq_get(const kc_t *k, seq_t *out);
+KC_API int kc_seq_set(kc_t *k, const seq_t *s);
+KC_API uint32_t kc_seq_version(const kc_t *k);
+KC_API int kc_seq_step(const kc_t *k);
+KC_API int kc_seq_xp(const kc_t *k);
+/* Step entry: the firmware's recorder (ui/seq_rec.h) as the keyboard drives it (ui/controls.c), so the same inputs make
+ * the same sequence. MIDI notes in (kc_midi, the channel heard) are recorded while recording, as on the keyboard.
+ * kc_seq_rec_button: the SEQ REC button pressed (down 1) / let go (0), the keyboard's rules: not playing, a press arms
+ * (playing: stopped first; the arp off), a press while recording ends it (a chord still held recorded); while the
+ * sequence plays it acts at its release (stop, then record) unless a MIDI note came while it was held: then that note
+ * transposes (the note - SEQ_XP_CENTER, from the next step; the note and its release are swallowed: neither played
+ * nor recorded) and the release does nothing. kc_seq_rec: on / off directly (on: as a tap; off: ends it). The
+ * recording replaces the sequence at its first entry (lazy clear: ending with none leaves it as it was, unedited);
+ * it ends by itself at 64 steps; SEQ PLAY, a load, ARP ON end it too.
+ * kc_seq_rec_inc / dec: the keyboard's INC (> : a rest, or with notes held: they are recorded and tied) and DEC (< :
+ * the last step erased). The panel's buttons: kc_seq_rec_rest (a rest; -1 refused while notes are held: that is a tie),
+ * kc_seq_rec_tie (notes held: INC; none: the last step tied, seq_rec_tie's rules -- refused at step 1, after a rest, at
+ * 64 steps), kc_seq_rec_back (DEC). Each: 1 the sequence changed, 0 not recording (nothing), -1 refused.
+ * kc_seq_rec_state: 0 not recording; else 1 (recording or armed) | 2 (nothing recorded yet: shown empty) | the notes
+ * held << 8 */
+KC_API void kc_seq_rec_button(kc_t *k, int down);
+KC_API void kc_seq_rec(kc_t *k, int on);
+KC_API int kc_seq_rec_inc(kc_t *k);
+KC_API int kc_seq_rec_dec(kc_t *k);
+KC_API int kc_seq_rec_rest(kc_t *k);
+KC_API int kc_seq_rec_tie(kc_t *k);
+KC_API int kc_seq_rec_back(kc_t *k);
+KC_API int kc_seq_rec_state(const kc_t *k);
+#define KC_REC_ON 1
+#define KC_REC_FRESH 2
+#define KC_REC_HELD(st) ((st) >> 8)
 /* what the clock and the arp / sequencer did (the panel's playing step, the tests): logs of KC_LOG entries since the
  * last call (older ones dropped), read and emptied here. Steps: every clock step event, its internal frame (frames
  * rendered since kc_create), number (the host's grid: the song position's step), kind (synth/clock.h CLK_EV_*, |
