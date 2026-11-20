@@ -8,6 +8,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      deploy_tag:
+        description: 'Redeploy knobi-flash for this existing release tag (e.g. v1.0); empty: a test build only'
+        required: false
+        default: ''
 
 jobs:
   firmware:
@@ -58,10 +63,28 @@ jobs:
           ls -l build/knobi-six-"$V"*.fwsc
           (cd build && sha256sum knobi-six-"$V"*.fwsc > SHA256SUMS)
 
+      - name: Source archive (tags only; the GPL source next to the packages on knobi-flash)
+        if: github.ref_type == 'tag'
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          # the OB-6 factory bank (Sequential's data) is never committed, so it is never in the archive
+          test -z "$(git ls-files firmware/gen/factory_bank.h)"
+          git archive --format=tar.gz --prefix="knobi-six-$V/" -o "build/knobi-six-$V-src.tar.gz" "$GITHUB_REF_NAME"
+
       - uses: actions/upload-artifact@v4
         with:
           name: knobi-six-fwsc
           path: build/knobi-six*.fwsc
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: knobi-six-release
+          path: |
+            build/knobi-six-[0-9]*.fwsc
+            build/SHA256SUMS
+            build/knobi-six-*-src.tar.gz
           if-no-files-found: error
 
       - name: Attest the packages (tags only)
@@ -78,4 +101,73 @@ jobs:
           files: |
             build/knobi-six-[0-9]*.fwsc
             build/SHA256SUMS
+            build/knobi-six-*-src.tar.gz
           generate_release_notes: true
+
+  # knobi-flash: the page, catalog.json, the packages and the source archive, pushed to the public jhortale/knobi-flash
+  # (GitHub Pages). Release tags without '-' only (never a prerelease), or a manual redeploy of an existing tag; every
+  # deploy waits for João's approval in the 'knobi-flash' environment. Setup: docs/WEB_INSTALLER.md.
+  site:
+    needs: firmware
+    if: >-
+      (github.ref_type == 'tag' && !contains(github.ref_name, '-')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_tag != '' && !contains(inputs.deploy_tag, '-'))
+    runs-on: ubuntu-latest
+    environment: knobi-flash
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.deploy_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: The release files (this run's, or the existing release's on a redeploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release
+          if [ "${{ github.ref_type }}" = tag ]; then
+            echo "from this run"
+          else
+            gh release download "$TAG" -D release -p 'knobi-six-*.fwsc' -p SHA256SUMS -p 'knobi-six-*-src.tar.gz'
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: knobi-six-release
+          path: release
+
+      - name: Build the page and the catalog
+        working-directory: web
+        run: |
+          V="${TAG#v}"
+          npm ci
+          npm run build
+          npm test
+          mkdir -p "dist/firmware/knobi-six/$V"
+          mv "../release/knobi-six-$V-src.tar.gz" "dist/firmware/knobi-six/$V/"
+          node scripts/make-catalog.ts --version "$V" --dir ../release --out dist/catalog.json \
+            --files "dist/firmware/knobi-six/$V" --source "firmware/knobi-six/$V/knobi-six-$V-src.tar.gz"
+          cp site/README.md site/LICENSE dist/
+          touch dist/.nojekyll
+
+      - name: Nothing that must never be published
+        run: |
+          bad=$(find web/dist \( -iname '*-local*' -o -iname '*cpu1*' \) -print)
+          if [ -n "$bad" ]; then echo "refused: $bad"; exit 1; fi
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.KNOBI_FLASH_DEPLOY_KEY }}
+          external_repository: jhortale/knobi-flash
+          publish_branch: gh-pages
+          publish_dir: web/dist
+          force_orphan: true
+          commit_message: knobi-flash for KNOBI-SIX ${{ env.TAG }}

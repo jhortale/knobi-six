@@ -13,7 +13,8 @@ magic, data family, IDENT 956): `docs/IDENTITY.md`.
 ## Never install on the keyboard without João
 
 Do not run `tools/fm1_install.py`, do not flash, do not use the USB rescue or `tools/backup/`. Nothing is installed on
-any keyboard. Builds, host tests and CI are fine.
+any keyboard. Builds, host tests and CI are fine. The web installer (`web/`) too: only its simulated keyboard (`?mock`,
+the tests), never a real one.
 
 ## Commands
 
@@ -23,6 +24,7 @@ MODEL=elite sh build.sh; MODEL=mke sh build.sh; sh build.sh    # all three, the 
 sh tests/run_tests.sh                       # host suite (needs a build first)
 tests/run_host.sh SCRIPT                    # the app on the computer, e.g. tests/scripts/diag.txt -> build/host/
 make -C tests unit                          # unit tests, tests/unit/test_*.c (created in Task 1)
+cd web && npm ci && npm run build && npm test   # knobi-flash, the web installer (docs/WEB_INSTALLER.md)
 ```
 
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default

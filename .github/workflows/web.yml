@@ -1,0 +1,39 @@
+# knobi-flash (web/): the protocol port checked against tools/fm1_install.py, the type check, the build and the tests
+# against a simulated keyboard, on every push and pull request that touches it. No JieLi toolchain needed.
+# (release.yml deploys the page on release tags.)
+name: web
+
+on:
+  push:
+    paths: ['web/**', 'tests/web_fixtures.py', 'tools/fm1_install.py', '.github/workflows/web.yml']
+  pull_request:
+    paths: ['web/**', 'tests/web_fixtures.py', 'tools/fm1_install.py', '.github/workflows/web.yml']
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: The fixtures are what tools/fm1_install.py answers today
+        run: python3 ../tests/web_fixtures.py --check test/fixtures/python.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Tests (after the build, so test/dist.test.ts checks the published files)
+        run: npm test

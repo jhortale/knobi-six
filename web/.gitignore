@@ -1,0 +1,5 @@
+node_modules
+# the local test of a release (docs/WEB_INSTALLER.md): never committed, never deployed
+public/catalog.json
+public/firmware/knobi-six/
+dist
