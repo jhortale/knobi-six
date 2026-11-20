@@ -142,8 +142,8 @@ USB rescue). **Package**: the `knobi-six-pro` artifact of the last green `phase3
 named in MEASUREMENTS.md "Phase 3" once the branch is final); a `-local` package (your imported OB-6 bank) only on your
 own keyboard. Run §2 first with it (items 1-12 are unchanged; item 10 now also stores a sequence, below).
 
-**Run on hardware 2026-11-20 (João, SMK-37 Pro): S1-S13 passed, S14 not run**, with the regular `knobi-six-pro`
-package of CI run 44450085801 (the one §2 passed with). Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "Sequencer on
+**Run on hardware 2026-11-20 (João, SMK-37 Pro): S1-S14 passed**, with the regular `knobi-six-pro`
+package of CI run 44450085801 (the one §2 passed with); S14 with a local build of the same commit plus João's imported bank (`knobi-six-local.fwsc`, his keyboard only). Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "Sequencer on
 the device".
 
 Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer screen; SEQ REC arms recording (lit);
@@ -164,7 +164,7 @@ Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer scr
 | S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | pass (Ableton) |
 | S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | pass (Ableton) |
 | S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | sequenced CPU 70 % / PEAK 70 %, held by hand 65 % / 75 %, SHED 0: no extra cost |
-| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | not run (needs a local build) |
+| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | pass (2026-11-20, local build with João's bank): the importer's 3 ambiguous programs (043, 096, 414) and about ten others; ties held, rests silent |
 
 **Not part of the checklist**: `SEQ FULL: NOTHING STORED` needs the store to be full (about 76 KB: 76 full
 64-step six-note sequences, the largest there are; a sequence of 16 single-note steps takes 64 B, so every one of the
