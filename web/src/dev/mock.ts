@@ -2,7 +2,7 @@
 // The dev server's ?mock page: a simulated SMK-37 Pro (stock firmware) and a made-up KNOBI-SIX package, so the page
 // can be clicked through without a keyboard. In the console: knobiMock.unplug(), knobiMock.boot(identity, port).
 import base from "../../catalog/base.json";
-import type { AppDeps } from "../ui/app.ts";
+import type { AppDeps } from "../ui/app.tsx";
 import type { Catalog } from "../catalog/schema.ts";
 import { loadPackage } from "../protocol/package.ts";
 import { FakeKeyboard } from "./fakeDevice.ts";

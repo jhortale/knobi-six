@@ -11,5 +11,7 @@ npm run build        # dist/
 python3 ../tests/web_fixtures.py --out test/fixtures/python.json   # after a change to tools/fm1_install.py
 ```
 
+The page is React + shadcn/ui (Tailwind v4), themed in `src/index.css`; behaviour in `src/ui/installer.ts`.
+
 `src/protocol/` is a port of `tools/fm1_install.py` (GPL-3.0-only, Leo Kuroshita and M. Geisler); keep the two in
 step: `test/fixtures/python.json` is what the Python answers, and CI fails when it is out of date.
