@@ -10,12 +10,17 @@ add_executable(test_plugin test_plugin.cpp)
 target_link_libraries(test_plugin PRIVATE KnobiSix alloc_hook)
 target_include_directories(test_plugin PRIVATE $<TARGET_PROPERTY:KnobiSix,INCLUDE_DIRECTORIES>)
 target_compile_definitions(test_plugin PRIVATE $<TARGET_PROPERTY:KnobiSix,COMPILE_DEFINITIONS>)
+# factory_gating: the bundles' names as this build makes them
+target_compile_definitions(test_plugin PRIVATE "KNOBI_AU_BUNDLE=\"$<TARGET_BUNDLE_DIR:KnobiSix_AU>\""
+                                               "KNOBI_VST3_BUNDLE=\"$<TARGET_BUNDLE_DIR:KnobiSix_VST3>\"")
 target_compile_options(test_plugin PRIVATE -O2 -Wno-float-equal -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-conversion)
 
 foreach(t render_44k_bitexact render_48k midi_sample_accurate rt_no_alloc seam silent_block prepare_keeps_pending
         events_ordered params_layout automation_to_core core_to_host state_roundtrip state_bank_changed
         state_versioned rt_params transport_start_bar transport_aligned transport_loop transport_loop_tempo transport_locate
-        transport_tempo_ramp transport_stop_internal bpm_param_greyed)
+        transport_tempo_ramp transport_stop_internal bpm_param_greyed
+        library_roundtrip library_atomic library_two_writers library_corrupt reload_off_audio_thread
+        library_snapshot_consistent library_write_restore library_globals factory_gating)
     add_test(NAME ${t} COMMAND test_plugin ${t})
 endforeach()
 

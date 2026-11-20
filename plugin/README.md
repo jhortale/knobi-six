@@ -7,8 +7,10 @@ sequencer (`firmware/src/core/knobi_core.h`) inside a [JUCE](https://juce.com) 8
 Status (plan Task 5): it plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the firmware's CC map,
 bank select + program change); every sound parameter is a Live parameter (73: automatable, MIDI-mappable); the host's
 program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
-edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate). Not yet:
-the shared bank library (until Task 6 the bank is the core's own: "INIT" in the default build), panel (Task 7; the window is a placeholder), sequencer grid (Task 8).
+edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate); the
+500-program bank is shared by every instance through one library file (plan Task 6: WRITE / RESTORE FACTORY are there
+for the panel; the globals). Not yet: panel (Task 7; the window is a placeholder, so WRITE has no button yet), sequencer
+grid (Task 8).
 
 ## Build
 
@@ -36,7 +38,8 @@ cmake -S plugin -B build/plugin-local -G Ninja -DCMAKE_BUILD_TYPE=Release -DKNOB
 cmake --build build/plugin-local
 ```
 
-(Until plan Task 6 the factory programs are reachable only by MIDI program change.)
+The factory programs are the bank's programs wherever the library has no WRITE of its own (the program list, MIDI
+program change, RESTORE FACTORY).
 
 ## Identity
 
@@ -103,6 +106,23 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
    is a `performEdit` without `beginEdit`, which Live is reported to record while recording. If it does, prefer the AU
    in Live.
 
+## The library file
+
+`~/Music/KNOBI-SIX/library.knobi` holds what you WRITE: each of the 500 slots is empty (the factory program of this
+build: INIT in the default build) or a full program + sequence in the keyboard's own record format, plus the globals
+(master tune, transpose, velocity and aftertouch curves, stereo / mono; MIDI channel is always omni in the plugin).
+One file for every instance in every set: a WRITE in one instance appears in the others within a quarter of a second
+(each process watches the file). The folder is made on the first WRITE; until then nothing is written anywhere.
+Format and rules: `src/Library.h`.
+
+- Two instances writing at once: both writes land (the file is re-read and written under a lock); the same slot from
+  two places at once: the later one wins.
+- A crash or power loss while writing leaves the previous file (temp file + rename).
+- A file it cannot read (damaged, or written by a newer plugin): the factory programs, a "library unreadable" notice,
+  and the file is not touched. The next WRITE keeps it first as `library.knobi.bad-<date-time>` beside it. A single
+  slot it cannot use: that slot is the factory program (counted in a notice), and its data stays in the file.
+- Back it up by copying the file; delete it to start again from the factory programs.
+
 ## auval
 
 `auval -v aumu Kn6x Jhrt` validates the installed AU (it needs the copy in `~/Library/Audio/Plug-Ins/Components`).
@@ -128,9 +148,16 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   in (JUCE 8 hands a plugin one value per parameter per block). Changes the core makes itself (a MIDI CC, a program
   change, a program load, a set state) are shown in Live's parameters within ~33 ms (a 30 Hz timer on the message
   thread), with no begin / end gesture; the host's echo of such a change never pulls the core back.
-- `src/ProgramBank.*`: the bank as the plugin reads it (program + sequence of any number, names for the program list),
-  through a private scratch core instance with the same bank, so loading is the firmware's own. `Processor::setBank` is
-  where Task 6's library plugs in.
+- `src/ProgramBank.*`: the bank as the plugin reads it (program + sequence of any number, names for the program list,
+  the factory layer alone for RESTORE FACTORY), through a private scratch core instance with the same bank, so loading
+  is the firmware's own.
+- `src/Library.*` (plan Task 6): the library file (format, atomic write under a lock, the watcher thread that reloads
+  it) as immutable snapshots. Each processor takes every snapshot: its bank to ProgramBank and to the playing core
+  (`kc_bank_set`, taken at the core's next call), its globals through `access()`. A replaced snapshot is freed only
+  once `kc_bank_in_use` shows the core has moved on (`Processor::collectBanks`, from the replacing thread and the
+  30 Hz timer; never the audio thread, which holds no reference). `Processor::writeProgram` (WRITE: number and content
+  always agree, also while a program change waits for the engine, `kc_program_pending`), `restoreFactory`, `setGlobal`
+  and the browser's bank / tens / ones are what the panel (Task 7) calls.
 - The clock from Live (plan Task 5; `CoreRunner::transport`, `knobi_core.h` `kc_clock_host`, `synth/clock.h` "The
   host's transport"): each block's tempo, position (ppq), playing and loop points from the AudioPlayHead go to the
   core at the block's first sample (and a loop's wrap inside a block at its own sample). While Live plays the steps are

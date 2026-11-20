@@ -64,7 +64,8 @@ find_package(Threads REQUIRED)
 target_link_libraries(knobi_core PUBLIC Threads::Threads)
 
 # ---- the DSP around it, no JUCE (tested on its own): timeline, sample-accurate events, resampler, the threading seam
-add_library(knobi_dsp STATIC src/CoreRunner.cpp src/Resampler.cpp src/ProgramBank.cpp src/StateCodec.cpp)
+add_library(knobi_dsp STATIC src/CoreRunner.cpp src/Resampler.cpp src/ProgramBank.cpp src/StateCodec.cpp
+            src/Library.cpp)
 target_include_directories(knobi_dsp PUBLIC src)
 target_link_libraries(knobi_dsp PUBLIC knobi_core)
 target_compile_options(knobi_dsp PRIVATE -O2 -Wall -Wextra)

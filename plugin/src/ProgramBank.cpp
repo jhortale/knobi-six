@@ -25,11 +25,23 @@ bool ProgramBank::program(int n, program_t* p, seq_t* s)
 {
     if (n < 0 || n >= (int)KC_PROGRAMS) return false;
     std::lock_guard<std::mutex> g(m_);
+    return read(bank_, n, p, s);
+}
+
+bool ProgramBank::factory(int n, program_t* p, seq_t* s)
+{
+    if (n < 0 || n >= (int)KC_PROGRAMS) return false;
+    std::lock_guard<std::mutex> g(m_);
+    return read(nullptr, n, p, s);
+}
+
+bool ProgramBank::read(const kc_bank_t* bank, int n, program_t* p, seq_t* s)
+{
     if (!scratch_) {
         scratch_ = kc_create();
         if (!scratch_) return false;
     }
-    kc_bank_set(scratch_, bank_);
+    kc_bank_set(scratch_, bank);                  // (every read sets the bank it reads: an old one is never read again)
     // a load is taken by the engine at its next block (engine.c eng_program: one at a time): a frame before (a load
     // still pending is done) and one after (this one is), then the edit buffer is program n as a program change gives it
     int16_t lr[2];
@@ -38,7 +50,7 @@ bool ProgramBank::program(int n, program_t* p, seq_t* s)
     kc_render_exact(scratch_, lr, 1);
     int32_t num = -1;
     kc_program_get(scratch_, &num, p, s, nullptr);
-    return num == n;
+    return num == n && !kc_program_pending(scratch_);
 }
 
 std::string ProgramBank::name(int n)

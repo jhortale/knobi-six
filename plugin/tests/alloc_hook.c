@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* The plugin tests' allocation and lock counter (rt_no_alloc): a dylib linked into the test program, loaded at launch,
  * that interposes (dyld __interpose) the C allocator's entry points and the common locks for the whole process (JUCE,
- * libc++'s operator new, the core). Armed: every call counted, whatever the thread. macOS only. */
+ * libc++'s operator new, the core). Armed: every call counted, whatever the thread; armed for a thread: that thread's.
+ * macOS only. */
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <malloc/malloc.h>
@@ -11,15 +12,33 @@
 
 static atomic_int armed;
 static atomic_long allocs, locks;
+static _Atomic(pthread_t) armed_thread;          /* (pthread_self compared: no thread-local, which may allocate) */
 
 void alloc_hook_arm(int on) { atomic_store(&armed, on); }
+void alloc_hook_arm_thread(int on) { atomic_store(&armed_thread, on ? pthread_self() : (pthread_t)0); }
 long alloc_hook_allocs(void) { return atomic_load(&allocs); }
 long alloc_hook_locks(void) { return atomic_load(&locks); }
-static inline void count(atomic_long *c) { if (atomic_load_explicit(&armed, memory_order_relaxed)) atomic_fetch_add(c, 1); }
+static inline void count(atomic_long *c)
+{
+    pthread_t t = atomic_load_explicit(&armed_thread, memory_order_relaxed);
+    if (atomic_load_explicit(&armed, memory_order_relaxed) || (t && pthread_equal(t, pthread_self())))
+        atomic_fetch_add(c, 1);
+}
 
+#if defined __has_feature
+#if __has_feature(thread_sanitizer)               /* (a ThreadSanitizer build: TSan intercepts these itself; interposing
+                                                   * them too crashes at launch. Nothing counted there: the rt tests
+                                                   * are for the normal build, TSan runs the threading tests) */
+#define ALLOC_HOOK_INERT 1
+#endif
+#endif
+#ifdef ALLOC_HOOK_INERT
+#define INTERPOSE(rep, orig) __attribute__((used)) static const void *unused_##orig = (const void *)(unsigned long)&rep
+#else
 #define INTERPOSE(rep, orig) \
     __attribute__((used)) static const struct { const void *r, *o; } interpose_##orig \
     __attribute__((section("__DATA,__interpose"))) = {(const void *)(unsigned long)&rep, (const void *)(unsigned long)&orig}
+#endif
 
 static void *h_malloc(size_t n) { count(&allocs); return malloc(n); }
 static void *h_calloc(size_t a, size_t b) { count(&allocs); return calloc(a, b); }

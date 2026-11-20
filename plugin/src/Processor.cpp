@@ -15,10 +15,16 @@ Processor::Processor()
     lastCore_.fill(Params::kNone);
     if (runner_.ok()) scanCore();                // (no thread has the instance yet: the init program's values)
     params_.discardToHost();                      // (they are the defaults, as the parameters were made)
+    // the shared library (Library.h): its bank and globals now, its later snapshots as they come
+    attachLibrary(Library::shared(Library::defaultPath()), true);
     if (startHostSyncTimer.load()) startTimerHz(30);  // the core's changes to the host (syncHost), the message thread
 }
 
-Processor::~Processor() { stopTimer(); }
+Processor::~Processor()
+{
+    stopTimer();
+    if (lib_ && listener_) lib_->removeListener(listener_);   // (waits for a call in progress: none after this)
+}
 
 // ---- parameters (Params.h)
 void Processor::scanCore()
@@ -48,6 +54,7 @@ void Processor::applyHostChanges()
 
 void Processor::syncHost()
 {
+    collectBanks();                               // (snapshots the instance has moved on from: freed here)
     params_.syncToHost();
     // a program load the host did not ask for (MIDI program change): AU hosts refresh the preset shown
     // (kAudioUnitProperty_PresentPreset). Not on VST3: JUCE reports it there as a gesture on its "Program" parameter
@@ -60,6 +67,7 @@ void Processor::syncHost()
 void Processor::setCurrentProgram(int index)
 {
     if (index < 0 || index >= (int)KC_PROGRAMS || !runner_.ok()) return;
+    restored_.store(-1);
     // the bank's program + sequence, as a program change loads it (ProgramBank: the same bank, the firmware's loading),
     // read here (not the audio thread) and handed to the core as a load (kc_program_set, not edited): the core reports
     // the new program at once (kc_program_get), even while the engine still takes an earlier load
@@ -91,17 +99,180 @@ const juce::String Processor::getProgramName(int index)
 
 bool Processor::setBank(const kc_bank_t* bank)
 {
-    if (!bank_.setBank(bank)) return false;
-    if (runner_.ok()) kc_bank_set(runner_.core(), bank);   // (any thread, any time: knobi_core.h)
+    {
+        std::lock_guard<std::mutex> b(bankLock_);
+        if (!bank_.setBank(bank)) return false;
+        if (runner_.ok()) kc_bank_set(runner_.core(), bank);   // (any thread, any time: knobi_core.h)
+        if (held_) retired_.push_back(std::move(held_));      // (a caller's bank now: the snapshot released later)
+        collectLocked();
+    }
     std::lock_guard<std::mutex> g(namesLock_);
     namesValid_ = false;
+    return true;
+}
+
+// ---- the library (plan Task 6; Library.h)
+void Processor::attachLibrary(std::shared_ptr<Library> lib) { attachLibrary(std::move(lib), false); }
+
+void Processor::attachLibrary(std::shared_ptr<Library> lib, bool constructing)
+{
+    if (lib_ && listener_) lib_->removeListener(listener_);
+    listener_ = 0;
+    {
+        std::lock_guard<std::mutex> b(bankLock_);
+        libGen_ = 0;                              // (another library: its generations count from its own start)
+    }
+    lib_ = std::move(lib);
+    if (!lib_) return;
+    listener_ = lib_->addListener([this](const std::shared_ptr<const LibrarySnapshot>& s) { onLibrary(s, false); });
+    onLibrary(lib_->snapshot(), constructing);    // (a newer one given meanwhile by the listener wins: generation)
+}
+
+void Processor::onLibrary(const std::shared_ptr<const LibrarySnapshot>& s, bool constructing)
+{
+    if (!s || !takeSnapshot(s)) return;
+    applyGlobals(*s, constructing);
+}
+
+bool Processor::takeSnapshot(const std::shared_ptr<const LibrarySnapshot>& s)
+{
+    {
+        std::lock_guard<std::mutex> b(bankLock_);
+        if (s->generation <= libGen_) return false;   // (older than the one taken: snapshots only move forward)
+        // ProgramBank first: once its setBank returns its scratch instance never reads the old bank (it sets its bank
+        // under its mutex at every read); then the playing instance (taken at its next call)
+        if (!bank_.setBank(&s->bank)) return false;   // (never: the library gives only banks the firmware would store)
+        if (runner_.ok()) kc_bank_set(runner_.core(), &s->bank);
+        if (held_) retired_.push_back(std::move(held_));
+        held_ = s;
+        libGen_ = s->generation;
+        collectLocked();
+    }
+    std::lock_guard<std::mutex> g(namesLock_);
+    namesValid_ = false;
+    return true;
+}
+
+void Processor::applyGlobals(const LibrarySnapshot& s, bool constructing)
+{
+    struct Ctx { kc_t* k; int8_t v[G_COUNT]; } c{runner_.core(), {}};
+    if (!c.k) return;
+    std::memcpy(c.v, s.globals, sizeof c.v);
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        for (int g : Library::kGlobals) kc_global_set(x->k, g, x->v[g]);
+        kc_global_set(x->k, G_MIDI_CH, 0);        // (omni in the plugin: Live routes the MIDI)
+    };
+    if (constructing || tlInProcess) fn(&c);      // (the constructor: no thread has the instance yet)
+    else access_.run(fn, &c);
+}
+
+void Processor::collectLocked()                  // (bankLock_ held; never the audio thread)
+{
+    if (retired_.empty()) return;
+    // kc_bank_in_use asked after the replacing kc_bank_set: a bank it does not name is never read again
+    const kc_bank_t* inUse = runner_.ok() ? kc_bank_in_use(runner_.core()) : nullptr;
+    for (size_t i = retired_.size(); i-- > 0;)
+        if (&retired_[i]->bank != inUse) retired_.erase(retired_.begin() + (long)i);
+}
+
+void Processor::collectBanks()
+{
+    std::lock_guard<std::mutex> b(bankLock_);
+    collectLocked();
+}
+
+size_t Processor::heldBanks()
+{
+    std::lock_guard<std::mutex> b(bankLock_);
+    return (held_ ? 1u : 0u) + retired_.size();
+}
+
+bool Processor::libraryUnreadable()
+{
+    std::lock_guard<std::mutex> b(bankLock_);
+    return held_ && held_->unreadable;
+}
+
+int Processor::libraryBadSlots()
+{
+    std::lock_guard<std::mutex> b(bankLock_);
+    return held_ ? held_->badSlots : 0;
+}
+
+bool Processor::userSlot(int n)
+{
+    if (n < 0 || n >= (int)KC_PROGRAMS) return false;
+    std::lock_guard<std::mutex> b(bankLock_);
+    const kc_bank_t* bank = bank_.bank();         // (set only under bankLock_: alive while it is held)
+    return bank && bank->used[n];
+}
+
+Library::Result Processor::setGlobal(int g, int v)
+{
+    return lib_ ? lib_->setGlobal(g, v) : Library::kIoError;   // (this instance follows through its listener)
+}
+
+int32_t Processor::global(int g)
+{
+    struct Ctx { kc_t* k; int g; int32_t v; } c{runner_.core(), g, 0};
+    if (!c.k) return 0;
+    auto fn = [](void* v) { auto* x = (Ctx*)v; x->v = kc_global_get(x->k, x->g); };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+    return c.v;
+}
+
+void Processor::loadAs(int n, const program_t& p, const seq_t& s, int edited)
+{
+    struct Ctx { Processor* p; int n; const program_t* prog; const seq_t* seq; int edited; } c{this, n, &p, &s, edited};
+    auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
+        auto* x = (Ctx*)v;
+        kc_program_set(x->p->runner_.core(), x->n, x->prog, x->seq, x->edited);
+        x->p->scanCore();
+        x->p->programMoved_.store(false);         // (asked for here)
+    };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+    if (juce::MessageManager::existsAndIsCurrentThread()) params_.syncToHost();
+}
+
+Library::Result Processor::writeProgram(int n)
+{
+    if (!lib_ || !runner_.ok() || tlInProcess) return Library::kIoError;   // (file I/O: never the audio thread)
+    Snapshot s;
+    snapshot(s);                                  // (number and content agree: snapshot())
+    if (n < 0) n = s.number;
+    if (n < 0 || n >= (int)KC_PROGRAMS) return Library::kInvalid;
+    // RESTORE FACTORY then WRITE on the same number, unchanged since: the slot emptied (the factory program again)
+    program_t fp;
+    seq_t fs;
+    const bool factory = restored_.load() == n && s.number == n && bank_.factory(n, &fp, &fs) &&
+                         ProgramBank::same(s.program, s.seq, fp, fs);
+    const Library::Result r = factory ? lib_->clear(n) : lib_->write(n, s.program, s.seq);
+    if (r != Library::kOk) return r;
+    restored_.store(-1);
+    loadAs(n, s.program, s.seq, 0);               // (program n now, as stored: not edited)
+    return Library::kOk;
+}
+
+bool Processor::restoreFactory()
+{
+    if (!runner_.ok() || tlInProcess) return false;
+    Snapshot s;
+    snapshot(s);
+    program_t fp;
+    seq_t fs;
+    if (!bank_.factory(s.number, &fp, &fs)) return false;
+    loadAs(s.number, fp, fs, 1);                  // (edited: nothing stored until WRITE)
+    restored_.store(s.number);
     return true;
 }
 
 // ---- state (StateCodec.h): the message thread, through access()
 void Processor::snapshot(Snapshot& s)
 {
-    struct Ctx { kc_t* k; Snapshot* s; } c{runner_.core(), &s};
+    struct Ctx { kc_t* k; Snapshot* s; int pending; } c{runner_.core(), &s, 0};
     s.number = 0, s.edited = 0;
     program_init(&s.program);
     seq_clear(&s.seq);
@@ -109,9 +280,16 @@ void Processor::snapshot(Snapshot& s)
     auto fn = [](void* v) {                      // (copies only: it may run on the audio thread)
         auto* x = (Ctx*)v;
         kc_program_get(x->k, &x->s->number, &x->s->program, &x->s->seq, &x->s->edited);
+        x->pending = kc_program_pending(x->k);
     };
     if (tlInProcess) fn(&c);
     else access_.run(fn, &c);
+    // a program change the engine has not taken yet: the core reports its number with the previous edit buffer
+    // (kc_program_pending); what that load gives is program number as the bank holds it, unedited -- number and
+    // content always agree here (WRITE, the set state)
+    program_t p;
+    seq_t q;
+    if (c.pending && !tlInProcess && bank_.program(s.number, &p, &q)) s.program = p, s.seq = q, s.edited = 0;
 }
 
 bool Processor::differsFromBank()
@@ -157,6 +335,7 @@ void Processor::setStateInformation(const void* data, int size)
     if (tlInProcess) fn(&c);
     else if (!access_.run(fn, &c)) return;
     if (c.rc != 0) return;
+    restored_.store(-1);
     stateDiffers_.store(differs);
     // the parameters show the loaded program now (the wrappers are restoring state: JUCE's AU and VST3 wrappers send
     // no automation for this and re-read every value afterwards -- VST3 setComponentState: kParamValuesChanged)
