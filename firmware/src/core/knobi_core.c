@@ -227,6 +227,7 @@ static void kc_track_load(kc_t *k)             /* a program load queued since: i
 {
     if (eng_pw == k->base_pw) return;
     k->base = eng_edit, k->base_pw = eng_pw, k->forced_edit = 0;
+    memset(k->xp_keys, 0, sizeof k->xp_keys);   /* (a load ends recording and its hold, as ctl_rec_forget) */
 }
 /* a kc_program_set still waiting is the load in play, unless a program change (ctl_prog_select deferred: ctl_prog_want)
  * came after it: kc_program_set clears ctl_prog_want, so one standing beside k->pend is the later of the two, and wins
@@ -279,9 +280,15 @@ static int kc_seq_key(kc_t *k, const uint8_t *m)
 {
     const uint32_t ty = m[0] & 0xF0u, note = m[1] & 127u, bit = 1u << (note & 31u);
     uint32_t *x = &k->xp_keys[note >> 5];
-    if ((ty != 0x90u && ty != 0x80u) || (ctl_glob[G_MIDI_CH] && (m[0] & 15u) != ctl_glob[G_MIDI_CH] - 1u)) return 0;
+    if (ctl_glob[G_MIDI_CH] && (m[0] & 15u) != ctl_glob[G_MIDI_CH] - 1u) return 0;
+    if (ty == 0xB0u && (m[1] == 120u || m[1] == 123u)) memset(k->xp_keys, 0, sizeof k->xp_keys);   /* (all off: none
+                                                 * owed a swallow any more) */
+    if (ty != 0x90u && ty != 0x80u) return 0;
     if (ty == 0x90u && m[2]) {
-        if (!ctl_rec_xhold || !controls_seq_key((int)note)) return 0;
+        if (!ctl_rec_xhold || !controls_seq_key((int)note)) {
+            *x &= ~bit;                         /* (a note played: an older transpose's lost note-off owes nothing) */
+            return 0;
+        }
         *x |= bit;
         return 1;
     }
@@ -684,7 +691,8 @@ int kc_seq_xp(const kc_t *k)
 void kc_seq_rec_button(kc_t *k, int down)
 {
     kc_binding_t was = kc_bind(k);
-    if (down) {
+    if (down < 0) ctl_rec_xhold = 0;            /* (the panel went away with it held: no tap, no transpose) */
+    else if (down) {
         if (!ctl_rec.on && !ctl_rec_arm && ctl_seq_on()) ctl_rec_xhold = 1, ctl_rec_xused = 0;
         else ctl_seq_rec_press(&k->screen);
     } else if (ctl_rec_xhold) {

@@ -78,7 +78,9 @@
  *   core_seq_rec_buttons  the panel's REST / TIE / BACK (TIE with nothing held ties the last step; refused at step 1 and
  *                         after a rest; REST refused with a note held); SEQ REC held while playing + a MIDI note: a
  *                         transpose (the note not played), tapped: stop and record
- *   core_seq_edit_playing 40 sequences set while it plays: the step shown inside the sequence; stopped: no stuck note
+ *   core_seq_edit_playing 40 sequences set while it plays: the player's step (eng_seqp.cur) inside each new sequence;
+ *                         stopped: no stuck note
+ *   (core_seq_rec_buttons also: the SEQ REC hold dropped, -1; a transposing note whose note-off was lost)
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
 #include <stdio.h>
@@ -1582,6 +1584,17 @@ static void core_seq_set_get(void)
     CHECK(rc == -2 && memcmp(&got, &b, sizeof b) == 0);
     kc_seq_rec(k, 0);
     CHECK(kc_seq_set(k, &a) == 0);
+    {                                                    /* emptied (README): SEQ REC, one entry, BACK, SEQ REC */
+        int e = -1;
+        kc_seq_rec(k, 1);
+        kc_seq_rec_rest(k);
+        kc_seq_rec_back(k);
+        kc_seq_rec(k, 0);
+        kc_seq_get(k, &got);
+        kc_program_get(k, NULL, NULL, NULL, &e);
+        printf("core_seq_set_get: SEQ REC, REST, BACK, SEQ REC: length %u (want 0), edited %d\n", got.len, e);
+        CHECK(got.len == 0 && e == 1);
+    }
     kc_destroy(k);
 }
 
@@ -1719,6 +1732,34 @@ static void core_seq_rec_buttons(void)
         kc_seq_rec_button(k, 1);                         /* (pressed while recording: ends it) */
         kc_seq_rec_button(k, 0);
         CHECK(kc_seq_rec_state(k) == 0);
+        /* the hold dropped (-1: the panel closed with SEQ REC held): no tap, no transpose; a note plays again. And a
+         * transposing note whose note-off was lost: the same note played later is released by its own note-off */
+        uint8_t on70[3] = {0x90, 70, 100}, off70[3] = {0x80, 70, 0};
+        int quiet2 = 1, sounded = 0;
+        kc_seq_play(k, 1);
+        sq_render(k, 2048);
+        kc_seq_rec_button(k, 1);
+        kc_seq_rec_button(k, -1);
+        sq_render(k, 512);
+        const int dropped = kc_seq_rec_state(k) == 0 && kc_seq_playing(k);
+        kc_midi(k, on65, 3);
+        sq_render(k, 2048);
+        for (int i = 0; i < 4096; i++) sounded |= tr_buf[i] != 0;
+        kc_midi(k, off65, 3);
+        kc_seq_rec_button(k, 1);
+        kc_midi(k, on70, 3);                             /* (a transpose: swallowed; its note-off never comes) */
+        sq_render(k, 512);
+        kc_seq_rec_button(k, 0);
+        kc_midi(k, on70, 3);                             /* (later: played) */
+        sq_render(k, 2048);
+        kc_midi(k, off70, 3);                            /* (must release it) */
+        sq_render(k, 3u * 44100u);
+        kc_render(k, tr_buf, 2048);
+        for (int i = 0; i < 4096; i++) quiet2 &= tr_buf[i] == 0;
+        printf("core_seq_rec_buttons: hold dropped (-1): not recording, playing %d, the next note plays %d (transpose "
+               "%d); a lost transposing note-off: the note played later released, silent %d\n", dropped, sounded,
+               kc_seq_xp(k), quiet2);
+        CHECK(dropped && sounded && quiet2);
     }
     kc_destroy(k);
 }
@@ -1740,10 +1781,16 @@ static void core_seq_edit_playing(void)
         sq_render(k, 1500 + (uint32_t)(i * 97) % 3000);
         tr_take_notes(k);
         CHECK(kc_seq_set(k, &t) >= 0);
-        sq_render(k, 256);
+        sq_render(k, 256 + 3000);                        /* (taken, then more than one step: 2756 frames at 240) */
         const int st = kc_seq_step(k);
         seen += st >= 0;
-        inside &= st < (int)t.len || (t.len == 0 && st == -1) || st == -1;
+        {                                                /* the player's own position, not kc_seq_step's (it hides
+                                                          * a step past the end): the step played last is inside */
+            kc_binding_t was = kc_bind(k);
+            if (t.len) inside &= eng_seq_state == 1 && eng_seqp.cur != SEQ_NO_STEP && eng_seqp.cur < t.len &&
+                                eng_seqd.len == t.len;
+            kc_unbind(was);
+        }
     }
     sq_render(k, 20000);
     kc_seq_play(k, 0);

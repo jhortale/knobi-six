@@ -189,7 +189,8 @@ KC_API int kc_seq_xp(const kc_t *k);
  * (playing: stopped first; the arp off), a press while recording ends it (a chord still held recorded); while the
  * sequence plays it acts at its release (stop, then record) unless a MIDI note came while it was held: then that note
  * transposes (the note - SEQ_XP_CENTER, from the next step; the note and its release are swallowed: neither played
- * nor recorded) and the release does nothing. kc_seq_rec: on / off directly (on: as a tap; off: ends it). The
+ * nor recorded) and the release does nothing; down -1: the hold dropped with no action (the panel closed with it
+ * held). kc_seq_rec: on / off directly (on: as a tap; off: ends it). The
  * recording replaces the sequence at its first entry (lazy clear: ending with none leaves it as it was, unedited);
  * it ends by itself at 64 steps; SEQ PLAY, a load, ARP ON end it too.
  * kc_seq_rec_inc / dec: the keyboard's INC (> : a rest, or with notes held: they are recorded and tied) and DEC (< :
