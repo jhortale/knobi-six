@@ -13,6 +13,9 @@ npm test             # protocol, catalog, generator, updater, page; all against 
 npm run build        # dist/ (run npm test after it: test/dist.test.ts checks dist/ has no simulator)
 ```
 
+The page is React with shadcn/ui components (`web/src/components/ui/`, added with `npx shadcn add NAME`) on Tailwind
+CSS v4, themed in `web/src/index.css`; its behaviour is in `web/src/ui/installer.ts`, drawn by `web/src/ui/Page.tsx`.
+
 `web/src/protocol/` is a port of `tools/fm1_install.py`. After any change to the Python, regenerate what it answers
 and port the change: `python3 tests/web_fixtures.py --out web/test/fixtures/python.json`. CI (`.github/workflows/web.yml`)
 fails when the fixtures are out of date, and `web/test/catalog.test.ts` fails when the catalog's port, model-family

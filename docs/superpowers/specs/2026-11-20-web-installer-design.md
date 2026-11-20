@@ -241,3 +241,19 @@ release for the site is a new tag.
 - Vitest's environment setup, the Python fixture script's location (`tests/` or `web/test/fixtures/`).
 - Dependency versions (pin exact versions in `package-lock.json`; only Vite, TypeScript, Vitest, jsdom as dev
   dependencies; no runtime dependencies).
+
+## Amendment, 2026-11-20: the page in React with shadcn/ui (João)
+
+João asked for the page to be React with shadcn/ui, keeping the panel look. What changes:
+
+- `web/src/ui/` is React 19: `installer.ts` holds the page's behaviour as a small store (state + subscribe), `Page.tsx`
+  draws it with shadcn/ui components (Button, Checkbox, RadioGroup, Card, Progress, Alert, AlertDialog, Collapsible,
+  Badge, Label in `web/src/components/ui/`, copied in by the shadcn CLI as shadcn intends), `app.tsx` starts it. The
+  protocol, catalog, Web MIDI, generator and simulated keyboard are unchanged.
+- Styling is Tailwind CSS v4 with shadcn's theme variables set to the KNOBI-SIX panel colours (`web/src/index.css`),
+  always dark.
+- The confirm step is the page's own dialog (shadcn AlertDialog), not the browser's `window.confirm`.
+- This replaces "no runtime dependencies" and "no UI framework": the page now ships React, React DOM, Radix UI,
+  class-variance-authority, clsx, tailwind-merge and lucide-react (all MIT), about 330 KB of JavaScript (105 KB
+  gzipped) instead of 24 KB. Versions are pinned exactly in `web/package.json`.
+
