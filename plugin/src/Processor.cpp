@@ -259,6 +259,19 @@ int32_t Processor::global(int g)
     return c.v;
 }
 
+void Processor::globalsNow(int32_t out[G_COUNT])
+{
+    struct Ctx { kc_t* k; int32_t* out; } c{runner_.core(), out};
+    for (int g = 0; g < G_COUNT; g++) out[g] = GLOB_DEF[g];
+    if (!c.k) return;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        for (int g = 0; g < G_COUNT; g++) x->out[g] = kc_global_get(x->k, g);
+    };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+}
+
 void Processor::loadAs(int n, const program_t& p, const seq_t& s, int edited)
 {
     struct Ctx { Processor* p; int n; const program_t* prog; const seq_t* seq; int edited; } c{this, n, &p, &s, edited};

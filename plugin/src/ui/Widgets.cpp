@@ -89,15 +89,13 @@ public:
 };
 } // namespace
 
-juce::LookAndFeel& Knob::lookAndFeel()
-{
-    static KnobLook look;
-    return look;
-}
+struct Knob::Look {                              // (shared by the knobs alive; gone with the last: never past JUCE)
+    KnobLook look;
+};
 
 Knob::Knob(std::unique_ptr<Binding> b, juce::String label) : Control(std::move(b), std::move(label))
 {
-    slider_.setLookAndFeel(&lookAndFeel());
+    slider_.setLookAndFeel(&look_->look);
     slider_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     slider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     slider_.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);

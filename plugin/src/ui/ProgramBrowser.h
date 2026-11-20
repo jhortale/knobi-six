@@ -26,9 +26,12 @@ namespace knobi::ui {
 class ProgramBrowser final : public juce::Component {
 public:
     explicit ProgramBrowser(Processor& p);
-    // the editor's timer: the program in play, edited; the name and "differs from bank" (a snapshot: when the number,
-    // the edited flag or the bank changed, else once a second; force: now); the blinking while WRITE is armed
-    void refresh(bool force = false);
+    // the editor's timer: the program in play, edited; the name and "differs from bank" (a snapshot through access():
+    // only when the number, the edited flag or the bank changed -- at once -- or a parameter's value changed
+    // (paramChanged: at most once every kParamTicks calls, a change waiting meanwhile is kept); force: now; never on a
+    // timer alone). Repaints only what changed, and the blinking while WRITE is armed
+    static constexpr int kParamTicks = 4;
+    void refresh(bool force = false, bool paramChanged = false);
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -54,6 +57,7 @@ public:
     Pad& confirmYes() { return yes_; }
     Pad& confirmNo() { return no_; }
 
+    uint64_t snapshots() const { return snapshots_; }   // (tests) programInfo calls made by refresh
     static juce::String resultText(Library::Result r, int slot, int nowPlaying);
 
 private:
@@ -76,6 +80,8 @@ private:
     juce::String name_, message_;
     bool messageError_ = false, blinkOn_ = true;
     int lastNumber_ = -1, ticks_ = 0;
+    bool paramPending_ = false;
+    uint64_t snapshots_ = 0;
     bool lastEdited_ = false;
     uint32_t lastGen_ = 0;
     std::array<std::unique_ptr<Pad>, 10> digits_;

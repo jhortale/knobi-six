@@ -173,7 +173,9 @@ GlobalsView::GlobalsView(Processor& p) : p_(p)
 
 void GlobalsView::readAll()
 {
-    for (int g : Library::kGlobals) cache_[g] = p_.global(g);
+    int32_t v[G_COUNT];
+    p_.globalsNow(v);                             // (one call through access())
+    for (int g : Library::kGlobals) cache_[g] = v[g];
     gen_ = p_.bankGeneration();
     for (auto& c : owned_) c->poll();
 }
@@ -345,10 +347,11 @@ void Panel::resized() {}
 
 void Panel::poll(bool force)
 {
-    for (auto* c : controls_) c->poll();
+    bool changed = false;
+    for (auto* c : controls_) changed = c->poll() || changed;
     const bool following = p_.followingHost();
     bpm_->setGreyed(following, following ? juce::String(juce::roundToInt(p_.hostBpm())) : juce::String());
-    browser_.refresh(force);
+    browser_.refresh(force, changed);
     seq_.refresh();
     globals_.refresh();
     juce::String n;
@@ -411,7 +414,8 @@ Editor::~Editor() { stopTimer(); }
 
 void Editor::resized()
 {
-    scale_ = (float)getWidth() / (float)Panel::kWidth;
+    // (the smaller of the two: a host forcing another aspect never clips the panel)
+    scale_ = juce::jmin((float)getWidth() / (float)Panel::kWidth, (float)getHeight() / (float)Panel::kHeight);
     panel_.setTransform(juce::AffineTransform::scale(scale_));
     panel_.setBounds(0, 0, Panel::kWidth, Panel::kHeight);
     p_.editorScale.store(scale_);

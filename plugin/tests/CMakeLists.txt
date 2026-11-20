@@ -32,7 +32,7 @@ target_include_directories(test_editor PRIVATE $<TARGET_PROPERTY:KnobiSix,INCLUD
 target_compile_definitions(test_editor PRIVATE $<TARGET_PROPERTY:KnobiSix,COMPILE_DEFINITIONS>)
 target_compile_options(test_editor PRIVATE -O2 -Wno-float-equal -Wno-sign-conversion -Wno-shorten-64-to-32 -Wno-conversion)
 foreach(t panel_covers_params panel_roundtrip panel_resizable panel_browser panel_write panel_restore panel_clock
-        panel_sequencer panel_globals panel_rt panel_screenshots)
+        panel_sequencer panel_globals panel_rt panel_idle panel_screenshots)
     add_test(NAME ${t} COMMAND test_editor ${t})
 endforeach()
 

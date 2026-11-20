@@ -78,6 +78,7 @@ public:
     // ---- any other thread: fn(ctx) run once, alone with the instance; false: timed out, fn not run
     bool run(Fn fn, void* ctx, int timeoutMs = 2000)
     {
+        runs_.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> side(side_);
         fn_ = fn, ctx_ = ctx;
         req_.store(kPosted, std::memory_order_release);
@@ -109,6 +110,7 @@ public:
     }
 
     uint64_t ranHere() const { return ranHere_; } // (tests) calls the asking thread ran itself
+    uint64_t runs() const { return runs_.load(std::memory_order_relaxed); }   // (tests) run() calls so far
     bool posted() const { return req_.load(std::memory_order_acquire) == kPosted; }   // (tests) a call waits
 
 private:
@@ -121,6 +123,7 @@ private:
     void* ctx_ = nullptr;
     std::mutex side_;
     uint64_t ranHere_ = 0;
+    std::atomic<uint64_t> runs_{0};
     SteadyClock steady_;
     Clock* clock_ = &steady_;
 };

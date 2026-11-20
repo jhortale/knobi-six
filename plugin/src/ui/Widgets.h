@@ -97,8 +97,9 @@ public:
     void paint(juce::Graphics& g) override;
     void simulateUser(int32_t v) override { slider_.setValue((double)v, juce::sendNotificationSync); }
     juce::Slider& slider() { return slider_; }
-    static juce::LookAndFeel& lookAndFeel();
 private:
+    struct Look;
+    juce::SharedResourcePointer<Look> look_;      // (declared before slider_: outlives its use)
     void show(int32_t v) override { slider_.setValue((double)v, juce::dontSendNotification); }
     void sliderValueChanged(juce::Slider*) override;
     void sliderDragStarted(juce::Slider*) override;
@@ -111,8 +112,16 @@ class Switch final : public Control {
 public:
     Switch(std::unique_ptr<Binding> b, juce::String label);
     void paint(juce::Graphics& g) override;
-    void mouseDown(const juce::MouseEvent&) override { userSet(shown_ ? 0 : 1); }
-    void simulateUser(int32_t v) override { if ((v != 0) != (shown_ != 0)) userSet(v ? 1 : 0); }
+    void mouseDown(const juce::MouseEvent&) override
+    {
+        if (shown_ == INT32_MIN) poll();          // (not shown yet: toggle the parameter's own value)
+        userSet(shown_ ? 0 : 1);
+    }
+    void simulateUser(int32_t v) override
+    {
+        if (shown_ == INT32_MIN) poll();
+        if ((v != 0) != (shown_ != 0)) userSet(v ? 1 : 0);
+    }
     juce::Rectangle<float> padArea() const;
 private:
     void show(int32_t) override { repaint(); }

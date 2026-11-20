@@ -33,6 +33,10 @@
 //   panel_rt              an audio thread renders (its own allocations and locks counted) while the editor polls and
 //                         the user moves controls, loads programs and presses SEQ PLAY: no allocation, no lock on the
 //                         audio thread
+//   panel_idle            (fix round 1) nothing changing: 60 polls make no access() call (no snapshot, the message
+//                         thread never waits for the audio thread); a parameter edit while "edited" stays set (after
+//                         RESTORE FACTORY) updates "differs from bank" within ProgramBrowser::kParamTicks polls, both
+//                         ways; an unpolled switch toggles from the parameter's own value
 //   panel_screenshots     the panel rendered at 100 % and 200 % to PNG (argv[2]: the directory; default a temporary
 //                         one): non-empty images of the right size
 // Every library file is in a temporary directory, never ~/Music.
@@ -598,7 +602,8 @@ static void panel_rt()
     while (!armed) std::this_thread::yield();
     const auto t0 = std::chrono::steady_clock::now();
     int i = 0;
-    while (std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(400)) {
+    // (by count, not time: a slow or background-QoS machine runs the same work)
+    while ((blocks < 200 || i < 300) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(60)) {
         auto& ctl = ed->panel().controls();
         ctl[(size_t)(i % (int)ctl.size())]->simulateUser(i % 3);
         ed->poll(i % 10 == 0);
@@ -611,7 +616,53 @@ static void panel_rt()
     audio.join();
     std::printf("panel_rt: %ld blocks while the panel made %d edits / polls: audio thread allocations %ld, locks %ld\n",
                 blocks.load(), i, allocs.load(), locks.load());
-    CHECK(blocks > 100 && allocs == 0 && locks == 0);
+    CHECK(blocks >= 200 && i >= 300 && allocs == 0 && locks == 0);
+}
+
+static void panel_idle()
+{
+    Processor p;
+    Host h(p);
+    p.setCurrentProgram(30);
+    h.run(4);
+    auto ed = makeEditor(p);
+    auto& b = ed->panel().browser();
+    ed->poll(true);
+    const uint64_t r0 = p.access().runs(), s0 = b.snapshots();
+    for (int i = 0; i < 60; i++) ed->poll();
+    const uint64_t idleRuns = p.access().runs() - r0, idleSnaps = b.snapshots() - s0;
+    // edited stays set (RESTORE FACTORY: forced), the edit decides "differs"
+    b.restorePad().press();
+    h.run(2);
+    ed->poll();
+    const bool start = b.editedLit() && !b.differsLit();
+    auto* reso = p.params().byId(P_FLT_RESO);
+    const int32_t was = p.params().hostValue(P_FLT_RESO);
+    auto pollUntil = [&](bool want) {
+        for (int i = 0; i <= ProgramBrowser::kParamTicks; i++) {
+            ed->poll();
+            if (b.differsLit() == want) return i;
+        }
+        return -1;
+    };
+    reso->param->setValueNotifyingHost(Params::toNormalised(reso->info, was + 50));
+    h.run(2);
+    const int on = pollUntil(true);
+    const bool editedOn = b.editedLit();
+    reso->param->setValueNotifyingHost(Params::toNormalised(reso->info, was));
+    h.run(2);
+    const int off = pollUntil(false);
+    // a switch never polled toggles the parameter's value (on -> off), not from "unknown"
+    auto* kb = p.params().byId(P_VCO2_KEYBOARD);
+    Switch sw(std::make_unique<ParamBinding>(*kb), "KEYBOARD");
+    const bool wasOn = p.params().hostValue(P_VCO2_KEYBOARD) == 1;
+    sw.mouseDown(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), {}, {}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                  &sw, &sw, juce::Time(), {}, juce::Time(), 1, false));
+    const bool toggled = wasOn && p.params().hostValue(P_VCO2_KEYBOARD) == 0;
+    std::printf("panel_idle: 60 idle polls: %llu access() calls, %llu snapshots; restored: edited, not differing %d; an "
+                "edit: differs after %d polls (edited %d), undone: not after %d polls; unpolled switch toggled %d\n",
+                (unsigned long long)idleRuns, (unsigned long long)idleSnaps, start, on, editedOn, off, toggled);
+    CHECK(idleRuns == 0 && idleSnaps == 0 && start && on >= 0 && editedOn && off >= 0 && toggled);
 }
 
 static void panel_screenshots()
@@ -677,7 +728,7 @@ int main(int argc, char** argv)
         {"panel_covers_params", panel_covers_params}, {"panel_roundtrip", panel_roundtrip},
         {"panel_resizable", panel_resizable}, {"panel_browser", panel_browser}, {"panel_write", panel_write},
         {"panel_restore", panel_restore}, {"panel_clock", panel_clock}, {"panel_sequencer", panel_sequencer},
-        {"panel_globals", panel_globals}, {"panel_rt", panel_rt}, {"panel_screenshots", panel_screenshots},
+        {"panel_globals", panel_globals}, {"panel_rt", panel_rt}, {"panel_idle", panel_idle}, {"panel_screenshots", panel_screenshots},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);

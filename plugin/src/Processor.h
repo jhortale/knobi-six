@@ -99,6 +99,7 @@ public:
     bool restoreFactory();
     Library::Result setGlobal(int g, int v);    // one of Library::kGlobals: into the file, every instance follows
     int32_t global(int g);                       // the instance's value now
+    void globalsNow(int32_t out[G_COUNT]);       // every global's value now, in one call through access()
     // the file could not be read: the factory layer. The panel (Task 7) shows the notice and asks before the first
     // WRITE over it (a WRITE keeps the bad file as library.knobi.bad-<time> first)
     bool libraryUnreadable();

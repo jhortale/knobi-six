@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ProgramBrowser.h"
+#include <tuple>
 
 namespace knobi::ui {
 
@@ -77,25 +78,30 @@ juce::String ProgramBrowser::programText() const
     return juce::String(Processor::tensOf(sel_)) + juce::String(Processor::onesOf(sel_));
 }
 
-void ProgramBrowser::refresh(bool force)
+void ProgramBrowser::refresh(bool force, bool paramChanged)
 {
     const int number = p_.getCurrentProgram();
     const bool edited = p_.edited();
     const uint32_t gen = p_.bankGeneration();
-    ++ticks_;
-    if (force || number != lastNumber_ || edited != lastEdited_ || gen != lastGen_ || ticks_ >= 15) {
+    paramPending_ = paramPending_ || paramChanged;
+    if (ticks_ < kParamTicks) ++ticks_;
+    const auto before = std::make_tuple(info_.number, info_.edited, info_.differs, info_.user, name_, sel_, blinkOn_);
+    const bool moved = number != lastNumber_ || edited != lastEdited_ || gen != lastGen_;
+    if (force || moved || (paramPending_ && ticks_ >= kParamTicks)) {
         Processor::ProgramInfo info;
         if (p_.programInfo(info)) {
             info_ = info;
             name_ = juce::String(info.name);
         }
-        lastNumber_ = number, lastEdited_ = edited, lastGen_ = gen, ticks_ = 0;
+        lastNumber_ = number, lastEdited_ = edited, lastGen_ = gen, ticks_ = 0, paramPending_ = false;
+        snapshots_++;
     }
     info_.edited = edited;
     if (mode_ == Mode::Normal && entry_ == Entry::None) sel_ = number;
     blinkOn_ = mode_ != Mode::WriteArmed || (juce::Time::getMillisecondCounter() / 300) % 2 == 0;
     updatePads();
-    repaint();
+    if (force || before != std::make_tuple(info_.number, info_.edited, info_.differs, info_.user, name_, sel_, blinkOn_))
+        repaint();
 }
 
 void ProgramBrowser::updatePads()
