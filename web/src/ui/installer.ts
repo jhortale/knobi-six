@@ -4,7 +4,7 @@
 import { familyRe, fetchCatalog, ownLoaderRe, packagesFor, portMatcher, type Offer } from "../catalog/load.ts";
 import type { Catalog } from "../catalog/schema.ts";
 import type { MidiBackend } from "@knobi/installer-core";
-import { NO_MIDI } from "../midi/webmidi.ts";
+import { NO_MIDI } from "@knobi/web-midi";
 import { InstallError, isLoader } from "@knobi/installer-core";
 import type { Identity } from "@knobi/installer-core";
 import { loadPackage } from "@knobi/installer-core";

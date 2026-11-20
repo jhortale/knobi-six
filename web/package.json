@@ -34,6 +34,7 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tailwind-merge": "3.7.1",
-    "@knobi/installer-core": "workspace:*"
+    "@knobi/installer-core": "workspace:*",
+    "@knobi/web-midi": "workspace:*"
   }
 }

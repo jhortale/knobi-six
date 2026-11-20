@@ -2,7 +2,7 @@
 // knobi-flash's entry: the Web MIDI backend; in the dev server with ?mock, a simulated keyboard instead (never
 // built into the published page: import.meta.env.DEV is false there and the import is dropped).
 import "./index.css";
-import { requestBackend } from "./midi/webmidi.ts";
+import { requestBackend } from "@knobi/web-midi";
 import { startApp, type AppDeps } from "./ui/app.tsx";
 
 const root = document.getElementById("app")!;

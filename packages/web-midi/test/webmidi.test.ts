@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The Web MIDI backend over a stand-in MIDIAccess (no browser, no device).
 import { describe, expect, it } from "vitest";
-import { WebMidiBackend, requestBackend } from "../src/midi/webmidi.ts";
+import { WebMidiBackend, requestBackend } from "../src/index.ts";
 import { DELAY } from "@knobi/installer-core";
 
 class Port {

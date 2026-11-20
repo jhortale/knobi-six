@@ -241,11 +241,33 @@ importers:
 
   packages/tsconfig: {}
 
+  packages/web-midi:
+    dependencies:
+      '@knobi/installer-core':
+        specifier: workspace:*
+        version: link:../installer-core
+    devDependencies:
+      '@knobi/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.1.1
+        version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
+
   web:
     dependencies:
       '@knobi/installer-core':
         specifier: workspace:*
         version: link:../packages/installer-core
+      '@knobi/web-midi':
+        specifier: workspace:*
+        version: link:../packages/web-midi
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
