@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { familyRe, ownLoaderRe, packagesFor, portMatcher, validateCatalog } from "../src/catalog/load.ts";
-import type { Catalog } from "../src/catalog/schema.ts";
+import { familyRe, mergeCatalog, ownLoaderRe, packagesFor, portMatcher, validateCatalog } from "../src/load.ts";
+import type { Catalog } from "../src/schema.ts";
 
-const base = JSON.parse(readFileSync(new URL("../catalog/base.json", import.meta.url), "utf8"));
+const instruments = JSON.parse(readFileSync(new URL("../instruments.json", import.meta.url), "utf8"));
+const knobiSix = JSON.parse(readFileSync(new URL("../../../synths/knobi-six/catalog.json", import.meta.url), "utf8"));
+/** what the generator starts from: the instruments plus KNOBI-SIX's entry */
+const base = mergeCatalog(instruments, [knobiSix]);
 const clone = (): Catalog => structuredClone(base);
 const H = "a".repeat(64);
 
@@ -74,7 +77,7 @@ describe("queries", () => {
 });
 
 describe("drift: the catalog's patterns are tools/fm1_install.py's", () => {
-  const py = readFileSync(new URL("../../tools/fm1_install.py", import.meta.url), "utf8");
+  const py = readFileSync(new URL("../../../tools/fm1_install.py", import.meta.url), "utf8");
   const lit = (name: string) => new RegExp(`${name}\\s*=\\s*re\\.compile\\(r"((?:[^"\\\\]|\\\\.)*)"`).exec(py)![1];
   it("ports = PORT_RE", () => expect(base.families.smk37.ports).toBe(lit("PORT_RE")));
   it("match = SMK_FAMILY", () => expect(base.families.smk37.match).toBe(lit("SMK_FAMILY")));

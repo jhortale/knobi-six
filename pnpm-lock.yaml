@@ -205,6 +205,28 @@ importers:
         specifier: 2.11.13
         version: 2.11.13
 
+  packages/catalog:
+    dependencies:
+      '@knobi/installer-core':
+        specifier: workspace:*
+        version: link:../installer-core
+    devDependencies:
+      '@knobi/device-sim':
+        specifier: workspace:*
+        version: link:../device-sim
+      '@knobi/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.1.1
+        version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
+
   packages/device-sim:
     dependencies:
       '@knobi/installer-core':
@@ -260,8 +282,13 @@ importers:
         specifier: 5.1.1
         version: 5.1.1(@types/node@24.19.2)(jsdom@26.1.0)(vite@8.3.8(@types/node@24.19.2)(jiti@2.7.0))
 
+  synths/knobi-six: {}
+
   web:
     dependencies:
+      '@knobi/catalog':
+        specifier: workspace:*
+        version: link:../packages/catalog
       '@knobi/installer-core':
         specifier: workspace:*
         version: link:../packages/installer-core
@@ -293,6 +320,9 @@ importers:
       '@knobi/device-sim':
         specifier: workspace:*
         version: link:../packages/device-sim
+      '@knobi/synth-knobi-six':
+        specifier: workspace:*
+        version: link:../synths/knobi-six
       '@knobi/tsconfig':
         specifier: workspace:*
         version: link:../packages/tsconfig

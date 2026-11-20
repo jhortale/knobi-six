@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The dev server's ?mock page: a simulated SMK-37 Pro (stock firmware) and a made-up KNOBI-SIX package, so the page
 // can be clicked through without a keyboard. In the console: knobiMock.unplug(), knobiMock.boot(identity, port).
-import base from "../../catalog/base.json";
+import instruments from "@knobi/catalog/instruments.json";
+import knobiSix from "@knobi/synth-knobi-six/catalog.json";
 import type { AppDeps } from "../ui/app.tsx";
-import type { Catalog } from "../catalog/schema.ts";
+import { mergeCatalog } from "@knobi/catalog";
 import { loadPackage } from "@knobi/installer-core";
 import { FakeKeyboard } from "@knobi/device-sim";
 import { makePackage } from "@knobi/device-sim";
@@ -19,7 +20,7 @@ export function mockDeps(deps: AppDeps): AppDeps {
   (globalThis as Record<string, unknown>).knobiMock = dev;
   const ready = (async () => {
     const d = new Uint8Array(await crypto.subtle.digest("SHA-256", raw as Uint8Array<ArrayBuffer>));
-    const cat = structuredClone(base) as Catalog;
+    const cat = mergeCatalog(structuredClone(instruments), [structuredClone(knobiSix)]);
     cat.firmwares[0].releases = [{ version: "0.0-mock", date: "2026-11-20", source: "#", packages: [{
       instrument: "smk37-pro", file: FILE, identity: "SMK-37 Pro_956", size: raw.length,
       sha256: [...d].map((x) => x.toString(16).padStart(2, "0")).join(""),

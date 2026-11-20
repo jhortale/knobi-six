@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The page's behaviour, apart from how it is drawn: connect, offer the catalog's packages, check, install, report.
 // A small store (state + subscribe) that the React page renders (App.tsx) and the tests drive.
-import { familyRe, fetchCatalog, ownLoaderRe, packagesFor, portMatcher, type Offer } from "../catalog/load.ts";
-import type { Catalog } from "../catalog/schema.ts";
+import { familyRe, fetchCatalog, ownLoaderRe, packagesFor, portMatcher, type Catalog, type Offer } from "@knobi/catalog";
 import type { MidiBackend } from "@knobi/installer-core";
 import { NO_MIDI } from "@knobi/web-midi";
 import { InstallError, isLoader } from "@knobi/installer-core";

@@ -97,6 +97,13 @@ export function validateCatalog(json: unknown): Catalog {
   return c;
 }
 
+/** the generic instruments (packages/catalog/instruments.json) plus the synths' firmware entries
+ *  (synths/<id>/catalog.json): one catalog, validated */
+export function mergeCatalog(instruments: unknown, firmwares: unknown[]): Catalog {
+  if (!isObj(instruments)) throw new Error("instruments.json: not an object");
+  return validateCatalog({ ...instruments, firmwares: [...(Array.isArray(instruments.firmwares) ? instruments.firmwares : []), ...firmwares] });
+}
+
 export async function fetchCatalog(url = "catalog.json", fetcher: typeof fetch = fetch): Promise<Catalog> {
   const r = await fetcher(url, { cache: "no-cache" });
   if (!r.ok) throw new Error(`catalog: ${url}: HTTP ${r.status}`);

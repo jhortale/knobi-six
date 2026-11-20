@@ -12,9 +12,11 @@ import { DELAY } from "@knobi/installer-core";
 import { InstallError } from "@knobi/installer-core";
 import { loadPackage } from "@knobi/installer-core";
 import { makePackage } from "@knobi/device-sim";
-import type { Catalog } from "../src/catalog/schema.ts";
+import { mergeCatalog, type Catalog } from "@knobi/catalog";
 
-const base = JSON.parse(readFileSync(`${import.meta.dirname}/../catalog/base.json`, "utf8"));
+const base = mergeCatalog(
+  JSON.parse(readFileSync(`${import.meta.dirname}/../../packages/catalog/instruments.json`, "utf8")),
+  [JSON.parse(readFileSync(`${import.meta.dirname}/../../synths/knobi-six/catalog.json`, "utf8"))]);
 const pkg = makePackage({ product: "SMK-37 Pro_956" });
 const { image } = loadPackage(pkg);
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");

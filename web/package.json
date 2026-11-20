@@ -24,7 +24,8 @@
     "vite": "8.3.8",
     "vitest": "5.1.1",
     "@knobi/tsconfig": "workspace:*",
-    "@knobi/device-sim": "workspace:*"
+    "@knobi/device-sim": "workspace:*",
+    "@knobi/synth-knobi-six": "workspace:*"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
@@ -35,6 +36,7 @@
     "react-dom": "19.3.1",
     "tailwind-merge": "3.7.1",
     "@knobi/installer-core": "workspace:*",
-    "@knobi/web-midi": "workspace:*"
+    "@knobi/web-midi": "workspace:*",
+    "@knobi/catalog": "workspace:*"
   }
 }
