@@ -2,7 +2,7 @@
 // port of tests/install_test.py's package(): Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments;
 // M. Geisler (genkigenki/makkuro)
 // A package with a valid header and file list (one file, flash.bin: 0x400 to the end), as fm1pkg_make writes.
-import { KEEP, LOADER_MARK, crc16, jlDec } from "../protocol/package.ts";
+import { KEEP, LOADER_MARK, crc16, jlDec } from "@knobi/installer-core";
 
 export interface PackageOpts {
   product?: string;

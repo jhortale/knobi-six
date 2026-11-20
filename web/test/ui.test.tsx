@@ -8,9 +8,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { act } from "@testing-library/react";
 import { startApp, type App } from "../src/ui/app.tsx";
 import { FakeKeyboard, type FakeOpts } from "../src/dev/fakeDevice.ts";
-import { DELAY } from "../src/protocol/updater.ts";
-import { InstallError } from "../src/protocol/identity.ts";
-import { loadPackage } from "../src/protocol/package.ts";
+import { DELAY } from "@knobi/installer-core";
+import { InstallError } from "@knobi/installer-core";
+import { loadPackage } from "@knobi/installer-core";
 import { makePackage } from "../src/dev/makePackage.ts";
 import type { Catalog } from "../src/catalog/schema.ts";
 

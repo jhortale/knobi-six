@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The MIDI backend in the browser: Web MIDI with SysEx (Chrome, Edge; https or localhost).
-import { InstallError } from "../protocol/identity.ts";
-import { DELAY } from "../protocol/updater.ts";
-import { SysexQueue, sleep, type Link, type MidiBackend } from "./backend.ts";
+import { InstallError } from "@knobi/installer-core";
+import { DELAY } from "@knobi/installer-core";
+import { SysexQueue, sleep, type Link, type MidiBackend } from "@knobi/installer-core";
 
 export const NO_MIDI = "Web MIDI with SysEx is not available here. Use Chrome or Edge, open the page over https, " +
   "and allow access to MIDI devices when the browser asks. On Windows, Chrome may need " +

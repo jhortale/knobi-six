@@ -4,7 +4,7 @@
 import base from "../../catalog/base.json";
 import type { AppDeps } from "../ui/app.tsx";
 import type { Catalog } from "../catalog/schema.ts";
-import { loadPackage } from "../protocol/package.ts";
+import { loadPackage } from "@knobi/installer-core";
 import { FakeKeyboard } from "./fakeDevice.ts";
 import { makePackage } from "./makePackage.ts";
 

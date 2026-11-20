@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, it } from "vitest";
-import { pack7, unpack7 } from "../src/protocol/sevenbit.ts";
+import { pack7, unpack7 } from "../src/sevenbit.ts";
 import {
   FINISH_CHECK, FINISH_WRITE, HS_QUERY, MAXDATA, UPGRADE, identityReply, parseIdentity, parseRequest, response,
-} from "../src/protocol/messages.ts";
+} from "../src/messages.ts";
 import { fixtures, hex, unhex } from "./helpers/fixtures.ts";
 
 const wire = fixtures.wire;

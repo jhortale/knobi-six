@@ -2,10 +2,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { deinterleave, hasLoaderMark, loadPackage, packageDamage, productOf } from "../src/protocol/package.ts";
-import { InstallError, isOwnLoader, modelOf, sameKeyboard } from "../src/protocol/identity.ts";
+import { deinterleave, hasLoaderMark, loadPackage, packageDamage, productOf } from "../src/package.ts";
+import { InstallError, isOwnLoader, modelOf, sameKeyboard } from "../src/identity.ts";
 import { fixtures, unb64 } from "./helpers/fixtures.ts";
-import { makePackage } from "./helpers/makePackage.ts";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const SMK = /^(?:SMK-37[ +].*|MKE-P37|STARRYKEY-37.*)$/i;
@@ -21,8 +20,12 @@ describe.each(fixtures.packages)("package $params.product ($params.blocks blocks
   });
   it("packageDamage equals Python's package_damage", () => expect(packageDamage(deinterleave(raw).image)).toBe(f.damage));
   it("hasLoaderMark equals Python's", () => expect(hasLoaderMark(raw)).toBe(f.loaderMark));
-  it("makePackage builds the same bytes as install_test.py's package()", () => expect(makePackage(f.params)).toEqual(raw));
 });
+
+/** a fixture package (made by tests/web_fixtures.py from install_test.py's package()) */
+const fixture = (p: { product: string; damage?: boolean; marker?: boolean }) =>
+  unb64(fixtures.packages.find((f) => f.params.product === p.product && !!f.params.damage === !!p.damage &&
+    (f.params.marker ?? true) === (p.marker ?? true) && (f.params.blocks ?? 20) === 20)!.raw);
 
 function code(fn: () => unknown) {
   try {
@@ -35,18 +38,18 @@ function code(fn: () => unknown) {
 
 describe("loadPackage", () => {
   it("returns the product and the logical image", () => {
-    const raw = makePackage({ product: "SMK-37 Pro_956" });
+    const raw = fixture({ product: "SMK-37 Pro_956" });
     const p = loadPackage(raw);
     expect(p.product).toBe("SMK-37 Pro_956");
     expect(p.image).toEqual(deinterleave(raw).image);
   });
   it("refuses a package without the Felucca loader", () => {
-    const [c, m] = code(() => loadPackage(makePackage({ product: "SMK-37 Pro_956", marker: false })))!;
+    const [c, m] = code(() => loadPackage(fixture({ product: "SMK-37 Pro_956", marker: false })))!;
     expect(c).toBe("badpkg");
     expect(m).toContain("no Felucca update loader");
   });
   it("refuses a damaged package", () => {
-    const [c, m] = code(() => loadPackage(makePackage({ product: "SMK-37 Pro_956", damage: true })))!;
+    const [c, m] = code(() => loadPackage(fixture({ product: "SMK-37 Pro_956", damage: true })))!;
     expect(c).toBe("badpkg");
     expect(m).toContain("damaged package");
   });
@@ -55,7 +58,7 @@ describe("loadPackage", () => {
     expect(c).toBe("badpkg");
     expect(m).toContain("too short");
   });
-  const built = new URL("../../build/knobi-six.fwsc", import.meta.url);
+  const built = new URL("../../../build/knobi-six.fwsc", import.meta.url);
   it.skipIf(!existsSync(built))("the real build/knobi-six.fwsc is SMK-37 Pro_956", () => {
     expect(loadPackage(new Uint8Array(readFileSync(built))).product).toBe("SMK-37 Pro_956");
   });

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The updater against a simulated keyboard (port of tests/install_test.py's installs() and errors()).
 import { beforeAll, describe, expect, it } from "vitest";
-import { pairOutput } from "../src/midi/backend.ts";
+import { pairOutput } from "@knobi/installer-core";
 import { FakeKeyboard, type FakeOpts } from "../src/dev/fakeDevice.ts";
-import { DELAY, Updater, type Step } from "../src/protocol/updater.ts";
-import { InstallError } from "../src/protocol/identity.ts";
-import { loadPackage } from "../src/protocol/package.ts";
+import { DELAY, Updater, type Step } from "@knobi/installer-core";
+import { InstallError } from "@knobi/installer-core";
+import { loadPackage } from "@knobi/installer-core";
 import { makePackage } from "./helpers/makePackage.ts";
 
 const PORTS = /fm-1|smk|elite|mke-p37|x0x|ota|felucca|usb-midi/i;

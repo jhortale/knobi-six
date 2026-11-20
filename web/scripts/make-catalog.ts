@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateCatalog } from "../src/catalog/load.ts";
 import type { Catalog, Package } from "../src/catalog/schema.ts";
-import { modelOf } from "../src/protocol/identity.ts";
-import { loadPackage } from "../src/protocol/package.ts";
+import { modelOf } from "@knobi/installer-core";
+import { loadPackage } from "@knobi/installer-core";
 
 export const FIRMWARE = "knobi-six";
 export const IDENT = "956";

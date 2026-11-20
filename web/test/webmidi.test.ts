@@ -2,7 +2,7 @@
 // The Web MIDI backend over a stand-in MIDIAccess (no browser, no device).
 import { describe, expect, it } from "vitest";
 import { WebMidiBackend, requestBackend } from "../src/midi/webmidi.ts";
-import { DELAY } from "../src/protocol/updater.ts";
+import { DELAY } from "@knobi/installer-core";
 
 class Port {
   state = "connected";

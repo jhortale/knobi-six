@@ -4,7 +4,7 @@
 // The same update as fm1_install.py: step 1, the running firmware reads parts of the package and starts the update
 // loader; step 2, the loader reads the whole package and writes it. In both steps the device asks (read requests on
 // the logical image) and we answer. Then the keyboard restarts and the installed identity is checked.
-import { pairOutput, sleep, type Link, type MidiBackend } from "../midi/backend.ts";
+import { pairOutput, sleep, type Link, type MidiBackend } from "./backend.ts";
 import { InstallError, isLoader, isOwnLoader, sameKeyboard } from "./identity.ts";
 import {
   FINISH_CHECK, FINISH_WRITE, HS_QUERY, MAXDATA, SUCCESS, UPGRADE, parseIdentity, parseRequest, response,

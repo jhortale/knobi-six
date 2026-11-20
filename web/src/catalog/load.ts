@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Loading, checking and querying catalog.json.
-import { modelOf, sameKeyboard } from "../protocol/identity.ts";
+import { modelOf, sameKeyboard } from "@knobi/installer-core";
 import type { Catalog, Firmware, Instrument, Package, Release } from "./schema.ts";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);

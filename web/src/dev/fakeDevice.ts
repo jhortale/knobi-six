@@ -6,9 +6,9 @@
 // firmware: a few reads, then the check finish, then it restarts as the update loader under another port; the loader:
 // reads over the image, then the write finish, then it restarts as the new firmware) and checks every answer.
 // Never part of the published page.
-import { SysexQueue, type Link, type MidiBackend } from "../midi/backend.ts";
-import { unpack7 } from "../protocol/sevenbit.ts";
-import { FINISH_CHECK, FINISH_WRITE, HS_QUERY, SUCCESS, UPGRADE, identityReply, request } from "../protocol/messages.ts";
+import { SysexQueue, type Link, type MidiBackend } from "@knobi/installer-core";
+import { unpack7 } from "@knobi/installer-core";
+import { FINISH_CHECK, FINISH_WRITE, HS_QUERY, SUCCESS, UPGRADE, identityReply, request } from "@knobi/installer-core";
 
 export interface FakeOpts {
   image: Uint8Array;

@@ -3,12 +3,12 @@
 // A small store (state + subscribe) that the React page renders (App.tsx) and the tests drive.
 import { familyRe, fetchCatalog, ownLoaderRe, packagesFor, portMatcher, type Offer } from "../catalog/load.ts";
 import type { Catalog } from "../catalog/schema.ts";
-import type { MidiBackend } from "../midi/backend.ts";
+import type { MidiBackend } from "@knobi/installer-core";
 import { NO_MIDI } from "../midi/webmidi.ts";
-import { InstallError, isLoader } from "../protocol/identity.ts";
-import type { Identity } from "../protocol/messages.ts";
-import { loadPackage } from "../protocol/package.ts";
-import { Updater, type Step } from "../protocol/updater.ts";
+import { InstallError, isLoader } from "@knobi/installer-core";
+import type { Identity } from "@knobi/installer-core";
+import { loadPackage } from "@knobi/installer-core";
+import { Updater, type Step } from "@knobi/installer-core";
 
 export const STEPS = [
   ["connect", "Connect"], ["verify", "Verify"], ["update", "Update mode"], ["write", "Write"], ["restart", "Restart"],
