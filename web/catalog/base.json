@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "protocols": {
+    "felucca-ota": {
+      "ownLoader": "ota-(FM-1|SMK-37 Pro|SMK-37 Elite|MKE-P37)_9\\d\\d"
+    }
+  },
+  "families": {
+    "smk37": {
+      "name": "M-VAVE SMK-37 family",
+      "models": [
+        "SMK-37 Pro",
+        "SMK-37 Elite",
+        "MKE-P37"
+      ],
+      "match": "SMK-37[ +].*|MKE-P37|STARRYKEY-37.*",
+      "ports": "fm-1|smk|elite|mke-p37|starry|felucca|sloop|clipper|melodee|fomni|x0x|makkuro|maku|rainbow|snoop|vector|vox|ota|composite|sinco|usb-midi"
+    }
+  },
+  "instruments": [
+    {
+      "id": "smk37-pro",
+      "name": "M-VAVE SMK-37 Pro",
+      "family": "smk37",
+      "model": "SMK-37 Pro",
+      "protocol": "felucca-ota"
+    },
+    {
+      "id": "smk37-elite",
+      "name": "M-VAVE SMK-37 Elite",
+      "family": "smk37",
+      "model": "SMK-37 Elite",
+      "protocol": "felucca-ota"
+    },
+    {
+      "id": "mke-p37",
+      "name": "MKE-P37",
+      "family": "smk37",
+      "model": "MKE-P37",
+      "protocol": "felucca-ota"
+    }
+  ],
+  "firmwares": [
+    {
+      "id": "knobi-six",
+      "name": "KNOBI-SIX",
+      "summary": "OB-6-inspired six-voice polysynth for the SMK-37",
+      "license": "GPL-3.0-only",
+      "notes": [
+        "Replaces the stored firmware and its saved data; calibration is not written."
+      ],
+      "releases": []
+    }
+  ]
+}
