@@ -28,15 +28,11 @@
     "@knobi/synth-knobi-six": "workspace:*"
   },
   "dependencies": {
-    "class-variance-authority": "0.7.1",
-    "clsx": "2.1.1",
-    "lucide-react": "1.77.0",
-    "radix-ui": "1.8.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "tailwind-merge": "3.7.1",
     "@knobi/installer-core": "workspace:*",
     "@knobi/web-midi": "workspace:*",
-    "@knobi/catalog": "workspace:*"
+    "@knobi/catalog": "workspace:*",
+    "@knobi/ui": "workspace:*"
   }
 }

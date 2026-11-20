@@ -28,9 +28,16 @@ describe.skipIf(!existsSync(dist))("dist/", () => {
   });
 });
 
+describe.skipIf(!existsSync(dist))("dist/ styles", () => {
+  const css = () => files(dist).filter((f) => f.endsWith(".css")).map((f) => readFileSync(f, "utf8")).join("\n");
+  it("has the shared components' Tailwind classes (Tailwind must scan @knobi/ui, not only the app)", () => {
+    expect(css()).toContain("ring-\\[3px\\]");   // focus-visible:ring-[3px], used only in @knobi/ui's components
+  });
+  it("has the KNOBI panel theme", () => expect(css().toLowerCase()).toContain("#2f6be0"));
+});
+
 describe("local test files are never committed", () => {
   it.each(["public/catalog.json", "public/firmware/knobi-six/1.0/knobi-six-1.0.fwsc"])("%s is ignored", (p) => {
     expect(() => execFileSync("git", ["check-ignore", "-q", p], { cwd: join(import.meta.dirname, "..") })).not.toThrow();
   });
 });
-

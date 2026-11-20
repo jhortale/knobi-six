@@ -1,0 +1,36 @@
+{
+  "name": "@knobi/ui",
+  "private": true,
+  "version": "0.0.0",
+  "license": "(MIT AND GPL-3.0-only)",
+  "type": "module",
+  "description": "The KNOBI web UI kit: shadcn/ui components and cn() (MIT, copied in by the shadcn CLI) and the KNOBI panel theme (GPL-3.0-only).",
+  "exports": {
+    "./components/*": "./src/components/*.tsx",
+    "./lib/*": "./src/lib/*.ts",
+    "./globals.css": "./src/styles/globals.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "radix-ui": "1.8.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.7.1",
+    "lucide-react": "1.77.0"
+  },
+  "peerDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@knobi/tsconfig": "workspace:*",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwindcss": "4.3.5",
+    "typescript": "7.0.2"
+  }
+}

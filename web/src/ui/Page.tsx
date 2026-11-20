@@ -2,20 +2,20 @@
 // The page: one column, the steps in order (docs/superpowers/specs/2026-11-20-web-installer-design.md), built from
 // shadcn/ui components in the KNOBI-SIX panel style (src/index.css). The behaviour is in installer.ts.
 import { useSyncExternalStore, type ReactNode } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@knobi/ui/components/alert";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { cn } from "@/lib/utils";
+} from "@knobi/ui/components/alert-dialog";
+import { Badge } from "@knobi/ui/components/badge";
+import { Button } from "@knobi/ui/components/button";
+import { Card, CardContent } from "@knobi/ui/components/card";
+import { Checkbox } from "@knobi/ui/components/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@knobi/ui/components/collapsible";
+import { Label } from "@knobi/ui/components/label";
+import { Progress } from "@knobi/ui/components/progress";
+import { RadioGroup, RadioGroupItem } from "@knobi/ui/components/radio-group";
+import { cn } from "@knobi/ui/lib/utils";
 import { STEPS, type Installer, type InstallerState } from "./installer.ts";
 
 /** docs/BACKUP.md, published with the site (vite.config.ts) */
