@@ -1,7 +1,8 @@
 # KNOBI-SIX
 
 Standalone OB-6-inspired polysynth firmware for the M-VAVE SMK-37 Pro. A clone of fc79/smk37-base (remote `upstream`);
-`origin` is the private repo jhortale/knobi-six. Working branch: `phase1`.
+`origin` is the private repo jhortale/knobi-six. Trunk: `main` (the default branch; work lands there through pull
+requests). `phase1` is where Phases 1-3 were built, kept as it was when `main` started from it (2026-11-20).
 
 ## Binding documents
 
@@ -29,7 +30,8 @@ pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace
 
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default
 `~/.jieli/toolchain`, `tools/get_toolchain.sh`), `AC79_SDK` (default `~/fw-AC79_AIoT_SDK`) and Pillow. CI:
-`.github/workflows/build.yml` (push to `phase1`, manual dispatch); `release.yml` publishes on `v*` tags.
+`.github/workflows/build.yml` (push to `main`, pull requests into `main`, manual dispatch), `web.yml` (the TypeScript
+workspace, on every push and pull request that touches it); `release.yml` publishes on `v*` tags.
 
 ## Where things live
 
