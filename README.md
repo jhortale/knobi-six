@@ -106,6 +106,14 @@ Program names are kept as they are, including the ones that contain "OB". The pr
 too (each program's factory sequence, about 60 KB more; [docs/FACTORY_BANK.md](docs/FACTORY_BANK.md)); effects settings are kept for a later phase but do nothing yet
 (the arpeggiator, clock and distortion settings are used since Phase 2). Delete `firmware/gen/factory_bank.h` to build without the bank again.
 
+## Plugin (AU / VST3, branch `plugin`)
+
+The same synth, arp, clock and sequencer as an instrument plugin for Ableton Live 12 on a Mac (Apple Silicon), built
+with JUCE 8 (`plugin/`). 73 automatable parameters, the OB-6-style panel with the sequencer grid, a program bank shared
+by every instance (`~/Music/KNOBI-SIX/library.knobi`), and the arp and sequencer following Live's transport. Build,
+install, what it does and its limits: [plugin/README.md](plugin/README.md); what to check by hand in Live:
+[docs/PLUGIN_CHECKLIST.md](docs/PLUGIN_CHECKLIST.md). The AU is the recommended format in Live.
+
 ## Credits
 
 KNOBI-SIX starts from [smk37-base](https://github.com/fc79/smk37-base) by fc79, which is the SMK-37 layer of

@@ -4,17 +4,19 @@ KNOBI-SIX as an instrument plugin for Ableton Live 12 on a Mac (Apple Silicon): 
 sequencer (`firmware/src/core/knobi_core.h`) inside a [JUCE](https://juce.com) 8 plugin. Design:
 `docs/superpowers/specs/2026-11-19-plugin-design.md`; plan: `docs/superpowers/plans/2026-11-19-plugin.md`.
 
-Status (plan Task 5): it plays from MIDI (notes, velocity, bend, mod wheel, pressure, sustain, the firmware's CC map,
-bank select + program change); every sound parameter is a Live parameter (73: automatable, MIDI-mappable); the host's
-program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
-edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate); the
-500-program bank is shared by every instance through one library file (plan Task 6: WRITE / RESTORE FACTORY are there
-and on the panel; the globals); the window is the OB-6-style panel (plan Task 7, below) with the sequencer's 64-step
-grid (mouse editing) and SEQ REC step entry from Live's MIDI (plan Task 8).
+What it is: the firmware's synth (6 voices, the OB-6-style voice and effects), arp, clock and 64-step sequencer, as an
+instrument plugin. 73 sound parameters are Live parameters (automatable, MIDI-mappable); the 500-program bank is shared
+by every instance through one library file; the arp and the sequencer follow Live's transport; the window is the
+OB-6-style panel with the sequencer grid.
+
+Contents: [Build](#build) · [Install](#install-for-live-12) · [Loading in Live 12](#loading-in-live-12) ·
+[The panel](#the-panel) · [The program bank](#the-program-bank-and-the-library-file) · [Clock with Live](#clock-with-live) ·
+[Sequencer](#sequencer) · [Known limits](#known-limits) · [auval](#auval) · [How it works](#how-it-works) ·
+[Checklist for Live](../docs/PLUGIN_CHECKLIST.md)
 
 > **AU recommended in Live.** The VST3 works, but JUCE's VST3 wrapper reports program loads and CC changes to Live in
 > a way Live may record as automation (or that switches a parameter's automation off), and it cannot tell Live that
-> program names changed (see "Checking it in Live", point 10, and "The library file"). The AU has neither problem.
+> program names changed (see [Known limits](#known-limits)). The AU has neither problem.
 
 ## Build
 
@@ -71,7 +73,7 @@ To update, copy again (quit Live first, or rescan). To remove both:
 
 ```sh
 rm -rf ~/Library/Audio/Plug-Ins/Components/KNOBI-SIX.component ~/Library/Audio/Plug-Ins/VST3/KNOBI-SIX.vst3
-killall -9 AudioComponentRegistrar
+killall -9 AudioComponentRegistrar 2>/dev/null
 ```
 
 (The local build's bundles are `KNOBI-SIX-local.component` / `.vst3`, removed the same way.)
@@ -80,36 +82,18 @@ In Live 12: Settings → Plug-Ins → turn on "Use Audio Units v2" and "Use VST3
 Folder" pointing at `~/Library/Audio/Plug-Ins/VST3`), then **Rescan** (hold Option while clicking it for a full
 rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jhortale and VST3 → jhortale.
 
-## Checking it in Live (by hand, not automated)
+## Loading in Live 12
 
-1. Drop KNOBI-SIX (AU or VST3) on a MIDI track; its window opens: the panel (below). Turn a knob: Live's parameter
-   follows (and the other way round: automation moves the knob).
-2. Play notes from a keyboard or a clip: a held chord, the mod wheel, pitch bend, sustain. It should sound like the
-   keyboard's init program, six voices.
-3. Change the session rate (Settings → Audio: 44.1, 48, 88.2, 96 kHz): it keeps the pitch and sounds the same.
-4. Put a clip with short notes on the grid next to an audio click (or a drum rack) at 48 kHz: they stay in time
-   (Live compensates the plugin's latency: 256 samples at 44.1 kHz, 332 at 48 kHz, 610 at 88.2, 664 at 96 — 5.8 to
-   6.9 ms; Live shows it in the device's context menu → "Delay Compensation").
-5. Two instances on two tracks play at once without affecting each other.
-6. Parameters: the device's parameter list (Configure, or the automation lane chooser) shows the 73 parameters by the
-   firmware's names. Draw automation for FILTER FREQ: the sound follows. Send CC 74 from a clip or a controller: the
-   parameter's value in Live follows; with the arrangement not recording, no automation appears.
-7. Programs: the device's program menu lists `000 INIT` … `499 INIT` (the default build); choosing one loads it. A MIDI
-   program change in a clip changes it too.
-8. Save the set with an edited sound, close, reopen: the same sound (program number, values, sequence) comes back.
-9. The clock from Live (the arp with a chord held, or a sequence playing: SEQ PLAY on the panel):
-   press play from bar 1, from the middle of a bar, loop 1 or 2 bars, jump around while playing, automate the tempo:
-   the steps stay on Live's grid next to a drum clip, a loop's wrap plays the loop start's step, no note hangs. Stop
-   Live: the sequence stops (SEQ PLAY stays on, armed: the next play starts it on the song's step); the arp still plays
-   with keys held, at the program's BPM (P_BPM, shown greyed while Live plays). **Required manual check:** the
-   alignment with Live's grid after its delay compensation (a sequence step vs a drum clip's hit on the same 16th,
-   at 44.1 and 48 kHz) — the tests prove the step sounds exactly where a clip note at that position sounds inside the
-   plugin, not what Live does with the reported latency.
-10. To check (not known yet, please report): with the arrangement **recording** and automation armed, does a program
-   change or a CC into KNOBI-SIX write automation for the parameters it changes? JUCE tells the host with a plain value
-   change and no gesture; for AU, JUCE's notification is the one Live and Logic are reported not to record; for VST3 it
-   is a `performEdit` without `beginEdit`, which Live is reported to record while recording. If it does, prefer the AU
-   in Live.
+Drop KNOBI-SIX on a MIDI track (Plug-Ins -> Audio Units -> jhortale, or VST3 -> jhortale); its window opens: the panel.
+**Use the AU**: the VST3 wrapper's program-load / CC reporting and program names are the known problems (see Known limits). Live compensates the plugin's latency: 256 samples at 44.1 kHz, 332 at
+48 kHz, 610 at 88.2, 664 at 96 (5.8 ms at 44.1 kHz, 6.9 ms at the others; the device's context menu shows it as
+"Delay Compensation"). The device's parameter list (Configure, or the automation lane chooser) shows the 73
+parameters by the firmware's names; the program menu lists the bank's 500 programs (`000 INIT` ... in the default
+build); the instance's sound (program number, values, sequence, edited flag) is saved with the set. Automation is
+applied at the first sample of the host block that delivers it; MIDI is sample-accurate.
+
+What to try, step by step, and what to look for: **[docs/PLUGIN_CHECKLIST.md](../docs/PLUGIN_CHECKLIST.md)** (not
+automated: it needs Live; nothing in it has been done yet).
 
 ## The panel
 
@@ -176,7 +160,7 @@ BPM on a red display (drag up / down).
   on the audio thread during automation, and JUCE's attachments would post messages from there), so the audio thread
   never waits for, or allocates for, the panel (test `panel_rt`).
 
-## The library file
+## The program bank and the library file
 
 `~/Music/KNOBI-SIX/library.knobi` holds what you WRITE: each of the 500 slots is empty (the factory program of this
 build: INIT in the default build) or a full program + sequence in the keyboard's own record format, plus the globals
@@ -196,6 +180,49 @@ Format and rules: `src/Library.h`.
   until it asks for them again (reopen the device's program menu, or reload the set). Neither plugin format offers
   a reliable way to say "the program names changed": AU has no notification for its preset list, and in JUCE 8.0.15
   the VST3 wrapper does not pass one on for program names. The sound and the panel always use the new bank.
+
+## Clock with Live
+
+- While Live plays, the arp and the sequencer follow its tempo and position: step n of the DIVISION sits at position
+  n x its length from the song's start, so starting mid-bar, a loop's wrap or a locate lands on the matching step. The
+  panel's BPM display shows Live's tempo, greyed; P_BPM is kept but not used.
+- **Live stopped**: the sequencer stops with Live. SEQ PLAY on while Live is stopped (or before it ever played)
+  **arms** it ("WAITING FOR LIVE"): Live's play starts it on the song position's step. The **arp keeps running** on
+  the internal clock at the program's BPM (keys held; a new arp pattern restarts it unless ARP BEAT SYNC).
+- A jump or a stop releases the arp's and the sequencer's notes. The arp's pattern is not reset at a loop's wrap.
+- Tempo automation is followed within one sample of the ideal grid. No MIDI clock out.
+- Details and the tests: "How it works" below (`transport_*`).
+
+## Sequencer
+
+On the panel (the grid and the STEP editor: "The panel" above). In short:
+
+- **Grid editing** (mouse): click a step, edit notes, velocities, REST / TIE; LENGTH 1-64. While it plays an edit is
+  heard from the next step; no stuck notes.
+- **Step entry** (SEQ REC): play notes in Live (a clip or a MIDI keyboard into the track); REST, TIE, BACK as on the
+  keyboard. Notes from the computer keyboard: turn on **Live's Computer MIDI Keyboard** (`M` in Live, track armed or
+  monitored); its notes arrive as Live MIDI and are recorded like any other.
+- **Emptying**: SEQ REC, one entry, BACK, SEQ REC. **No undo** for grid edits: a program change drops them, WRITE
+  keeps them.
+- WRITE keeps playing (the sequence and sound go on; the mark "stored" is set, no reload). CC 123 releases the
+  notes; the sequence keeps playing.
+
+## Known limits
+
+- **No MIDI out**: the arp's and the sequencer's notes are not sent as MIDI (the plugin makes sound only), and there
+  is no MIDI clock out. To play another instrument from the sequence, there is no way yet.
+- **No swap with the keyboard** yet: moving a program or sequence between the plugin and the SMK-37 is not there
+  (the library uses the keyboard's own record format; a later step).
+- **VST3** (JUCE 8.0.15): a program change or CC may be recorded as automation or switch a parameter's automation
+  off while Live records (checklist point); program names in the host are not refreshed after a WRITE. Use the AU.
+- **Program names in hosts**: after a WRITE (here or in another instance) the program list may show the old names until
+  the host asks again (reopen the menu / reload the set). The sound and the panel use the new bank at once.
+- **Automation per block**: a host block's automation value applies at the block's first sample (JUCE 8 hands one
+  value per parameter per block), MIDI at its own sample.
+- The importer's ARP HOLD is always imported off (the slot is unverified).
+- The firmware's UNISON rule (keys transpose with no hold) is not applied to Live's notes.
+- Apple Silicon Mac only, ad-hoc signed (Live runs it from your user folders; no notarisation).
+- Not tried in a real Live yet: the checklist is João's to run.
 
 ## auval
 
