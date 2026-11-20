@@ -49,8 +49,10 @@
  *   core_transport_locate     forward and backward jumps: the matching step at once
  *   core_transport_tempo_ramp 100 -> 140 BPM: every 16th within 1 frame of the ideal grid
  *   core_transport_stop_internal  P_BPM kept, not used while playing (bpm_param_greyed); stopped: a release, the
- *                         internal clock at P_BPM from the position, the sequence on (SEQ PLAY), the arp with a key held
- *   core_no_stuck_notes   a tied sequence across loop wraps, locates, a stop and a restart; the arp with a chord across
+ *                         internal clock at P_BPM from the position, the sequencer stopped with the host (armed; SEQ
+ *                         PLAY while stopped arms only), resuming on the song's step; the arp with a key held
+ *   core_no_stuck_notes   a tied sequence across loop wraps, locates, a stop and a restart (stopped with SEQ PLAY on: no
+ *                         note until the host plays, then the song's step); the arp with a chord across
  *                         a loop, a locate and a stop: every note-on has its note-off, the output silent at the end
  * The scenarios from Task 1 still run in child processes (they were written for one instance per process). */
 #define _DEFAULT_SOURCE 1                       /* (glibc under -std=c11: fork, waitpid, MAP_ANON) */
@@ -1148,8 +1150,10 @@ static void core_transport_tempo_ramp(void)
 
 /* P_BPM while the host plays: kept (kc_param_get), not used (the steps on the host's 120); stopped at frame 512 x 12
  * (6144: inside the 16th that started at 5513): a release there, the internal clock at P_BPM 60 from the position
- * (the rest of that 16th, 11025 - 6144 = 4881 frames at 120 = 9762 at 60: the next step at 15906), the sequence on (SEQ PLAY
- * on: the firmware's rule), its steps 11025 frames apart; SEQ PLAY off: no more notes, none left sounding; the arp
+ * (the rest of that 16th, 11025 - 6144 = 4881 frames at 120 = 9762 at 60: the next step at 15906), steps 11025 frames
+ * apart; the sequencer stops with the host (João: Live stops, the sequence stops): no note while stopped, SEQ PLAY
+ * still on (armed: kc_seq_state 2); the host plays again from ppq 3: the song's 16th 12 (note 52) at once; SEQ PLAY off,
+ * then on again while stopped: armed only (no note, the internal clock not restarted: no step at its frame); the arp
  * with a key held, the host stopped: it plays (internal clock at 60) */
 static void core_transport_stop_internal(void)
 {
@@ -1179,14 +1183,37 @@ static void core_transport_stop_internal(void)
     CHECK(!kc_clock_following(k) && n > i0 + 2 && tr_st[i0].frame == 6144u && tr_st[i0].kind == CLK_EV_RELEASE &&
           tr_st[i0 + 1].frame == 15906u && tr_st[i0 + 2].frame == 26931u && kc_seq_playing(k));
     m = (int)tr_ons(6144, on, 8);
-    CHECK(m >= 2 && on[0] == 42 && on[1] == 43);  /* (the sequence on: its steps 3, 4 on the internal clock) */
+    printf("core_transport_stop_internal: the sequencer while stopped: %d note-ons, SEQ PLAY %d, state %d (want 0, 1, 2)\n",
+           m, kc_seq_playing(k), kc_seq_state(k));
+    CHECK(m == 0 && kc_seq_playing(k) && kc_seq_state(k) == 2);
+    tr_nn = 0;
+    tr_host(k, &t, 2048, 512, 1, 120.0, 3.0, 0, 0);
+    tr_take_notes(k);
+    m = (int)tr_ons(0, on, 8);
+    printf("core_transport_stop_internal: playing again from ppq 3: note-ons %d (%d), state %d (want 52, 1)\n", m,
+           m ? on[0] : -1, kc_seq_state(k));
+    CHECK(m >= 1 && on[0] == 52 && kc_seq_state(k) == 1);
+    tr_host(k, &t, 512, 512, 0, 120.0, 0.0, 0, 0);
+    kc_seq_play(k, 0);
+    tr_host(k, &t, 1024, 512, 0, 120.0, 0.0, 0, 0);
+    kc_clock_steps(k, tr_st, KC_LOG);
+    {                                             /* SEQ PLAY on while stopped: armed, no restart */
+        uint64_t f = t;
+        kc_seq_play(k, 1);
+        tr_nn = 0;
+        tr_host(k, &t, 512, 512, 0, 120.0, 0.0, 0, 0);
+        n = kc_clock_steps(k, tr_st, KC_LOG);
+        printf("core_transport_stop_internal: SEQ PLAY on while stopped: state %d, a step at its frame %s\n",
+               kc_seq_state(k), n && tr_st[0].frame == f ? "yes" : "no");
+        CHECK(kc_seq_state(k) == 2 && !(n && tr_st[0].frame == f));
+    }
     kc_seq_play(k, 0);
     tr_nn = 0;
     tr_host(k, &t, 30000, 512, 0, 120.0, 0.0, 0, 0);
     tr_take_notes(k);
     m = (int)tr_ons(0, on, 8);
     printf("core_transport_stop_internal: SEQ PLAY off: %d note-ons after\n", m);
-    CHECK(m == 0);
+    CHECK(m == 0 && kc_seq_state(k) == 0);
     {                                             /* the arp, the host stopped: a key held plays it */
         uint8_t non[3] = {0x90, 60, 100};
         kc_param_set(k, P_ARP_ON, 1);
@@ -1219,6 +1246,23 @@ static void core_no_stuck_notes(void)
     tr_host(k, &t, 30000, 512, 1, 120.0, 2.8, 0, 0);       /* (a locate inside a step: resumed) */
     tr_host(k, &t, 7000, 512, 0, 120.0, 0.0, 0, 0);        /* (stopped: the internal clock plays on) */
     tr_host(k, &t, 20000, 333, 1, 133.0, 1.13, 0, 0);      /* (playing again inside a step) */
+    {                                             /* stopped with SEQ PLAY on: no note until the host plays again; then
+                                                   * the song's step at once (ppq 2.5: 16th 10 = note 50) */
+        uint32_t from;
+        int on[4] = {-1, -1, -1, -1}, c = 0;
+        tr_take_notes(k);
+        from = tr_nn;
+        tr_host(k, &t, 30000, 512, 0, 120.0, 0.0, 0, 0);
+        tr_take_notes(k);
+        for (uint32_t i = from; i < tr_nn; i++) c += tr_nt[i].vel != 0;
+        from = tr_nn;
+        tr_host(k, &t, 3000, 512, 1, 120.0, 2.5, 0, 0);
+        tr_take_notes(k);
+        for (uint32_t i = from, j = 0; i < tr_nn && j < 4; i++) if (tr_nt[i].vel) on[j++] = tr_nt[i].note;
+        printf("core_no_stuck_notes: stopped with SEQ PLAY on: %d note-ons; playing from ppq 2.5: note %d (want 0, 50)\n",
+               c, on[0]);
+        CHECK(c == 0 && on[0] == 50);
+    }
     kc_seq_play(k, 0);
     tr_host(k, &t, 2048, 512, 1, 133.0, 9.0, 0, 0);
     tr_take_notes(k);

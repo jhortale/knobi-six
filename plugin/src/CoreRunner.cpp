@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "CoreRunner.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -40,7 +41,7 @@ bool CoreRunner::prepare(double sampleRate, int maxBlock)
         }
     std::memset(paramQueued_, 0, sizeof paramQueued_);
     session_ = 0, front_ = 0, qr_ = qw_ = 0;
-    last_.valid = false;
+    last_.valid = false, wrapped_ = false;
     return true;
 }
 
@@ -158,8 +159,19 @@ void CoreRunner::transport(const Transport& t, uint32_t n)
 {
     if (!core_) return;
     const int64_t S = session_, e0 = internalAt(S);
-    if (!t.playing) { last_.valid = false; kc_clock_host(core_, 0, 120.0, 0.0, (uint32_t)(e0 - front_)); return; }
+    if (!t.playing) {
+        last_.valid = false, wrapped_ = false;
+        kc_clock_host(core_, 0, 120.0, 0.0, (uint32_t)(e0 - front_));
+        return;
+    }
     const double rate = (double)rate_;
+    double ppq = t.ppq;
+    // the last block's wrap came (by its predicted tempo) a little before the host's own: the host is still just
+    // before the loop's end here (within kWrapLate). It is the same instant after the wrap: the position as wrapped
+    // (just before the loop's start: the clock's own position within its tolerance, no jump, no step again)
+    if (wrapped_ && t.looping && t.loopEnd > t.loopStart && ppq < t.loopEnd && ppq >= t.loopEnd - kWrapLate)
+        ppq -= t.loopEnd - t.loopStart;
+    wrapped_ = false;
     double bpm = t.bpm > 0.0 && t.bpm < 1e4 ? t.bpm : 120.0;
     // a tempo ramp (automation): the host gives the tempo at the block's start only. The tempo over the last block (its
     // positions' difference) is half a block's change behind the tempo at this one's start when the tempo moves
@@ -169,22 +181,26 @@ void CoreRunner::transport(const Transport& t, uint32_t n)
     // corrects any error)
     const double given = bpm;
     if (last_.valid && S > last_.s) {
-        const double secs = (double)(S - last_.s) / rate, avg = (t.ppq - last_.ppq) / secs * 60.0, d = bpm - avg;
+        const double secs = (double)(S - last_.s) / rate, avg = (ppq - last_.ppq) / secs * 60.0, d = bpm - avg;
         if (std::fabs(avg - last_.bpm) <= kRampMax && std::fabs(d) <= kRampMax)
             bpm += d * (double)n / (double)(S - last_.s);
     }
-    last_ = {true, S, t.ppq, given};
+    last_ = {true, S, ppq, given};
+    // the core's tempo exactly (kc_clock_host: 1..999 BPM in steps of 1/64, rounded), so the wrap's frame below is
+    // where the core's own clock reaches the loop's end
+    bpm = std::round(std::min(999.0, std::max(1.0, bpm)) * 64.0) / 64.0;
     const double qps = bpm / 60.0;               // (quarters a second)
     // the position at e(S): the host's at S, moved on by e(S)'s time after S (0 at 44.1 kHz)
-    kc_clock_host(core_, 1, bpm, t.ppq + ((double)e0 / KC_RATE - (double)S / rate) * qps, (uint32_t)(e0 - front_));
-    if (t.looping && t.loopEnd > t.loopStart && t.ppq < t.loopEnd && t.ppq + n / rate * qps > t.loopEnd) {
-        const double sw = (double)S + (t.loopEnd - t.ppq) / qps * rate;   // the wrap: its session time (samples)
+    kc_clock_host(core_, 1, bpm, ppq + ((double)e0 / KC_RATE - (double)S / rate) * qps, (uint32_t)(e0 - front_));
+    if (t.looping && t.loopEnd > t.loopStart && ppq < t.loopEnd && ppq + n / rate * qps > t.loopEnd) {
+        const double sw = (double)S + (t.loopEnd - ppq) / qps * rate;   // the wrap: its session time (samples)
         // its frame: the first at or after it, and never after the frame where the clock reaches the loop's end on
-        // its own (the clock's own position is exact to ~1e-6 frame: within kWrapEps a frame earlier is the same
-        // instant), so the old timeline's step at the loop's end is never fired before the wrap (a doubled step)
+        // its own: the clock runs from this block's anchor at the same (quantised) tempo, its position rounded to
+        // 1 / CLOCK_U of a tick there (< 1e-4 frame), so within kWrapEps a frame earlier is the same instant; the old
+        // timeline's step at the loop's end is never fired before the wrap (a doubled step)
         const int64_t ew = (int64_t)std::ceil(sw * KC_RATE / rate - kWrapEps);
         if (ew < internalAt(S + (int64_t)n)) {    // (in this block: the next one's anchor has it otherwise)
-            last_.valid = false;                  // (the next block's position: after the wrap)
+            last_.valid = false, wrapped_ = true; // (the next block's position: after the wrap)
             kc_clock_host(core_, 1, bpm, t.loopStart + ((double)ew / KC_RATE - sw / rate) * qps, (uint32_t)(ew - front_));
         }
     }

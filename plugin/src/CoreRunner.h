@@ -18,7 +18,9 @@
 // MIDI message at S acts at, with the position moved on to e(S)'s own time (at other rates e(S) is up to one internal
 // frame after S: + (e(S) / 44100 - S / rate) x bpm / 60 quarter notes), at the block's tempo (a steady ramp: the tempo
 // predicted for the block's middle from the last block's, transport()); a loop's wrap inside the block (the loop's end
-// before the block's end, at the block's tempo) is given at its own frame, the loop's start there. So a step at the
+// before the block's end, at the block's tempo) is given at its own frame, the loop's start there (the tempo the
+// core's, quantised to 1/64 BPM, so the frame is where the core's clock reaches the loop's end; a host still just
+// before the loop's end at the next block -- the prediction a little early -- is taken as wrapped). So a step at the
 // host's position p acts at the internal frame of the session sample where the host is at p -- where a MIDI note the
 // host places at p acts -- and sounds latency() samples later, as that note does: aligned with the host's grid once
 // the host compensates the reported latency (it delays the other tracks by it).
@@ -70,7 +72,8 @@ public:
     // n frames into L and R (floats, -1..1); ev: this block's MIDI, by offset (0..n-1, in order)
     void process(float* L, float* R, uint32_t n, const MidiEvent* ev, uint32_t nev);
     // the host's transport for the coming process() block of n samples (above): the core's clock follows it while
-    // playing; stopped, the firmware's clock (internal at P_BPM)
+    // playing; stopped, the firmware's clock (internal at P_BPM) for the arp, the sequencer armed (it plays only while
+    // the host plays: knobi_core.h kc_clock_host)
     void transport(const Transport& t, uint32_t n);
     // the core's clock follows the host now (P_BPM greyed on the panel): as of the frames rendered so far
     bool following() const { return core_ && kc_clock_following(core_) != 0; }
@@ -98,6 +101,9 @@ private:
     void queueMidi(const MidiEvent& m, uint32_t offset);   // offset: in the part about to be processed
     void processPart(float* L, float* R, uint32_t n);
     static constexpr double kWrapEps = 1e-3;     // internal frames: a loop's wrap this close after a frame is at it
+    static constexpr double kWrapLate = 1.0 / 192.0;   // quarter notes: the host's own wrap this much after ours (a
+                                                  // ramp's prediction) is the same wrap (half the clock's tolerance)
+    bool wrapped_ = false;                        // the last block had a wrap inside it (transport())
     static constexpr double kRampMax = 2.0;      // BPM a block: a steady tempo change (transport(): a ramp)
     struct Last { bool valid; int64_t s; double ppq, bpm; };   // the last playing block's transport (a ramp's slope)
     Last last_{false, 0, 0.0, 0.0};

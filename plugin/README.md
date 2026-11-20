@@ -92,7 +92,11 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 9. The clock from Live (the arp with a chord held, or a sequence playing: SEQ PLAY comes with the panel, Task 7/8):
    press play from bar 1, from the middle of a bar, loop 1 or 2 bars, jump around while playing, automate the tempo:
    the steps stay on Live's grid next to a drum clip, a loop's wrap plays the loop start's step, no note hangs. Stop
-   Live: the arp still plays with keys held, at the program's BPM (P_BPM, shown greyed while Live plays).
+   Live: the sequence stops (SEQ PLAY stays on, armed: the next play starts it on the song's step); the arp still plays
+   with keys held, at the program's BPM (P_BPM, shown greyed while Live plays). **Required manual check:** the
+   alignment with Live's grid after its delay compensation (a sequence step vs a drum clip's hit on the same 16th,
+   at 44.1 and 48 kHz) — the tests prove the step sounds exactly where a clip note at that position sounds inside the
+   plugin, not what Live does with the reported latency.
 10. To check (not known yet, please report): with the arrangement **recording** and automation armed, does a program
    change or a CC into KNOBI-SIX write automation for the parameters it changes? JUCE tells the host with a plain value
    change and no gesture; for AU, JUCE's notification is the one Live and Logic are reported not to record; for VST3 it
@@ -137,9 +141,13 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   of Live's grid (no restart: Live owns the phase). A step at Live's position p sounds exactly where a clip
   note at p sounds (same sample, same latency compensation: `transport_aligned`). Tempo automation is followed (a ramp
   predicted within the block: within one sample of the ideal grid). P_BPM is kept but not used while Live plays
-  (`Processor::followingHost()` for the panel's grey). Stopped: the firmware's clock (internal at P_BPM from where it
-  was, the firmware's rules: the arp plays with keys held, the sequencer while SEQ PLAY is on, a new arp pattern
-  restarts it unless ARP BEAT SYNC). No MIDI clock out.
+  (`Processor::followingHost()` for the panel's grey). Stopped: the firmware's clock for the arp (internal at P_BPM
+  from where it was, the firmware's rules: the arp plays with keys held, a new arp pattern restarts it unless ARP BEAT
+  SYNC); the sequencer stops with Live (João's decision): SEQ PLAY on while Live is stopped (or before it ever played)
+  arms it (`kc_seq_state` 2, no note, no clock restart) and Live's play starts it on the song position's step. A loop's
+  wrap uses the core's tempo exactly (quantised to 1/64 BPM) and a host still just before the loop's end after a
+  predicted wrap counts as wrapped, so no step is doubled or skipped (`transport_loop_tempo`). The arp's pattern is not
+  reset at a loop's wrap. No MIDI clock out.
 - `src/StateCodec.*`: the set state: `KN6S`, version, minimum reader version, then tagged records (program number,
   flags, the firmware's packed program record, its packed sequence record); unknown records are skipped, older program
   record versions load. The stored copy wins over the bank on load.
@@ -147,7 +155,7 @@ local one; on this Mac it is installed since Task 3 (remove it as above).
   lock counter around `processBlock`), `seam`, `silent_block`, `prepare_keeps_pending`, `events_ordered`,
   `params_layout`, `automation_to_core`, `core_to_host`, `state_roundtrip`, `state_bank_changed`, `state_versioned`,
   `rt_params` (automation storms and program loads: no allocation, no lock), `transport_start_bar`,
-  `transport_aligned`, `transport_loop`, `transport_locate`, `transport_tempo_ramp`, `transport_stop_internal`,
+  `transport_aligned`, `transport_loop`, `transport_loop_tempo`, `transport_locate`, `transport_tempo_ramp`, `transport_stop_internal`,
   `bpm_param_greyed` (a fake AudioPlayHead), `bundle_exports` (the bundles export none of the firmware's symbols).
 - What `rt_no_alloc` covers: `processBlock` as the tests call it — the processor, CoreRunner, the core, CoreAccess's
   audio side, the silent path and its replay (`silent_block`) — counting the malloc family (incl. typed and zone

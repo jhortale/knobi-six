@@ -124,13 +124,16 @@ KC_API int32_t kc_global_get(const kc_t *k, int g);
 /* The host's transport (plan Task 5; synth/clock.h "The host's transport", spec "Clock from Live"): playing, the tempo
  * (BPM) and the position (quarter notes from the song's start, ppq; negative in a count-in) as of the frame
  * frame_offset frames after the next frame the core hands out (kc_render / kc_render_exact; a frame already rendered
- * into kc_render's FIFO: at the next block's first frame). Given once a host block for its first frame, and once more
+ * into kc_render's FIFO: at the next block's first frame, the position moved on to it at that tempo). Given once a host block for its first frame, and once more
  * for a loop's wrap inside the block (at the wrap's frame, the loop's start), in frame order. While the host plays the
  * clock follows it: the steps are the host's grid from position 0 (a start mid-bar, a loop's wrap, a locate land on the
  * matching step: the sequence's step = the step's number modulo its length), the tempo the host's (automation
  * followed; P_BPM kept, not used: kc_clock_following), MIDI clock in and the arp's restart do nothing. A jump or a stop
  * releases the arp's and the sequencer's notes at its frame. Stopped: the firmware's clock (MIDI CLOCK OFF: internal at
- * P_BPM, from where it was: the arp plays with keys held, the sequencer with SEQ PLAY on; the firmware's rules). The
+ * P_BPM, from where it was: the arp plays with keys held, the firmware's rules) -- but not the sequencer: once a host
+ * transport has been given (playing or not), the sequencer plays only while the host plays. SEQ PLAY on with the host
+ * stopped (or not played yet) arms it (kc_seq_state 2, no note, no clock restart); the host's play starts it on the
+ * song position's step; the host's stop silences it and leaves it armed. The
  * output frame: an event at internal frame f acts at f, as a MIDI message given for f does (kc_midi before rendering
  * f): a step at the host's position p acts where a MIDI note the host places at p would. Not a number (bpm, ppq):
  * 120 BPM, position 0 */
@@ -140,6 +143,8 @@ KC_API int kc_clock_following(const kc_t *k);   /* the clock follows the host no
  * asked */
 KC_API void kc_seq_play(kc_t *k, int on);
 KC_API int kc_seq_playing(const kc_t *k);
+KC_API int kc_seq_state(const kc_t *k);   /* 0 stopped, 1 playing, 2 armed (SEQ PLAY on, waiting: the host stopped or
+                                           * the clock not running), as of the last block */
 /* what the clock and the arp / sequencer did (the panel's playing step, the tests): logs of KC_LOG entries since the
  * last call (older ones dropped), read and emptied here. Steps: every clock step event, its internal frame (frames
  * rendered since kc_create), number (the host's grid: the song position's step), kind (synth/clock.h CLK_EV_*, |

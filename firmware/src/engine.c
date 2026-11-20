@@ -400,7 +400,11 @@ static void eng_drain(void)
         case EV_SEQPLAY:
             if (!e->b) { eng_seq_stop(); break; }
             if (eng_arp.on) arp_set(&eng_arp, &eng_synth, P_ARP_ON, 0), eng_synth.prog.v[P_ARP_ON] = 0;   /* exclusive */
-            if (seq_play(&eng_seqp, 1)) eng_arp_start();   /* (the arp's start rules) */
+            if (seq_play(&eng_seqp, 1)
+#ifdef CLOCK_HOST
+                && !eng_clk.hseen         /* (a host transport: armed, the host's play starts it; no restart) */
+#endif
+                ) eng_arp_start();        /* (the arp's start rules) */
             break;
         case EV_SEQXP: seq_transpose(&eng_seqp, e->b); break;
         case EV_SEQ:                      /* a new sequence: the player follows it (its notes sounding are its own) */
@@ -627,7 +631,10 @@ static void eng_cpu(uint32_t used, uint32_t budget)
  * before it (a tie does not carry across it). A resumed step (started inside its first half) plays with what is left of
  * its gate on the grid. A step on the host's grid plays the sequence's step matching the song position: the step's
  * number modulo the sequence's length (the sequence anchored at position 0: bar 1 plays step 1), so a start mid-bar,
- * a loop's wrap and a locate land on the matching step. 1: a release only, no step here */
+ * a loop's wrap and a locate land on the matching step. With a host transport (clock.h hseen) the sequencer plays only
+ * on the host's steps: the host stopped (or never played yet), SEQ PLAY on waits, armed (eng_seq_state 2; the arp
+ * plays on the internal clock as the firmware's). 1: a release only, no step here; 2: the arp's step, not the
+ * sequencer's; 0: both */
 static int eng_host_step(uint32_t k)
 {
     unsigned kind = eng_clk.kind[k] & CLK_EV_KIND;
@@ -636,6 +643,7 @@ static int eng_host_step(uint32_t k)
         seq_silence(&eng_seqp, &eng_synth);
     }
     if (kind == CLK_EV_RELEASE) return 1;
+    if (eng_clk.hseen && !(eng_clk.kind[k] & CLK_EV_HOSTED)) return 2;   /* (the host stopped: the sequencer armed) */
     if (kind == CLK_EV_RESUME) eng_arp.step_len = eng_seqp.step_len = 2u * eng_clk.gate[k];
     if (eng_clk.kind[k] & CLK_EV_HOSTED) {
         int32_t len = eng_seqd.len > SEQ_MAX_STEPS ? (int32_t)SEQ_MAX_STEPS : (int32_t)eng_seqd.len, m;
@@ -654,9 +662,13 @@ static void eng_render_steps(int32_t *lr, uint32_t frames)
             uint32_t ticks = CLOCK_DIV_TICKS[eng_clk.div][eng_clk.step[k] & 1u], rate = eng_clk.rate;
             eng_arp.step_len = eng_seqp.step_len = rate ? ticks * CLOCK_U / rate : 0u;   /* (48 x CLOCK_U < 2^29) */
 #ifdef CLOCK_HOST
-            if (eng_host_step(k)) { k++; continue; }
+            int hs = eng_host_step(k);
+            if (hs == 1) { k++; continue; }
 #endif
             arp_step(&eng_arp, &eng_synth);
+#ifdef CLOCK_HOST
+            if (!hs)
+#endif
             seq_step(&eng_seqp, &eng_synth);
             k++;
         }
@@ -699,6 +711,9 @@ static void eng_render(int32_t *lr, uint32_t frames)   /* app_audio: adds into L
 #endif
     eng_render_steps(lr, frames);
     eng_seq_state = (uint8_t)(!eng_seqp.on ? 0 : eng_clk_run ? 1 : 2);
+#ifdef CLOCK_HOST
+    if (eng_seqp.on && eng_clk.hseen && !eng_clk.host) eng_seq_state = 2;   /* (armed: waiting for the host's play) */
+#endif
     eng_seq_cur = eng_seqp.cur;
 #ifdef DINGHY_HOST
     eng_fake_ticks += eng_fake_per_voice * (uint32_t)synth_active(&eng_synth);

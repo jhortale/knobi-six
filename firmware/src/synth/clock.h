@@ -96,6 +96,8 @@
  *   - stopped (from playing): CLK_EV_RELEASE at its frame, and the clock is the firmware's again from where it is
  *     (its mode, at P_BPM if internal: the next step where the grid has it, at that tempo; no restart). Stopped
  *     anchors while not following change nothing: with the host stopped the clock is exactly the firmware's.
+ * hseen: set by the first clock_host (playing or not) and kept: there is a host transport (engine.c: the sequencer
+ * plays only while it plays; stopped, SEQ PLAY on waits, armed).
  * Every event has a kind (kind[]: CLK_EV_*, | CLK_EV_HOSTED for a step on the host's grid) and gate[] (RESUME: the
  * gate's frames left; else 0). Not integers-only (the core is host code): 64-bit arithmetic. */
 #ifndef KNOBI_CLOCK_H
@@ -152,6 +154,8 @@ typedef struct clk {
     uint32_t starts, start_ticks;        /* restarts to step 0 so far; ticks before the latest one's tick 0 */
 #ifdef CLOCK_HOST
     uint8_t host;                        /* following the host (playing) */
+    uint8_t hseen;                       /* a host transport given (clock_host called): engine.c plays the sequencer
+                                          * only on the host's steps (the host stopped: armed) */
     uint8_t hpart;                       /* clock_tick: a part of a block cut at an anchor (events kept, frames + hoff) */
     uint8_t hq_n;                        /* anchors waiting */
     uint32_t hoff;                       /* the part's first frame in the block */

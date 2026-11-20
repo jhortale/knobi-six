@@ -59,7 +59,10 @@
 //   transport_tempo_ramp  100 -> 140 BPM in 4 s (each block's tempo at its start, the exact position): every 16th within
 //                         1 internal frame of the ideal grid (48 kHz / 1000, 44.1 kHz / 512)
 //   transport_stop_internal  P_BPM automated while playing: reaches the core, not used (greyed); stopped: one release,
-//                         the internal clock at the new P_BPM, the sequence on (SEQ PLAY on: the firmware's rule)
+//                         the internal clock at the new P_BPM, the sequencer stopped with Live (SEQ PLAY on: armed,
+//                         no note), resuming on the song's step at Live's next play
+//   transport_loop_tempo  loops at tempos off the core's 1/64 BPM grid and under a ramp, blocks of 2048: no step
+//                         doubled, skipped or out of order at the wraps
 //   bpm_param_greyed      followingHost(): off stopped, on playing; the host's 150 used, not P_BPM 60
 //   rt_params             every parameter set every block (setValue: what the wrappers call), CCs, MIDI program
 //                         changes and setCurrentProgram from another thread: no allocation, no lock in processBlock
@@ -1381,7 +1384,7 @@ static void transport_loop()
         Host h(p, rate, block);
         tpProgram(p, 12);
         h.run(2 * block);
-        kc_seq_play(p.runner().core(), 1);        // (stopped: it plays on the internal clock until the start)
+        kc_seq_play(p.runner().core(), 1);        // (stopped: armed until the start)
         h.run(2 * block);
         h.steps();
         {
@@ -1410,6 +1413,46 @@ static void transport_loop()
         std::printf("transport_loop: %.0f Hz, blocks of %d: %d steps in 3 passes (want 48), %d off; %u note-ons in order: "
                     "%s\n", rate, block, n, bad, ons, order ? "yes" : "no");
         CHECK(n == 48 && bad == 0 && ons >= 47 && order);
+    }
+}
+
+// the loop at tempos that are not whole multiples of 1/64 BPM (the core's tempo resolution) and under a ramp, blocks of
+// 2048 (the wrap far into a block): 1-bar loops, 48 passes each (a ramp: the tempo moving every block); the steps'
+// numbers 0..15 every pass, none doubled or skipped at a wrap (the old timeline's loop-end step never fires before the
+// wrap's jump), never two steps a frame or less apart
+static void transport_loop_tempo()
+{
+    struct Case { double rate, bpm, ramp; };      // ramp: BPM added per block (bounded: a triangle)
+    for (const Case c : {Case{48000, 100.4, 0}, Case{44100, 100.4, 0}, Case{48000, 77.7, 0}, Case{44100, 141.2, 0},
+                         Case{44100, 97.3, 0}, Case{48000, 133.71, 0}, Case{44100, 100.4, 0.37},
+                         Case{48000, 123.45, -0.29}}) {
+        Processor p;
+        Host h(p, c.rate, 2048);
+        kc_param_set(p.runner().core(), P_CLK_DIV, kDiv16th);
+        h.run(2048);
+        h.steps();
+        h.head.playing = true, h.head.looping = true, h.head.ls = 0.0, h.head.le = 4.0, h.head.bpm = c.bpm;
+        int blk = 0, expect = 0, bad = 0, total = 0, close = 0;
+        int64_t lastF = -100;
+        for (int pass = 0; pass < 48; pass++) {
+            const int64_t until = h.s + (int64_t)(4.0 * 60.0 / c.bpm * c.rate);
+            h.run(until - h.s, {}, [&](int64_t) {
+                if (c.ramp != 0) h.head.bpm = c.bpm + c.ramp * ((blk / 40) % 2 ? 40 - blk % 40 : blk % 40);
+                blk++;
+            });
+            for (auto& e : h.steps()) {
+                if (!(e.kind & KC_EV_HOSTED)) continue;
+                if (e.step != expect && std::getenv("TP_DEBUG"))
+                    std::printf("  frame %llu step %d kind %02X (want %d; last at %lld)\n", (unsigned long long)e.frame,
+                                e.step, e.kind, expect, (long long)lastF);
+                bad += e.step != expect;
+                close += (int64_t)e.frame - lastF <= 1;
+                lastF = (int64_t)e.frame, expect = (e.step + 1) % 16, total++;
+            }
+        }
+        std::printf("transport_loop_tempo: %.0f Hz, %.2f BPM%s: %d steps (steady: want 768), %d out of order, %d at "
+                    "once\n", c.rate, c.bpm, c.ramp != 0 ? " ramping" : "", total, bad, close);
+        CHECK(bad == 0 && close == 0 && (c.ramp != 0 ? total > 600 : total >= 767 && total <= 769));
     }
 }
 
@@ -1476,9 +1519,11 @@ static void transport_tempo_ramp()
     }
 }
 
-// stopped: the internal clock at P_BPM (the arp / sequencer per the firmware's rules); P_BPM greyed while playing: a
-// host change of it (automation) reaches the core (kc_param_get) but the steps stay on the host's 120; following
-// while playing, not after the stop; after the stop the internal clock at the new P_BPM (90): steps 7350 frames apart
+// stopped: the internal clock at P_BPM (the arp's, as the firmware's); P_BPM greyed while playing: a host change of it
+// (automation) reaches the core (kc_param_get) but the steps stay on the host's 120; following while playing, not
+// after the stop; after the stop the internal clock at the new P_BPM (90): steps 7350 frames apart; the sequencer stops
+// with Live (no note while stopped, SEQ PLAY still on: armed, state 2) and Live's next play resumes it on the song's
+// step (from ppq 2.75: the 16th 11, note 51)
 static void transport_stop_internal()
 {
     Processor p;
@@ -1502,6 +1547,9 @@ static void transport_stop_internal()
     std::printf("bpm_param_greyed: P_BPM %d while playing: following %d, %zu steps, %d not 16ths of 120\n",
                 (int)kc_param_get(p.runner().core(), P_BPM), (int)followed, st.size(), bad);
     CHECK(kc_param_get(p.runner().core(), P_BPM) == 90 && followed && st.size() >= 3 && bad == 0);
+    kc_note_t nt[KC_LOG];
+    kc_notes(p.runner().core(), nt, KC_LOG);      // (the notes played so far: dropped)
+    const int64_t stopAt = h.s;
     h.head.playing = false;
     h.run(512 * 100);
     st = h.steps();
@@ -1510,9 +1558,21 @@ static void transport_stop_internal()
         if ((st[i].kind & KC_EV_KIND) == KC_EV_RELEASE) { rel++; continue; }
         if (n++ && st[i].frame - st[i - 1].frame != 7350) gaps++;
     }
+    uint32_t m = kc_notes(p.runner().core(), nt, KC_LOG), ons = 0;
+    for (uint32_t i = 0; i < m; i++) ons += nt[i].vel != 0 && (int64_t)nt[i].frame >= stopAt;
     std::printf("transport_stop_internal: stopped: following %d, %d release(s), %d steps on the internal clock, %d not "
-                "7350 apart (90 BPM); SEQ PLAY %d\n", (int)p.followingHost(), rel, n, gaps, kc_seq_playing(p.runner().core()));
-    CHECK(!p.followingHost() && rel == 1 && n >= 6 && gaps == 0 && kc_seq_playing(p.runner().core()));
+                "7350 apart (90 BPM); the sequencer: %u note-ons, SEQ PLAY %d, state %d\n", (int)p.followingHost(), rel, n,
+                gaps, ons, kc_seq_playing(p.runner().core()), kc_seq_state(p.runner().core()));
+    CHECK(!p.followingHost() && rel == 1 && n >= 6 && gaps == 0 && ons == 0 && kc_seq_playing(p.runner().core()) &&
+          kc_seq_state(p.runner().core()) == 2);
+    h.head.playing = true, h.head.ppq = 2.75;
+    h.run(1024);
+    m = kc_notes(p.runner().core(), nt, KC_LOG);
+    uint32_t first = 0;
+    while (first < m && !nt[first].vel) first++;
+    std::printf("transport_stop_internal: Live plays again from ppq 2.75: note %d (want 51), state %d\n",
+                first < m ? nt[first].note : -1, kc_seq_state(p.runner().core()));
+    CHECK(first < m && nt[first].note == 51 && kc_seq_state(p.runner().core()) == 1);
 }
 
 // P_BPM greyed: following while playing (the panel's flag), the host's tempo used, not P_BPM; stopped: P_BPM
@@ -1550,7 +1610,8 @@ int main(int argc, char** argv)
         {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
         {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
-        {"transport_loop", transport_loop}, {"transport_locate", transport_locate},
+        {"transport_loop", transport_loop}, {"transport_loop_tempo", transport_loop_tempo},
+        {"transport_locate", transport_locate},
         {"transport_tempo_ramp", transport_tempo_ramp}, {"transport_stop_internal", transport_stop_internal},
         {"bpm_param_greyed", bpm_param_greyed},
     };

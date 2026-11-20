@@ -339,6 +339,7 @@ static uint32_t clk_host_tick(clk_t *c, uint32_t frames)
 void clock_host(clk_t *c, uint32_t at, int playing, uint32_t rate, uint32_t pos, uint32_t frac)
 {
     struct clk_host h;
+    c->hseen = 1;
     h.at = at, h.rate = rate, h.pos = pos, h.frac = frac < CLOCK_U ? frac : CLOCK_U - 1u, h.playing = (uint8_t)(playing != 0);
     if (c->hq_n && h.at <= c->hq[c->hq_n - 1u].at) {   /* (at the last one's frame, or before it: the newest wins there:
                                                  * a block's start and a loop's wrap at the same frame, one step) */

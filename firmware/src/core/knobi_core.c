@@ -493,6 +493,9 @@ void kc_clock_host(kc_t *k, int playing, double bpm, double ppq_pos, uint32_t fr
         double t, w;
         if (!(bpm >= 1.0 && bpm <= 999.0)) bpm = bpm > 999.0 ? 999.0 : bpm >= 0.0 && bpm < 1.0 ? 1.0 : 120.0;   /* (NaN: 120) */
         if (!(ppq_pos > -8e7 && ppq_pos < 8e7)) ppq_pos = 0.0;   /* (the clock's ticks: a signed 32-bit count) */
+        if (frame_offset < ahead)               /* (a frame already rendered into the FIFO: the anchor at the next
+                                                 * block's first frame, the position moved on to it) */
+            ppq_pos += (double)(ahead - frame_offset) / KC_RATE * bpm / 60.0;
         rate = (uint32_t)(bpm * CLOCK_RATE_Q + 0.5);
         t = ppq_pos * CLOCK_PPQ;
         w = (double)(int64_t)t;
@@ -517,6 +520,13 @@ void kc_seq_play(kc_t *k, int on)
     kc_binding_t was = kc_bind(k);
     if ((on != 0) != (ctl_seq_on() != 0)) ctl_seq_play_press();   /* (the button: recording ends first) */
     kc_unbind(was);
+}
+int kc_seq_state(const kc_t *k)
+{
+    kc_binding_t was = kc_bind(k);
+    int st = eng_seq_state;
+    kc_unbind(was);
+    return st;
 }
 int kc_seq_playing(const kc_t *k)
 {
