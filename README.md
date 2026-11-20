@@ -31,7 +31,8 @@ tests/run_host.sh tests/scripts/diag.txt    # the app on the computer: screens a
 make -C tests unit                          # unit tests (from Task 1 on)
 ```
 
-CI (`.github/workflows/build.yml`) does the device build and the tests on every push to `phase1`, `phase2` and `phase3` and
+CI (`.github/workflows/build.yml`) does the device build and the tests on every push to `main` (the trunk), `phase2` and
+`phase3`, on every pull request into `main`, and
 uploads the package, `app.map` and `app.dis` (the CPU1 build and the probe in the `cpu1-emu` job).
 
 ## Phase 2 (branch `phase2`)

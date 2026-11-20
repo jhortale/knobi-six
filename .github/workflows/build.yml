@@ -1,11 +1,14 @@
 # KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) + the second core in fm1-emu (cpu1-emu job, KNOBI_CPU1=1,
-# never the default) on every push to phase1 or phase2 and on demand; uploads the package, map and disassembly. (release.yml
+# never the default) on every push to main (the trunk) and the phase branches, on every pull request into main, and on
+# demand; uploads the package, map and disassembly. (release.yml
 # publishes tagged releases.) Toolchain and SDK as in release.yml.
 name: build
 
 on:
   push:
-    branches: [phase1, phase2, phase3]
+    branches: [main, phase2, phase3]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
