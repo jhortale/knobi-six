@@ -91,7 +91,7 @@ juce_add_plugin(KnobiSix
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(KnobiSix PRIVATE src/Processor.cpp src/Params.cpp
-    src/ui/Style.cpp src/ui/Widgets.cpp src/ui/ProgramBrowser.cpp src/ui/Editor.cpp)
+    src/ui/Style.cpp src/ui/Widgets.cpp src/ui/ProgramBrowser.cpp src/ui/SeqGrid.cpp src/ui/Editor.cpp)
 target_compile_definitions(KnobiSix PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0
     KNOBI_PLUGIN_LOCAL=$<BOOL:${KNOBI_FACTORY_LOCAL}>)

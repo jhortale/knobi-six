@@ -164,20 +164,23 @@ private:
 };
 
 // a momentary / toggle panel button that is not a parameter (WRITE, BANK, digits, SEQ PLAY ...): a red pad with a
-// label; lit() is drawn lit; onPress runs on a click
+// label; lit() is drawn lit; onPress runs on a click (the mouse pressed), onRelease (if set) when it is let go (SEQ REC:
+// held while the sequence plays + a note = a transpose)
 class Pad final : public juce::Component, public juce::SettableTooltipClient {
 public:
     explicit Pad(juce::String label, bool labelInside = false);
-    std::function<void()> onPress;
+    std::function<void()> onPress, onRelease;
     void setLit(bool l) { if (lit_ != l) lit_ = l, repaint(); }
     bool lit() const { return lit_; }
-    void press() { if (isEnabled() && onPress) onPress(); }   // (tests: as a click)
+    void press() { down_ = isEnabled(); if (down_ && onPress) onPress(); }   // (tests: as a click)
     void paint(juce::Graphics& g) override;
+    void release() { if (down_ && onRelease) onRelease(); down_ = false; }   // (tests: the mouse let go)
     void mouseDown(const juce::MouseEvent&) override { press(); }
+    void mouseUp(const juce::MouseEvent&) override { release(); }
     const juce::String& label() const { return label_; }
 private:
     juce::String label_;
-    bool inside_, lit_ = false;
+    bool inside_, lit_ = false, down_ = false;
 };
 
 } // namespace knobi::ui

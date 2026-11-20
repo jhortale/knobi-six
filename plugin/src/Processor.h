@@ -141,6 +141,27 @@ public:
     struct ProgramInfo { int number = 0; std::string name; bool edited = false, differs = false, user = false; };
     bool programInfo(ProgramInfo& out);
     uint32_t bankGeneration() const { return bankGen_.load(std::memory_order_acquire); }   // +1 each bank change
+
+    // ---- the sequencer grid and the step entry (plan Task 8; ui/SeqGrid.h). Through access() (the message thread; it
+    // may wait for the next block): seqGet the edit buffer's sequence; seqSet a sequence as an edit of it (kc_seq_set: 0
+    // set, edited; 1 the same, nothing done; -1 refused: not a sequence the firmware would store; -2 refused: recording;
+    // -3 the instance did not answer). The step entry, the keyboard's rules (knobi_core.h): seqRecButton SEQ REC pressed
+    // / let go (while playing: tap = stop and record, held + a Live MIDI note = transpose); seqRecRest / Tie / Back the
+    // panel's REST, TIE, BACK (1 changed, 0 not recording, -1 refused, -3 no answer). While recording, Live's MIDI notes
+    // are recorded (the core's MIDI in)
+    bool seqGet(seq_t& out);
+    int seqSet(const seq_t& s);
+    void seqRecButton(bool down);
+    int seqRecRest();
+    int seqRecTie();
+    int seqRecBack();
+    // published by the audio thread after every block (and by the calls above): atomics, no access(). seqVersion moves
+    // when the sequence may have changed (an edit, a recorded step, a load, a WRITE); seqStep the step playing (-1 none);
+    // seqRecState knobi_core.h kc_seq_rec_state (KC_REC_*); seqXp the transpose playing
+    uint32_t seqVersion() const { return seqVer_.load(std::memory_order_acquire); }
+    int seqStep() const { return seqStep_.load(std::memory_order_acquire); }
+    int seqRecState() const { return seqRec_.load(std::memory_order_acquire); }
+    int seqXp() const { return seqXp_.load(std::memory_order_acquire); }
     // the editor's size (1.0 .. 2.0 of its default), kept while the instance lives (not in the set state)
     std::atomic<float> editorScale{1.0f};
 
@@ -186,6 +207,9 @@ private:
     std::atomic<bool> programMoved_{false}, edited_{false}, stateDiffers_{false}, following_{false};
     std::atomic<bool> seqPlaying_{false};
     std::atomic<int> seqState_{0};
+    std::atomic<uint32_t> seqVer_{0};
+    std::atomic<int> seqStep_{-1}, seqRec_{0}, seqXp_{0};
+    int seqCall(int (*op)(kc_t*));                // a step-entry call through access(): its result, -3 no answer
     std::atomic<double> hostBpm_{120.0};
     std::atomic<uint32_t> bankGen_{0};
     std::array<juce::String, KC_PROGRAMS> names_;    // (the message thread; filled on first use, cleared by setBank)

@@ -46,6 +46,10 @@ void Processor::scanCore()
     edited_.store(ed != 0, std::memory_order_release);
     seqPlaying_.store(kc_seq_playing(k) != 0, std::memory_order_release);   // (the panel's SEQ PLAY and state)
     seqState_.store(kc_seq_state(k), std::memory_order_release);
+    seqVer_.store(kc_seq_version(k), std::memory_order_release);   // (the grid: plan Task 8; cheap reads, no copy)
+    seqStep_.store(kc_seq_step(k), std::memory_order_release);
+    seqRec_.store(kc_seq_rec_state(k), std::memory_order_release);
+    seqXp_.store(kc_seq_xp(k), std::memory_order_release);
 }
 
 void Processor::applyHostChanges()
@@ -543,6 +547,64 @@ void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     }
     access_.audioExit();
 }
+
+// ---- the sequencer grid and the step entry (plan Task 8): through access(), copies only (it may run on the audio
+// thread)
+bool Processor::seqGet(seq_t& out)
+{
+    struct Ctx { Processor* p; seq_t* out; } c{this, &out};
+    if (!runner_.ok()) return false;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        kc_seq_get(x->p->runner_.core(), x->out);
+    };
+    if (tlInProcess) { fn(&c); return true; }
+    return access_.run(fn, &c);
+}
+
+int Processor::seqSet(const seq_t& s)
+{
+    struct Ctx { Processor* p; const seq_t* s; int rc; } c{this, &s, -3};
+    if (!runner_.ok()) return -3;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        x->rc = kc_seq_set(x->p->runner_.core(), x->s);
+        x->p->scanCore();                         // (edited, the version: shown at once)
+    };
+    if (tlInProcess) fn(&c);
+    else if (!access_.run(fn, &c)) return -3;
+    return c.rc;
+}
+
+void Processor::seqRecButton(bool down)
+{
+    struct Ctx { Processor* p; int down; } c{this, down ? 1 : 0};
+    if (!runner_.ok()) return;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        kc_seq_rec_button(x->p->runner_.core(), x->down);
+        x->p->scanCore();
+    };
+    if (tlInProcess) fn(&c);
+    else access_.run(fn, &c);
+}
+
+int Processor::seqCall(int (*op)(kc_t*))
+{
+    struct Ctx { Processor* p; int (*op)(kc_t*); int rc; } c{this, op, -3};
+    if (!runner_.ok()) return -3;
+    auto fn = [](void* v) {
+        auto* x = (Ctx*)v;
+        x->rc = x->op(x->p->runner_.core());
+        x->p->scanCore();
+    };
+    if (tlInProcess) fn(&c);
+    else if (!access_.run(fn, &c)) return -3;
+    return c.rc;
+}
+int Processor::seqRecRest() { return seqCall(kc_seq_rec_rest); }
+int Processor::seqRecTie() { return seqCall(kc_seq_rec_tie); }
+int Processor::seqRecBack() { return seqCall(kc_seq_rec_back); }
 
 // ---- the panel (plan Task 7; src/ui/Editor.h)
 juce::AudioProcessorEditor* Processor::createEditor() { return new ui::Editor(*this); }

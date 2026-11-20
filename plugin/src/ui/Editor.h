@@ -12,21 +12,16 @@
 // scaled (an affine transform), so 100 .. 200 % keeps the layout exactly; the window keeps the aspect ratio. The
 // scale is kept by the processor while the instance lives.
 //
-// The sequencer's 64-step grid is plan Task 8's: SequencerSection::gridSlot() is its place (kGridW x kGridH base
-// pixels), a placeholder here.
+// The sequencer (plan Task 8): SEQ PLAY, SEQ REC (step entry: Live's MIDI notes recorded; REST / TIE / BACK; held while
+// the sequence plays + a note: a transpose) and the 64-step grid with mouse editing (SeqGrid.h).
 #pragma once
 #include <map>
 #include "../Processor.h"
 #include "ProgramBrowser.h"
+#include "SeqGrid.h"
 #include "Widgets.h"
 
 namespace knobi::ui {
-
-class GridSlot final : public juce::Component {   // the sequencer grid's place (plan Task 8 fills it)
-public:
-    GridSlot() { setComponentID("seqGrid"); }
-    void paint(juce::Graphics& g) override;
-};
 
 class SequencerSection final : public juce::Component {
 public:
@@ -37,13 +32,18 @@ public:
     void resized() override;
     Pad& playPad() { return play_; }
     Pad& recPad() { return rec_; }
-    GridSlot& gridSlot() { return grid_; }
-    juce::String stateText() const;               // "OFF", "PLAYING", "WAITING FOR LIVE"
+    Pad& restPad() { return rest_; }
+    Pad& tiePad() { return tie_; }
+    Pad& backPad() { return back_; }
+    SeqGrid& grid() { return grid_; }
+    juce::String stateText() const;               // "OFF", "PLAYING", "WAITING FOR LIVE", "RECORDING"
 private:
+    void recResult(int rc, const char* what);     // REST / TIE / BACK refused: why, on the grid's message line
     Processor& p_;
-    Pad play_{"SEQ PLAY", true}, rec_{"SEQ REC", true};
-    GridSlot grid_;
+    Pad play_{"SEQ PLAY", true}, rec_{"SEQ REC", true}, rest_{"REST", true}, tie_{"TIE", true}, back_{"BACK", true};
+    SeqGrid grid_;
     int state_ = 0;
+    bool rec_on_ = false;
 };
 
 // GLOBALS: the library's globals (every instance follows), shown over the panel

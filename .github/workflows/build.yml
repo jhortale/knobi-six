@@ -233,9 +233,9 @@ jobs:
 
       - name: Plugin tests (CTest)
         run: |
-          ctest --test-dir build/plugin --output-on-failure -V | tee ctest.log | grep -E '^[0-9]+: (render|midi|rt_|seam|silent|prepare|events|params|automation|core_to|state|bundle|transport|bpm|library|factory|panel)|tests passed|Failed|FAIL' || true
+          ctest --test-dir build/plugin --output-on-failure -V | tee ctest.log | grep -E '^[0-9]+: (render|midi|rt_|seam|silent|prepare|events|params|automation|core_to|state|bundle|transport|bpm|library|factory|panel|grid)|tests passed|Failed|FAIL' || true
           grep -q '100% tests passed' ctest.log
-          { echo '### Plugin tests (CTest)'; echo '```'; grep -E '^[0-9]+: (render|midi|rt_|seam|silent|prepare|events|params|automation|core_to|state|bundle|transport|bpm|library|factory|panel)|tests passed' ctest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '### Plugin tests (CTest)'; echo '```'; grep -E '^[0-9]+: (render|midi|rt_|seam|silent|prepare|events|params|automation|core_to|state|bundle|transport|bpm|library|factory|panel|grid)|tests passed' ctest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: auval (aumu Kn6x Jhrt)
         run: |

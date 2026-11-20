@@ -9,8 +9,8 @@ bank select + program change); every sound parameter is a Live parameter (73: au
 program list has the bank's 500 programs; a Live set saves the instance's sound (program number, program + sequence,
 edited, differs from bank); the arp and the sequencer follow Live's transport (tempo, position, loop, locate); the
 500-program bank is shared by every instance through one library file (plan Task 6: WRITE / RESTORE FACTORY are there
-and on the panel; the globals); the window is the OB-6-style panel (plan Task 7, below). Not yet: the sequencer grid
-and SEQ REC step entry (Task 8; the panel has their place).
+and on the panel; the globals); the window is the OB-6-style panel (plan Task 7, below) with the sequencer's 64-step
+grid (mouse editing) and SEQ REC step entry from Live's MIDI (plan Task 8).
 
 > **AU recommended in Live.** The VST3 works, but JUCE's VST3 wrapper reports program loads and CC changes to Live in
 > a way Live may record as automation (or that switches a parameter's automation off), and it cannot tell Live that
@@ -115,7 +115,8 @@ rescan). KNOBI-SIX appears in the browser under Plug-Ins → Audio Units → jho
 
 ![The panel at 100 %](docs/panel-100.png)
 
-(`docs/panel-100.png`, `docs/panel-200.png`, `docs/panel-globals.png`: rendered by the `panel_screenshots` test,
+(`docs/panel-100.png`, `docs/panel-200.png`, `docs/panel-globals.png`, `docs/panel-seqstep.png` — the STEP editor:
+rendered by the `panel_screenshots` test, a synthetic demo sequence in the grid;
 `build/plugin/tests/test_editor panel_screenshots plugin/docs`.) After the approved mockups
 (`docs/design/standalone-ui/panel-style-v2.html`, `sections-v2.html`): every section at once, in the panel's order —
 VCO 1, VCO 2, MIXER, FILTER, ENVELOPES; LFO, X-MOD, AFTERTOUCH, MISC; PROGRAM, EFFECTS (distortion), ARPEGGIATOR,
@@ -140,7 +141,28 @@ BPM on a red display (drag up / down).
 - **CLOCK**: the BPM display shows the program's BPM; greyed, showing Live's tempo, while Live plays (the clock follows
   Live). DIVISION: the step length of the arp and the sequencer.
 - **SEQUENCER**: SEQ PLAY (lit when on) and the state: OFF, WAITING FOR LIVE (on, Live stopped: it starts on Live's
-  play), PLAYING. SEQ REC and the 64-step grid come with plan Task 8 (shown, not active yet).
+  play), PLAYING, RECORDING.
+  - **The grid** (64 steps, 16 a row): LENGTH, each step's notes by name (middle C = 60 = **C4**, the firmware's names;
+    Live calls it C3), a velocity bar, a rest as a dash, a tie as "TIE" with a blue bar to the step before, steps past
+    the length as empty frames, the step playing framed red. **Click a step** to open its STEP editor: a two-octave
+    piano (`<` `>` an octave; notes C0–C8, 12–108) — click a key to add the note, a lit key to remove it (6 notes at
+    most); each note's velocity bar (drag it; sent when you let go) and X; REST; TIE (ties it to the step before: it
+    then carries a copy of that step's notes and follows them; refused on step 1 and after a rest, the reason shown in
+    red; TIE again unties it); `<` `>` the step before / after; CLOSE. LENGTH: `-` `+` or drag the number (1–64; new
+    steps are rests). A change is an edit of the program, as on the keyboard: EDITED lights, WRITE stores it with the
+    program, a program change loses it. While the sequence plays, an edit is heard from the next step.
+  - **SEQ REC** (step entry, the keyboard's rules, `docs/CONTROLS.md` "Recording"): click it, then play notes in Live
+    (a clip, a MIDI keyboard into the track): a note = a step at its velocity; a chord = keep a key held while adding
+    notes; **REST** = a rest (let go of the keys first); **TIE** with keys held = they are recorded and held on one more
+    step (again: one more), with none held = the last step held on (not on step 1, not after a rest); **BACK** erases
+    the last step. The sequence is replaced at the first entry (ending with none leaves it as it was); recording stops
+    by itself at 64 steps; SEQ REC again, SEQ PLAY, a program change end it. The grid shows the steps as they come and
+    is read-only meanwhile. The computer keyboard is not used (Live keeps the keys for itself in most cases).
+  - **Transpose**: while the sequence plays, **hold SEQ REC** (mouse button down) and play a note in Live: the sequence
+    is transposed by the note minus C4 (60), from the next step; that note is neither played nor recorded; let go: it
+    stays (XP shows it on the grid). A click without a note while it plays stops the sequence and starts recording, as
+    the keyboard's button. The keyboard's UNISON rule (keys transpose with no hold) is not applied to Live's notes (on
+    the keyboard MIDI in never transposes).
 - **GLOBALS** (top right): master tune (cents), transpose (semitones), velocity and aftertouch curves, stereo / mono —
   kept in the library file, so every instance follows.
 - Font: the mockups' *Arial Rounded MT Bold*, a macOS system font, asked for by name at run time; nothing is embedded

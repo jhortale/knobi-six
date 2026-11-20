@@ -64,62 +64,80 @@ const char* shortLabel(uint16_t id)
 constexpr int kKnobH = 66, kSwitchH = 40, kRow = 80, kTop = 28;   // a knob cell, a switch cell, a row, a title
 } // namespace
 
-// ---- the sequencer grid's place
-void GridSlot::paint(juce::Graphics& g)
-{
-    g.setColour(col::slot);
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), 3.0f);
-    const float cw = (float)getWidth() / 16.0f, rh = (float)getHeight() / 4.0f;
-    g.setColour(juce::Colour(0xff24262b));
-    for (int r = 0; r < 4; r++)
-        for (int c = 0; c < 16; c++)
-            g.fillRoundedRectangle(juce::Rectangle<float>((float)c * cw, (float)r * rh, cw, rh).reduced(3.0f), 2.0f);
-    g.setColour(col::dim);
-    g.setFont(font(11.0f));
-    g.drawText("64-STEP GRID", getLocalBounds(), juce::Justification::centred, false);
-}
-
 // ---- SEQUENCER
-SequencerSection::SequencerSection(Processor& p) : p_(p)
+SequencerSection::SequencerSection(Processor& p) : p_(p), grid_(p)
 {
     play_.onPress = [this] {
         p_.seqPlay(!p_.seqPlaying());
         refresh();
     };
     play_.setTooltip("SEQ PLAY: the program's sequence plays with Live's transport (waits for Live's play)");
-    rec_.setEnabled(false);
-    rec_.setTooltip("SEQ REC: step entry comes with the sequencer grid");
-    addAndMakeVisible(play_);
-    addAndMakeVisible(rec_);
+    // SEQ REC as the keyboard's button: a click arms step entry (playing: stops first) or ends it; while the sequence
+    // plays it acts when let go, unless a Live MIDI note came while it was held (a transpose: that note - C4)
+    rec_.onPress = [this] { p_.seqRecButton(true); refresh(); };
+    rec_.onRelease = [this] { p_.seqRecButton(false); refresh(); };
+    rec_.setTooltip("SEQ REC: step entry from Live's MIDI notes (a chord: keep a key held); REST / TIE / BACK; again "
+                    "ends it. Held while the sequence plays + a note: transpose");
+    rest_.onPress = [this] { recResult(p_.seqRecRest(), "REST"); };
+    tie_.onPress = [this] { recResult(p_.seqRecTie(), "TIE"); };
+    back_.onPress = [this] { recResult(p_.seqRecBack(), "BACK"); };
+    rest_.setTooltip("REST: a rest as the next step (let go of the keys first)");
+    tie_.setTooltip("TIE: keys held: they are recorded and held on through one more step; none held: the last step held "
+                    "on (not after a rest, not as step 1)");
+    back_.setTooltip("BACK: the last step erased");
+    for (Pad* x : {&play_, &rec_, &rest_, &tie_, &back_}) addAndMakeVisible(*x);
     addAndMakeVisible(grid_);
+    for (Pad* x : {&rest_, &tie_, &back_}) x->setEnabled(false);
 }
 
 juce::String SequencerSection::stateText() const
 {
+    if (rec_on_) return "RECORDING";
     return state_ == 1 ? "PLAYING" : state_ == 2 ? "WAITING FOR LIVE" : "OFF";
+}
+
+void SequencerSection::recResult(int rc, const char* what)
+{
+    grid_.poll();                                 // (the step it made: shown now)
+    if (rc >= 0) { if (rc) grid_.say({}); return; }
+    const seq_t& s = grid_.shown();
+    const juce::String w(what);
+    if (rc == -3) grid_.say("NO ANSWER FROM THE ENGINE: TRY AGAIN");
+    else if (w == "REST") grid_.say("KEYS HELD: LET GO FOR A REST (TIE HOLDS THEM ON)");
+    else if (w == "BACK") grid_.say("NOTHING TO ERASE");
+    else if (s.len == 0) grid_.say("NO TIE ON STEP 1: NOTHING TO HOLD ON YET");
+    else if (s.len >= SEQ_MAX_STEPS) grid_.say("64 STEPS: THE SEQUENCE IS FULL");
+    else grid_.say("NO TIE AFTER A REST");
 }
 
 void SequencerSection::refresh()
 {
     const int st = p_.seqState();
+    const bool rec = (p_.seqRecState() & KC_REC_ON) != 0;
     play_.setLit(p_.seqPlaying());
-    if (st != state_) state_ = st, repaint();
+    rec_.setLit(rec);
+    for (Pad* x : {&rest_, &tie_, &back_}) x->setEnabled(rec);
+    if (st != state_ || rec != rec_on_) state_ = st, rec_on_ = rec, repaint();
+    grid_.poll();
 }
 
 void SequencerSection::resized()
 {
-    play_.setBounds(8, kTop, 96, 24);
-    rec_.setBounds(112, kTop, 96, 24);
+    play_.setBounds(8, kTop, 88, 24);
+    rec_.setBounds(100, kTop, 88, 24);
+    rest_.setBounds(196, kTop, 56, 24);
+    tie_.setBounds(256, kTop, 56, 24);
+    back_.setBounds(316, kTop, 56, 24);
     grid_.setBounds((getWidth() - kGridW) / 2, kTop + 34, kGridW, kGridH);
 }
 
 void SequencerSection::paint(juce::Graphics& g)
 {
     drawSectionTitle(g, getLocalBounds(), "SEQUENCER");
-    drawLed(g, {230.0f, (float)kTop + 12.0f}, 8.0f, state_ == 1);
+    drawLed(g, {392.0f, (float)kTop + 12.0f}, 8.0f, state_ == 1 || rec_on_);
     g.setFont(font(12.0f));
-    g.setColour(state_ ? col::text : col::dim);
-    g.drawText(stateText(), juce::Rectangle<int>(242, kTop, 300, 24), juce::Justification::centredLeft, false);
+    g.setColour(state_ || rec_on_ ? col::text : col::dim);
+    g.drawText(stateText(), juce::Rectangle<int>(404, kTop, 330, 24), juce::Justification::centredLeft, false);
 }
 
 // ---- GLOBALS

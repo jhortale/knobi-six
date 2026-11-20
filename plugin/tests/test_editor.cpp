@@ -25,20 +25,37 @@
 //   panel_clock           the BPM display shows P_BPM while Live is stopped; greyed with Live's tempo while it plays
 //                         (followingHost); the clock divisions are a select of the 10 divisions
 //   panel_sequencer       SEQ PLAY switches the sequencer (the pad lit); the state reads OFF / WAITING FOR LIVE (Live
-//                         stopped) / PLAYING (Live playing); SEQ REC present (disabled until the step entry, Task 8);
-//                         the grid's place is a component of kGridW x kGridH inside the SEQUENCER section
+//                         stopped) / PLAYING (Live playing); SEQ REC present and enabled (Task 8); the grid is a
+//                         component of kGridW x kGridH inside the SEQUENCER section
 //   panel_globals         GLOBALS opens the settings view: master tune, transpose, velocity / aftertouch curves,
 //                         stereo / mono, each into the library (another processor on the file follows); the "AU
 //                         recommended in Live" hint is on it
 //   panel_rt              an audio thread renders (its own allocations and locks counted) while the editor polls and
-//                         the user moves controls, loads programs and presses SEQ PLAY: no allocation, no lock on the
-//                         audio thread
+//                         the user moves controls, loads programs and presses SEQ PLAY, edits the grid and records
+//                         (SEQ REC, REST, TIE, BACK): no allocation, no lock on the audio thread
 //   panel_idle            (fix round 1) nothing changing: 60 polls make no access() call (no snapshot, the message
-//                         thread never waits for the audio thread); a parameter edit while "edited" stays set (after
+//                         thread never waits for the audio thread); (Task 8) the grid: no access() call idle or while the
+//                         playing step moves (an atomic), one sequence read per recorded step; a parameter edit while "edited" stays set (after
 //                         RESTORE FACTORY) updates "differs from bank" within ProgramBrowser::kParamTicks polls, both
 //                         ways; an unpolled switch toggles from the parameter's own value
 //   panel_screenshots     the panel rendered at 100 % and 200 % to PNG (argv[2]: the directory; default a temporary
-//                         one): non-empty images of the right size
+//                         one): non-empty images of the right size; the grid with a demo sequence (synthetic), its STEP
+//                         editor open (panel-seqstep.png)
+// The sequencer grid and the step entry (plan Task 8; ui/SeqGrid.h):
+//   grid_shows            the length, each step's notes (a note, a chord, a tie, a rest, 6 notes), the steps past the
+//                         end; the playing step (the core's seqStep) moves while Live plays, one at a time; none stopped
+//   grid_mouse            through the mouse: a step opened, notes added from the piano (a 7th refused, its reason),
+//                         removed (a lit key, X), a velocity dragged, REST, TIE (refused on step 1 and after a rest, with
+//                         the reason; a tie carries the step before's notes and follows them; a rest before it unties
+//                         it), LENGTH - / + / dragged (1..64), a step past the end; after every edit the core's sequence
+//                         is the grid's, one the firmware stores (kc_program_valid), the program edited; WRITE stores it
+//   grid_step_entry       SEQ REC (enabled now): Live's MIDI notes recorded as the firmware's recorder (ui/seq_rec.h,
+//                         given the same inputs) records them (chords, REST, TIE while held = INC, BACK, notes out of
+//                         range), the grid read-only meanwhile and showing the steps; TIE with nothing held ties the last
+//                         step; refusals with their reasons; SEQ REC held while playing + a note: a transpose; tapped:
+//                         stop and record
+//   grid_playing_edits    40 grid edits while the sequence plays with Live: the core's sequence the grid's, the step
+//                         playing inside it; stopped: every note-on has its note-off, the output silent
 // Every library file is in a temporary directory, never ~/Music.
 #include <atomic>
 #include <chrono>
@@ -54,6 +71,10 @@
 #include "Processor.h"
 #include "alloc_hook.h"
 #include "ui/Editor.h"
+extern "C" {
+#include "ui/seq_rec.h"
+#include "synth/clock.h"
+}
 
 using namespace knobi;
 using namespace knobi::ui;
@@ -163,6 +184,27 @@ static void makeProgram(int seed, program_t& p, seq_t& s, const char* name)
     const uint8_t a[1] = {(uint8_t)(48 + seed % 12)}, va[1] = {100};
     seq_rec_step(&s, a, va, 1);
 }
+
+// the mouse, as JUCE delivers it to a component (offscreen: called directly)
+static juce::MouseEvent mouseAt(juce::Component& c, juce::Point<int> p)
+{
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p.toFloat(), {}, 0.0f, 0.0f, 0.0f, 0.0f,
+                            0.0f, &c, &c, juce::Time(), p.toFloat(), juce::Time(), 1, false);
+}
+static void click(juce::Component& c, juce::Point<int> p)
+{
+    c.mouseDown(mouseAt(c, p));
+    c.mouseUp(mouseAt(c, p));
+}
+static void drag(juce::Component& c, juce::Point<int> a, juce::Point<int> b)
+{
+    c.mouseDown(mouseAt(c, a));
+    c.mouseDrag(mouseAt(c, {(a.x + b.x) / 2, (a.y + b.y) / 2}));
+    c.mouseDrag(mouseAt(c, b));
+    c.mouseUp(mouseAt(c, b));
+}
+static seq_t demoSeq();
+static void loadSeq(Processor& p, Host& h, const seq_t& s, int number);
 
 static std::unique_ptr<Editor> makeEditor(Processor& p)
 {
@@ -533,12 +575,12 @@ static void panel_sequencer()
     h.run(2);
     ed->poll();
     const bool stopped = seq.stateText() == "OFF" && !seq.playPad().lit() && !p.seqPlaying();
-    const bool rec = seq.recPad().isVisible() && !seq.recPad().isEnabled();
-    auto& g = seq.gridSlot();
+    const bool rec = seq.recPad().isVisible() && seq.recPad().isEnabled();
+    auto& g = seq.grid();
     const bool slot = g.getWidth() == SequencerSection::kGridW && g.getHeight() == SequencerSection::kGridH &&
                       seq.getLocalBounds().contains(g.getBounds()) && g.getComponentID() == "seqGrid";
     std::printf("panel_sequencer: off %d; SEQ PLAY, Live stopped: waiting %d; Live plays: playing %d; Live stops: "
-                "waiting %d; SEQ PLAY off %d; SEQ REC there, disabled %d; grid slot %dx%d %d\n", off, armed, playing,
+                "waiting %d; SEQ PLAY off %d; SEQ REC there, enabled %d; grid slot %dx%d %d\n", off, armed, playing,
                 waits, stopped, rec, g.getWidth(), g.getHeight(), slot);
     CHECK(off && armed && playing && waits && stopped && rec && slot);
 }
@@ -609,6 +651,18 @@ static void panel_rt()
         ed->poll(i % 10 == 0);
         if (i % 40 == 0) ed->panel().browser().nextPad().press();
         if (i % 50 == 0) ed->panel().sequencer().playPad().press();
+        auto& sq = ed->panel().sequencer();       // (plan Task 8: the grid's edits, the step entry's buttons)
+        if (i % 30 == 7)
+            sq.grid().edit([i](seq_t& s) {
+                if (!s.len) return seqedit::setLength(s, 8);
+                return seqedit::toggleNote(s, i % s.len, 48 + i % 24);
+            });
+        if (i % 60 == 13) sq.grid().edit([i](seq_t& s) { return seqedit::setLength(s, 1 + i % 20); });
+        if (i % 90 == 21) {
+            sq.recPad().press(), sq.recPad().release();
+            sq.restPad().press(), sq.tiePad().press(), sq.backPad().press();
+            sq.recPad().press(), sq.recPad().release();
+        }
         p.syncHost();
         i++;
     }
@@ -663,6 +717,47 @@ static void panel_idle()
                 "edit: differs after %d polls (edited %d), undone: not after %d polls; unpolled switch toggled %d\n",
                 (unsigned long long)idleRuns, (unsigned long long)idleSnaps, start, on, editedOn, off, toggled);
     CHECK(idleRuns == 0 && idleSnaps == 0 && start && on >= 0 && editedOn && off >= 0 && toggled);
+    // the grid (plan Task 8): a sequence shown and nothing changing: no access() call, no sequence read; Live playing
+    // it: the playing step moves on the grid, still with no access() call (seqStep: an atomic); a recorded step read once
+    auto& sec = ed->panel().sequencer();
+    auto& g = sec.grid();
+    loadSeq(p, h, demoSeq(), 31);
+    ed->poll();
+    const bool shown = g.length() == 20;
+    uint64_t r1 = p.access().runs(), f1 = g.fetches();
+    for (int i = 0; i < 60; i++) ed->poll();
+    const uint64_t gridRuns = p.access().runs() - r1, gridFetches = g.fetches() - f1;
+    sec.playPad().press();
+    h.head.playing = true;
+    h.run(2);
+    ed->poll();
+    r1 = p.access().runs(), f1 = g.fetches();
+    std::set<int> steps;
+    for (int i = 0; i < 60; i++) {
+        h.run(2);
+        ed->poll();
+        for (int c = 0; c < 64; c++) if (g.cell(c).playing) steps.insert(c);
+    }
+    const uint64_t playRuns = p.access().runs() - r1, playFetches = g.fetches() - f1;
+    h.head.playing = false;
+    sec.playPad().press();
+    h.run(2);
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());
+    ed->poll();
+    f1 = g.fetches();
+    h.midi.clear();
+    h.midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 0);
+    h.midi.addEvent(juce::MidiMessage::noteOff(1, 60), 100);
+    p.processBlock(h.buf, h.midi);
+    for (int i = 0; i < 10; i++) ed->poll();
+    const uint64_t recFetches = g.fetches() - f1;
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());
+    std::printf("panel_idle: the grid (%d): 60 idle polls: %llu access() calls, %llu sequence reads; Live playing it, 60 "
+                "polls: %zu steps shown, %llu access() calls, %llu reads; a recorded step: read %llu time(s)\n", shown,
+                (unsigned long long)gridRuns, (unsigned long long)gridFetches, steps.size(), (unsigned long long)playRuns,
+                (unsigned long long)playFetches, (unsigned long long)recFetches);
+    CHECK(shown && gridRuns == 0 && gridFetches == 0 && steps.size() >= 8 && playRuns == 0 && playFetches == 0 &&
+          recFetches == 1);
 }
 
 static void panel_screenshots()
@@ -679,13 +774,16 @@ static void panel_screenshots()
     program_t q;
     seq_t s;
     makeProgram(4, q, s, "PANEL DEMO");
+    s = demoSeq();                                // (synthetic: the grid's demo sequence)
+    q.v[P_CLK_DIV] = CLK_DIV_16TH;
     p.library()->write(6, q, s);
     p.setCurrentProgram(6);
     h.run(4);
     auto ed = makeEditor(p);
     ed->panel().sequencer().playPad().press();
     ed->panel().controlFor(P_FLT_FREQ)->simulateUser(120);
-    h.run(2);
+    h.head.playing = true;                        // (Live playing: the step playing framed red)
+    h.run(30);
     ed->poll(true);
     bool ok = true;
     for (int pct : {100, 200}) {
@@ -702,8 +800,19 @@ static void panel_screenshots()
         ok = ok && img.getWidth() == Panel::kWidth * pct / 100 && fs::file_size(file) > 20000;
         std::printf("panel_screenshots: %s %dx%d\n", file.c_str(), img.getWidth(), img.getHeight());
     }
-    // the GLOBALS view and the WRITE confirmation (100 %)
+    // the STEP editor open on step 2 (the chord), 100 %
     ed->setSize(Panel::kWidth, Panel::kHeight);
+    {
+        auto& g = ed->panel().sequencer().grid();
+        click(g, g.cellBounds(1).getCentre());
+        const juce::Image img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f);
+        const std::string file = dir + "/panel-seqstep.png";
+        fs::remove(file);
+        juce::FileOutputStream out{juce::File(file)};
+        ok = ok && g.editing() && juce::PNGImageFormat().writeImageToStream(img, out);
+        g.editor().closePad().press();
+    }
+    // the GLOBALS view and the WRITE confirmation (100 %)
     ed->panel().globalsPad().press();
     {
         const juce::Image img = ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f);
@@ -712,6 +821,363 @@ static void panel_screenshots()
         ok = ok && juce::PNGImageFormat().writeImageToStream(img, out);
     }
     CHECK(ok);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// the sequencer grid and the step entry (plan Task 8)
+// the demo sequence (synthetic: the screenshots and grid_shows): 20 steps, a note, a chord, its tie, a rest, 6 notes,
+// then a line
+static seq_t demoSeq()
+{
+    seq_t s;
+    seq_clear(&s);
+    auto step = [&s](std::initializer_list<int> notes, int vel) {
+        uint8_t n[6], v[6];
+        int c = 0;
+        for (int x : notes) n[c] = (uint8_t)x, v[c] = (uint8_t)juce::jlimit(1, 127, vel - 12 * c), c++;
+        seq_rec_step(&s, n, v, c);
+    };
+    step({60}, 110);
+    step({60, 64, 67}, 100);
+    seq_rec_tie(&s);
+    seq_rec_rest(&s);
+    step({48, 55, 60, 64, 67, 71}, 120);
+    for (int i = 0; i < 15; i++) {
+        if (i % 4 == 3) seq_rec_rest(&s);
+        else step({50 + (i * 5) % 19}, 40 + i * 5);
+    }
+    return s;
+}
+static void loadSeq(Processor& p, Host& h, const seq_t& s, int number)
+{
+    program_t q;
+    program_init(&q);
+    std::strncpy(q.name, "GRID", sizeof q.name);
+    q.v[P_CLK_DIV] = CLK_DIV_16TH;
+    kc_program_set(p.runner().core(), number, &q, &s, 0);
+    h.run(4);
+}
+static bool coreSeq(Processor& p, seq_t& s) { return p.seqGet(s); }
+static bool storable(const seq_t& s)
+{
+    program_t q;
+    program_init(&q);
+    return kc_program_valid(&q, &s) == 0;
+}
+
+static void grid_shows()
+{
+    Processor p;
+    Host h(p);
+    const seq_t d = demoSeq();
+    loadSeq(p, h, d, 3);
+    auto ed = makeEditor(p);
+    auto& sec = ed->panel().sequencer();
+    auto& g = sec.grid();
+    ed->poll();
+    const bool len = g.length() == 20;
+    const auto c0 = g.cell(0), c1 = g.cell(1), c2 = g.cell(2), c3 = g.cell(3), c4 = g.cell(4), c20 = g.cell(20);
+    const bool cells = c0.text == "C4" && c0.count == 1 && c1.count == 3 && c1.text == "C4 E4 G4" && c2.tie &&
+                       c2.count == 3 && c3.rest && !c3.tie && c4.count == 6 && c20.past && g.cell(63).past &&
+                       !c0.past && !c0.rest && !c1.tie;
+    if (!cells) std::printf("grid_shows: c0 '%s' %d, c1 '%s' %d, c2 tie %d, c3 rest %d, c4 %d, c20 past %d\n",
+                            c0.text.toRawUTF8(), c0.count, c1.text.toRawUTF8(), c1.count, c2.tie, c3.rest, c4.count, c20.past);
+    int playingCells = 0;
+    for (int i = 0; i < 64; i++) playingCells += g.cell(i).playing;
+    const bool idle = playingCells == 0;
+    sec.playPad().press();
+    h.head.playing = true;
+    std::set<int> seen;
+    bool agree = true;
+    for (int i = 0; i < 60; i++) {
+        h.run(2);
+        ed->poll();
+        int at = -1, n = 0;
+        for (int c = 0; c < 64; c++) if (g.cell(c).playing) at = c, n++;
+        agree &= n <= 1 && at == p.seqStep() && (at < 0 || at < 20);
+        if (at >= 0) seen.insert(at);
+    }
+    h.head.playing = false;
+    h.run(2);
+    ed->poll();
+    playingCells = 0;
+    for (int i = 0; i < 64; i++) playingCells += g.cell(i).playing;
+    std::printf("grid_shows: length %d (want 20) %d; cells (note, chord, tie, rest, 6 notes, past the end) %d; none "
+                "playing when stopped %d; Live playing: %zu steps shown in turn, one at a time, the core's %d; Live "
+                "stopped: none %d\n", g.length(), len, cells, idle, seen.size(), agree, playingCells == 0);
+    CHECK(len && cells && idle && seen.size() >= 10 && agree && playingCells == 0);
+}
+
+static void grid_mouse()
+{
+    Processor p;
+    Host h(p);
+    seq_t s0;
+    seq_clear(&s0);
+    const uint8_t n60[1] = {60}, n62[1] = {62}, n64[1] = {64}, v[1] = {100};
+    seq_rec_step(&s0, n60, v, 1), seq_rec_step(&s0, n62, v, 1), seq_rec_rest(&s0), seq_rec_step(&s0, n64, v, 1);
+    loadSeq(p, h, s0, 12);
+    auto ed = makeEditor(p);
+    auto& g = ed->panel().sequencer().grid();
+    auto& se = g.editor();
+    ed->poll();
+    const bool unedited = !p.edited();
+    int ops = 0;
+    bool allOk = true;
+    seq_t c;
+    auto after = [&](const char* what) {          // the core has what the grid shows, storable, edited
+        h.run(1);
+        ed->poll();
+        coreSeq(p, c);
+        const bool ok = std::memcmp(&c, &g.sequence(), sizeof c) == 0 && storable(c) && p.edited();
+        if (!ok) std::printf("grid_mouse: after %s: same %d storable %d edited %d\n", what,
+                             std::memcmp(&c, &g.sequence(), sizeof c) == 0, storable(c), p.edited());
+        allOk &= ok;
+        ops++;
+    };
+    auto key = [&](int note) { click(se, se.keyBounds(note).getCentre()); };
+    click(g, g.cellBounds(1).getCentre());
+    const bool opened = g.editing() && se.step() == 1 && g.cell(1).selected;
+    key(64), after("add E4");
+    const bool added = c.step[1].count == 2 && c.step[1].notes[1] == 64;
+    for (int n : {65, 67, 69, 71}) key(n), after("add");
+    key(72);
+    h.run(1);
+    coreSeq(p, c);
+    const bool max6 = c.step[1].count == 6 && g.message() == "6 NOTES AT MOST";
+    key(62), after("remove D4");
+    const bool removed = c.step[1].count == 5 && c.step[1].notes[0] == 64;
+    // velocity: the first note's bar dragged to the top, then low
+    auto bar = se.barBounds(0);
+    drag(se, bar.getCentre(), {bar.getCentreX(), bar.getY()}), after("velocity up");
+    const int vTop = c.step[1].vels[0];
+    drag(se, {bar.getCentreX(), bar.getY()}, {bar.getCentreX(), bar.getBottom() - 10}), after("velocity down");
+    const int vLow = c.step[1].vels[0];
+    click(se, se.removeBounds(0).getCentre()), after("X");
+    const bool xed = c.step[1].count == 4 && c.step[1].notes[0] == 65;
+    se.restPad().press(), after("REST");
+    const bool rest = c.step[1].count == 0 && g.cell(1).rest;
+    // TIE refused: step 1, and after a rest (step 3: step 2 is a rest), the reason shown, nothing changed
+    click(g, g.cellBounds(0).getCentre());
+    se.tiePad().press();
+    const juce::String why1 = g.message();
+    click(g, g.cellBounds(3).getCentre());
+    se.tiePad().press();
+    const juce::String why2 = g.message();
+    h.run(1);
+    seq_t before = c;
+    coreSeq(p, c);
+    const bool refused = why1 == "NO TIE ON STEP 1" && why2 == "NO TIE AFTER A REST" && std::memcmp(&c, &before, sizeof c) == 0;
+    // a tie: step 3 (index 2) after step 2 (index 1) with a note; the copy follows step 2's notes; a rest before
+    // it unties it (its notes kept)
+    click(g, g.cellBounds(1).getCentre()), key(60), after("C4 on step 2");
+    click(g, g.cellBounds(2).getCentre()), se.tiePad().press(), after("TIE");
+    const bool tied = c.step[2].tie && c.step[2].count == 1 && c.step[2].notes[0] == 60 && g.cell(2).tie;
+    click(g, g.cellBounds(1).getCentre()), key(67), after("G4 on step 2");
+    const bool copy = c.step[2].tie && c.step[2].count == 2 && c.step[2].notes[1] == 67;
+    se.restPad().press(), after("step 2 a rest");
+    const bool untied = !c.step[2].tie && c.step[2].count == 2 && c.step[1].count == 0;
+    // a velocity drag on a tied step: refused (it is the step before's)
+    click(g, g.cellBounds(2).getCentre()), se.tiePad().press();   // (after a rest now: refused)
+    const bool tieAfterRest = g.message() == "NO TIE AFTER A REST";
+    // LENGTH: + / -, the number dragged, the ends
+    se.closePad().press();
+    click(g.lengthUp(), g.lengthUp().getLocalBounds().getCentre()), after("+");
+    const bool up = c.len == 5 && c.step[4].count == 0 && g.cell(4).rest && g.cell(5).past;
+    g.lengthDown().press(), g.lengthDown().press(), g.lengthDown().press(), after("- x3");
+    const bool down = c.len == 2;
+    const auto lb = g.lengthBounds();
+    drag(g, lb.getCentre(), {lb.getCentreX(), lb.getCentreY() - 44}), after("drag up");
+    const bool dragged = c.len == 13 && g.cell(12).rest && !g.cell(12).past;
+    drag(g, lb.getCentre(), {lb.getCentreX(), lb.getCentreY() + 400}), after("drag down");
+    const bool one = c.len == 1;
+    g.lengthDown().press();
+    h.run(1);
+    coreSeq(p, c);
+    const bool floor1 = c.len == 1;
+    for (int i = 0; i < 70; i++) g.lengthUp().press();
+    h.run(1);
+    coreSeq(p, c);
+    const bool ceil64 = c.len == 64 && storable(c);
+    click(g, g.cellBounds(63).getCentre()), key(108), after("C8 on step 64");
+    g.lengthDown().press(), after("63");
+    click(g, g.cellBounds(63).getCentre());
+    const bool pastMsg = !g.editing() && g.message().contains("PAST THE END");
+    // WRITE: the edit stored with the program (the library has the grid's sequence)
+    const auto wr = p.writeProgram(12);
+    auto snap = Library(Library::defaultPath(), 0).snapshot();
+    const bool stored = wr == Library::kOk && snap->bank.used[12] &&
+                        std::memcmp(&snap->bank.seq[12], &g.sequence(), sizeof(seq_t)) == 0 && !p.edited();
+    std::printf("grid_mouse: unedited at first %d; step 2 opened %d; E4 added %d; 6 notes max (a 7th refused) %d; D4 "
+                "removed %d; velocity dragged to %d then %d; X %d; REST %d; TIE refused with its reason (step 1 / after "
+                "a rest) %d; tied (the copy) %d, follows step 2 %d, untied by a rest before it %d (%d); LENGTH +1 %d, "
+                "-3 %d, dragged to 13 %d, to 1 %d, not below 1 %d, not above 64 %d; past the end %d; WRITE stored it %d; "
+                "%d edits: the core's = the grid's, storable, edited: %d\n",
+                unedited, opened, added, max6, removed, vTop, vLow, xed, rest, refused, tied, copy, untied, tieAfterRest,
+                up, down, dragged, one, floor1, ceil64, pastMsg, stored, ops, allOk);
+    CHECK(unedited && opened && added && max6 && removed && vTop == 127 && vLow > 0 && vLow < 30 && xed && rest &&
+          refused && tied && copy && untied && tieAfterRest && up && down && dragged && one && floor1 && ceil64 &&
+          pastMsg && stored && allOk);
+}
+
+// the step entry from Live's MIDI: the same inputs given to the firmware's recorder (ui/seq_rec.h) give the same
+// sequence; REST / TIE / BACK; the reasons; the grid read-only while recording; SEQ REC held while playing + a note: a
+// transpose, tapped: stop and record
+static seq_t gRef;
+static int gRefMuts;
+static seq_t* gRefMut() { gRefMuts++; return &gRef; }
+static void grid_step_entry()
+{
+    Processor p;
+    Host h(p);
+    seq_t old;
+    seq_clear(&old);
+    const uint8_t n50[1] = {50}, v[1] = {90};
+    for (int i = 0; i < 5; i++) seq_rec_step(&old, n50, v, 1);
+    loadSeq(p, h, old, 3);
+    auto ed = makeEditor(p);
+    auto& sec = ed->panel().sequencer();
+    auto& g = sec.grid();
+    ed->poll();
+    const bool padsOff = sec.recPad().isEnabled() && !sec.restPad().isEnabled() && !sec.tiePad().isEnabled();
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());
+    ed->poll();
+    const bool armed = sec.stateText() == "RECORDING" && sec.recPad().lit() && sec.restPad().isEnabled() &&
+                       g.length() == 0 && g.cell(0).next && !p.edited();
+    gRef = old, gRefMuts = 0;
+    seqrec_t r;
+    seqrec_start(&r, gRefMut);
+    auto note = [&](int n, int vel) {             // a MIDI note from Live, in a block of its own
+        h.midi.clear();
+        h.midi.addEvent(juce::MidiMessage::noteOn(1, n, (juce::uint8)vel), 17);
+        if (!vel) h.midi.clear(), h.midi.addEvent(juce::MidiMessage::noteOff(1, n), 17);
+        p.processBlock(h.buf, h.midi);
+        seqrec_note(&r, n, vel);
+    };
+    auto rest = [&] { sec.restPad().press(); if (!r.n && !r.in) seqrec_inc(&r); };   // (held: refused)
+    auto tie = [&] { sec.tiePad().press(); if (r.n || r.in) seqrec_inc(&r); };      // (held: INC)
+    auto back = [&] { sec.backPad().press(); seqrec_dec(&r); };
+    note(60, 100), note(60, 0);
+    note(62, 90), note(64, 80), note(62, 0), note(64, 0);
+    ed->poll();
+    const bool shownWhileRec = g.length() == 2 && g.cell(1).count == 2 && g.cell(2).next;
+    rest();
+    note(67, 70), tie(), tie(), note(67, 0);
+    back();
+    note(72, 127), note(74, 1);
+    ed->poll();
+    const int held = KC_REC_HELD(p.seqRecState());
+    rest();
+    const juce::String restWhy = g.message();
+    note(72, 0), note(74, 0);
+    note(5, 60), note(5, 0);                      // (below 12: not recorded)
+    // the grid is the step entry's while recording: a click says so, nothing changes
+    click(g, g.cellBounds(0).getCentre());
+    const bool readOnly = !g.editing() && g.message().startsWith("RECORDING");
+    seq_t c;
+    coreSeq(p, c);
+    const bool same = std::memcmp(&c, &gRef, sizeof c) == 0 && storable(c);
+    // the panel's TIE with nothing held: the last step held on; after a rest refused, the reason shown
+    sec.tiePad().press();
+    seq_rec_tie(&gRef);
+    sec.restPad().press();
+    seq_rec_rest(&gRef);
+    sec.tiePad().press();
+    const juce::String tieWhy = g.message();
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());   // (ends it)
+    seqrec_stop(&r);
+    ed->poll();
+    coreSeq(p, c);
+    const bool same2 = std::memcmp(&c, &gRef, sizeof c) == 0 && storable(c) && p.edited() && gRefMuts > 0;
+    const bool ended = sec.stateText() == "OFF" && !sec.recPad().lit() && !sec.tiePad().isEnabled() &&
+                       std::memcmp(&g.shown(), &gRef, sizeof c) == 0;
+    std::printf("grid_step_entry: SEQ REC enabled, REST/TIE/BACK only while recording %d; armed: RECORDING, shown empty "
+                "(the next step 1 marked), not edited yet %d; steps shown as recorded %d; %d held: REST refused '%s'; "
+                "the grid read-only %d; the firmware's recorder's sequence %d (length %d); TIE with nothing held, REST, "
+                "TIE refused '%s'; ended: the same %d, shown, state OFF %d\n",
+                padsOff, armed, shownWhileRec, held, restWhy.toRawUTF8(), readOnly, same, c.len, tieWhy.toRawUTF8(),
+                same2, ended);
+    CHECK(padsOff && armed && shownWhileRec && held == 2 && restWhy.startsWith("KEYS HELD") && readOnly && same &&
+          tieWhy == "NO TIE AFTER A REST" && same2 && ended);
+
+    // transpose: SEQ REC held while the sequence plays with Live + a note: XP = the note - C4; let go: nothing
+    sec.playPad().press();
+    h.head.playing = true;
+    h.run(8);
+    sec.recPad().press();                         // (held)
+    note(67, 100);
+    h.run(2);
+    note(67, 0);
+    sec.recPad().release();
+    h.run(2);
+    ed->poll();
+    const int xp = p.seqXp();
+    const bool still = p.seqPlaying() && !(p.seqRecState() & KC_REC_ON) && sec.stateText() == "PLAYING";
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());   // (tapped: stop, record)
+    h.run(2);
+    ed->poll();
+    const bool tapped = !p.seqPlaying() && sec.stateText() == "RECORDING";
+    click(sec.recPad(), sec.recPad().getLocalBounds().getCentre());
+    h.head.playing = false;
+    std::printf("grid_step_entry: SEQ REC held + G4 while playing: transpose %+d (want +7), still playing, not "
+                "recording %d; tapped while playing: stopped, recording %d\n", xp, still, tapped);
+    CHECK(xp == 7 && still && tapped);
+}
+
+// edits while the sequence plays with Live: every edit heard from the next step, nothing left sounding after the stop
+static void grid_playing_edits()
+{
+    Processor p;
+    Host h(p, 256);
+    loadSeq(p, h, demoSeq(), 3);
+    auto ed = makeEditor(p);
+    auto& sec = ed->panel().sequencer();
+    auto& g = sec.grid();
+    ed->poll();
+    sec.playPad().press();
+    h.head.playing = true;
+    h.run(10);
+    int edits = 0, bad = 0, count[128] = {0}, unpaired = 0, logged = 0;
+    kc_note_t nt[KC_LOG];
+    auto take = [&] {                             // (the core's log of the sequencer's notes: drained each time)
+        for (uint32_t m; (m = kc_notes(p.runner().core(), nt, KC_LOG));)
+            for (uint32_t i = 0; i < m; i++, logged++) {
+                count[nt[i].note] += nt[i].vel ? 1 : -1;
+                if (count[nt[i].note] < 0 || count[nt[i].note] > 1) unpaired++;
+            }
+    };
+    take();
+    for (int i = 0; i < 40; i++) {
+        const int st = i % juce::jmax(1, (int)g.sequence().len);
+        bool ok = true;
+        switch (i % 5) {
+        case 0: ok = g.edit([st, i](seq_t& s) { return seqedit::toggleNote(s, st, 40 + (i * 7) % 40); }); break;
+        case 1: ok = g.edit([st](seq_t& s) { return seqedit::makeRest(s, st); }); break;
+        case 2: ok = g.edit([st](seq_t& s) { return seqedit::toggleTie(s, st); }); break;
+        case 3: ok = g.edit([i](seq_t& s) { return seqedit::setLength(s, 1 + (i * 11) % 30); }); break;
+        case 4: ok = g.edit([st](seq_t& s) { return seqedit::setVelocity(s, st, 0, 5 + st); }); break;
+        }
+        edits += ok;
+        h.run(12 + i % 5);
+        take();
+        ed->poll();
+        seq_t c;
+        coreSeq(p, c);
+        bad += !storable(c) || std::memcmp(&c, &g.sequence(), sizeof c) != 0 || p.seqStep() >= (int)c.len;
+    }
+    sec.playPad().press();
+    h.run(4);
+    take();
+    int sounding = 0;
+    for (int n : count) sounding += n != 0;
+    h.head.playing = false;
+    h.run((int)(3 * 44100 / 256));
+    float peak = 0;
+    for (int ch = 0; ch < 2; ch++) peak = juce::jmax(peak, h.buf.getMagnitude(ch, 0, 256));
+    std::printf("grid_playing_edits: %d edits sent while playing (the core's sequence = the grid's, storable, the step "
+                "inside it: %d bad); stopped: %d notes logged, %d sounding, %d unpaired; output after 3 s %.6f\n",
+                edits, bad, logged, sounding, unpaired, peak);
+    CHECK(edits >= 15 && logged > 30 && bad == 0 && sounding == 0 && unpaired == 0 && peak == 0.0f);
 }
 
 int main(int argc, char** argv)
@@ -729,6 +1195,8 @@ int main(int argc, char** argv)
         {"panel_resizable", panel_resizable}, {"panel_browser", panel_browser}, {"panel_write", panel_write},
         {"panel_restore", panel_restore}, {"panel_clock", panel_clock}, {"panel_sequencer", panel_sequencer},
         {"panel_globals", panel_globals}, {"panel_rt", panel_rt}, {"panel_idle", panel_idle}, {"panel_screenshots", panel_screenshots},
+        {"grid_shows", grid_shows}, {"grid_mouse", grid_mouse}, {"grid_step_entry", grid_step_entry},
+        {"grid_playing_edits", grid_playing_edits},
     };
     if (argc > 1) {
         auto t = tests.find(argv[1]);
