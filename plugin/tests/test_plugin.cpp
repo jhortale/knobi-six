@@ -1311,6 +1311,56 @@ static void seam_idle_clamped()
           shortB == CoreAccess::kIdleMs);
 }
 
+// prepareToPlay changes the instance (CoreRunner::prepare: kc_* calls, the rings reallocated): it takes it as a call
+// through the seam does, so it never overlaps another thread's call (a library watcher's globals, run() on the asking
+// thread after an idle). Here a call holds the instance on another thread: prepareToPlay waits until it is done
+static void prepare_takes_instance()
+{
+    Processor p;
+    p.setPlayConfigDetails(0, 2, 44100, 256);
+    p.prepareToPlay(44100, 256);
+    blocks(p, 2);
+    FakeClock clk;
+    p.access().setClock(&clk);
+    struct Ctx { std::atomic<int> inside{0}; std::atomic<bool> release{false}; } c;
+    std::thread caller([&] {
+        p.access().run([](void* v) {
+            auto* x = (Ctx*)v;
+            x->inside = 1;
+            while (!x->release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            x->inside = 0;
+        }, &c);
+    });
+    for (int i = 0; i < 2000 && !c.inside; i++) {   // (no audio: the asking thread takes it after the idle time)
+        clk.advanceMs(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool holding = c.inside == 1;
+    std::atomic<bool> prepared{false};
+    std::atomic<int> insideAtReturn{-1};
+    std::thread preparer([&] {
+        p.prepareToPlay(48000, 512);
+        insideAtReturn = c.inside.load();
+        prepared = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    const bool early = prepared.load();
+    c.release = true;
+    caller.join();
+    preparer.join();
+    p.access().setClock(nullptr);
+    juce::AudioBuffer<float> buf(2, 512);         // (and the instance is free again: blocks and calls go on)
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 0);
+    p.processBlock(buf, midi);
+    const uint64_t silent = p.silentBlocks();
+    const bool runs = p.access().run([](void*) {}, nullptr);
+    std::printf("prepare_takes_instance: a call holding the instance %s; prepareToPlay returned while it ran: %s "
+                "(the call inside at its return: %d); afterwards a block %s, a call %s\n", holding ? "yes" : "NO",
+                early ? "YES" : "no", insideAtReturn.load(), silent ? "SILENT" : "rendered", runs ? "ran" : "FAILED");
+    CHECK(holding && !early && insideAtReturn == 0 && silent == 0 && runs);
+}
+
 // the real-time part of Task 4: automation storms and program loads in processBlock: no allocation, no lock
 static void rt_params()
 {
@@ -2476,6 +2526,7 @@ int main(int argc, char** argv)
         {"state_roundtrip", state_roundtrip}, {"state_bank_changed", state_bank_changed},
         {"state_versioned", state_versioned}, {"rt_params", rt_params},
         {"state_timeout_keeps_last", state_timeout_keeps_last}, {"seam_idle_clamped", seam_idle_clamped},
+        {"prepare_takes_instance", prepare_takes_instance},
         {"transport_start_bar", transport_start_bar}, {"transport_aligned", transport_aligned},
         {"transport_loop", transport_loop}, {"transport_loop_tempo", transport_loop_tempo},
         {"transport_locate", transport_locate},

@@ -118,6 +118,20 @@ public:
         }
     }
 
+    // ---- any other thread (never the audio thread): the instance taken for a while, not as a call through run()
+    // (prepareToPlay: CoreRunner::prepare allocates and calls the core). take() waits while the audio thread is in a
+    // block or another thread runs a call (both short); meanwhile a block is output silent (the collision path) and
+    // run() waits (served once give() is called, or it takes the instance itself after the idle time). Pairs: give()
+    void take()
+    {
+        for (;;) {
+            int idle = kFree;
+            if (owner_.compare_exchange_strong(idle, kOther, std::memory_order_acquire)) return;
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+    void give() { owner_.store(kFree, std::memory_order_release); }
+
     uint64_t ranHere() const { return ranHere_; } // (tests) calls the asking thread ran itself
     uint64_t runs() const { return runs_.load(std::memory_order_relaxed); }   // (tests) run() calls so far
     bool posted() const { return req_.load(std::memory_order_acquire) == kPosted; }   // (tests) a call waits

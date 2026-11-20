@@ -463,10 +463,13 @@ bool Processor::isBusesLayoutSupported(const BusesLayout& layouts) const
 
 void Processor::prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock)
 {
+    access_.take();                               // (alone with the instance: no other thread's call meanwhile)
     runner_.prepare(sampleRate, maximumExpectedSamplesPerBlock);   // (allocates: never on the audio thread)
-    access_.setIdle(sampleRate, maximumExpectedSamplesPerBlock);
-    setLatencySamples(runner_.latency());
     skipped_ = 0, fadeIn_ = false, lastL_ = lastR_ = 0.0f;   // (a new timeline; kept MIDI still goes in, next block)
+    const int latency = runner_.latency();
+    access_.give();
+    access_.setIdle(sampleRate, maximumExpectedSamplesPerBlock);
+    setLatencySamples(latency);
 }
 
 void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
