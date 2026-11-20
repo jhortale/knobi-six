@@ -254,6 +254,7 @@ João asked for the page to be React with shadcn/ui, keeping the panel look. Wha
   always dark.
 - The confirm step is the page's own dialog (shadcn AlertDialog), not the browser's `window.confirm`.
 - This replaces "no runtime dependencies" and "no UI framework": the page now ships React, React DOM, Radix UI,
-  class-variance-authority, clsx, tailwind-merge and lucide-react (all MIT), about 330 KB of JavaScript (105 KB
-  gzipped) instead of 24 KB. Versions are pinned exactly in `web/package.json`.
+  class-variance-authority, clsx, tailwind-merge and lucide-react (all MIT), about 360 KB of JavaScript (113 KB
+  gzipped) instead of 24 KB. Versions are pinned exactly in `web/package.json` (Vite 8, React 19.3, TypeScript 7 since
+  2026-11-20).
 
