@@ -32,8 +32,15 @@ Nothing here is automated (it needs Live). Build and install first: `plugin/READ
    the same sound, the sequence, and the EDITED / DIFFERS FROM BANK lights back.
 10. **Two instances.** Two tracks, two different sounds, both playing. Look for: no glitches, no interference.
 11. **WRITE across instances.** In instance A press WRITE and store slot 45 (WRITE, choose with the digits, WRITE).
-    Look for: in instance B, within about a quarter second, the program 045 reads USER SLOT / DIFFERS FROM BANK as
-    it is; "PROGRAM 045 STORED" in A. Check `~/Music/KNOBI-SIX/library.knobi` exists.
+    Look for: "PROGRAM 045 STORED" in A. In instance B, within about a quarter second (the library's reload; B's sound
+    never changes, a WRITE loads nothing):
+    - B on program 045: the display stays 0 45 and B's own program name (what B plays, not A's); the third LED turns
+      to USER SLOT (lit; it read FACTORY, unlit, before); DIFFERS FROM BANK lights when A's stored sound is not the one
+      B plays (unlit if they are the same); EDITED as it was. Pick 045 again in B (or send program change 45): B now
+      plays A's sound, DIFFERS FROM BANK and EDITED off.
+    - B on another program: its line does not change (number, name, LEDs are its own program's). Live's program menu
+      for B lists `045` with A's name; choosing 045 in B's browser loads A's sound, with USER SLOT lit.
+    Check `~/Music/KNOBI-SIX/library.knobi` exists.
 
 ## Sequencer and clock
 
