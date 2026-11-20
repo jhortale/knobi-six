@@ -150,6 +150,15 @@ export function startApp(root: HTMLElement, deps: AppDeps): App {
       return;
     }
     dev.link.close();
+    const c = catalog;
+    if (isLoader(dev.id) && !Object.keys(c.protocols).some((p) => ownLoaderRe(c, p).test(dev.id.text))) {
+      v.device.replaceChildren("✗ ", h("b", {}, dev.id.text), ` on "${dev.name}": the update mode of another ` +
+        "firmware. Finish that update with its own updater, then connect again.");
+      log(`found ${dev.id.text} on "${dev.name}": another firmware's update loader`);
+      showPackages();
+      refresh();
+      return;
+    }
     id = dev.id;
     const mode = isLoader(dev.id)
       ? "in update mode: the last install did not finish; Install finishes it"
@@ -179,7 +188,10 @@ export function startApp(root: HTMLElement, deps: AppDeps): App {
     try {
       log(`download ${offer.pkg.file}`);
       const r = await deps.fetch(offer.pkg.file, { cache: "no-cache" });
-      if (!r.ok) throw new Error(`download failed: HTTP ${r.status}`);
+      if (!r.ok) {
+        throw new InstallError("hash", `The package could not be downloaded (HTTP ${r.status}): the site was probably ` +
+          "just updated: reload the page (if it persists, wait a few minutes). Nothing was sent to the keyboard.");
+      }
       const raw = new Uint8Array(await r.arrayBuffer());
       if ((await sha256(raw)) !== offer.pkg.sha256 || raw.length !== offer.pkg.size) {
         throw new InstallError("hash", "The package does not match this page's list: the site was just updated: reload the page and " +
@@ -193,6 +205,11 @@ export function startApp(root: HTMLElement, deps: AppDeps): App {
       const up = updater(offer);
       const dev = await up.find();
       if (!dev) throw new InstallError("notfound", "the keyboard no longer answers: check the cable and press Connect");
+      const no = up.refusal(dev.id, product);
+      if (no) {
+        dev.link.close();
+        throw no;
+      }
       mark("verify", "ok");
       const ok = await deps.confirm(`Install ${offer.firmware.name} ${offer.release.version} (${product}) on the ` +
         `keyboard that reports ${dev.id.text}?\n\nKeep the USB cable in and do not unplug the keyboard or close this ` +

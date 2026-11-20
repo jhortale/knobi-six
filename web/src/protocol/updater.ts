@@ -182,17 +182,25 @@ export class Updater {
     return back.id.text;
   }
 
+  /** why this device must not take this package (another model, another firmware's update loader), or null */
+  refusal(id: Identity, product: string): InstallError | null {
+    if (!sameKeyboard(id.text, product, this.opts.family)) {
+      return new InstallError("model", `the device is ${id.text}, the package is for ${product}`);
+    }
+    if (isLoader(id) && !isOwnLoader(id.text, this.opts.ownLoader)) {
+      return new InstallError("foreign", `the keyboard is in the update mode of another firmware (${id.text}): ` +
+        "finish that update with its own updater, then install again");
+    }
+    return null;
+  }
+
   /** running firmware -> loader -> new firmware; dev from find(). A device already in update mode only needs the
    *  write. */
   async install(dev: Device, image: Uint8Array, product: string, step: (s: Step) => void = () => {}): Promise<string> {
-    if (!sameKeyboard(dev.id.text, product, this.opts.family)) {
+    const no = this.refusal(dev.id, product);
+    if (no) {
       dev.link.close();
-      throw new InstallError("model", `the device is ${dev.id.text}, the package is for ${product}`);
-    }
-    if (isLoader(dev.id) && !isOwnLoader(dev.id.text, this.opts.ownLoader)) {
-      dev.link.close();
-      throw new InstallError("foreign", `the keyboard is in the update mode of another firmware (${dev.id.text}): ` +
-        "finish that update with its own updater, then install again");
+      throw no;
     }
     const ota = isLoader(dev.id) ? dev : await this.check(dev, image, step);
     await this.write(ota, image, step);

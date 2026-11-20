@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The page's markup: one column, the steps in order (docs/superpowers/specs/2026-11-20-web-installer-design.md).
 
-export const BACKUP_URL = "https://github.com/jhortale/knobi-six/blob/phase1/docs/BACKUP.md";
+/** docs/BACKUP.md, published with the site (vite.config.ts) */
+export const BACKUP_URL = "backup.txt";
 export const STEPS = [
   ["connect", "Connect"], ["verify", "Verify"], ["update", "Update mode"], ["write", "Write"], ["restart", "Restart"],
   ["done", "Done"],

@@ -31,14 +31,14 @@ beforeAll(() => {
     idleCheck: 400, idleWrite: 400, waitLoader: 2000, waitReboot: 2000 });
 });
 
-function setup(opts: Partial<FakeOpts> = {}, cat = catalog(), backendErr?: Error) {
+function setup(opts: Partial<FakeOpts> = {}, cat = catalog(), backendErr?: Error, pkgStatus = 200) {
   document.body.innerHTML = '<div id="app"></div>';
   const root = document.getElementById("app")!;
   const dev = new FakeKeyboard({ image, ...opts });
   const confirms: string[] = [];
   const fetcher = (async (url: string) => {
     if (url === "catalog.json") return new Response(JSON.stringify(cat), { status: 200 });
-    if (url.endsWith(".fwsc")) return new Response(pkg as Uint8Array<ArrayBuffer>, { status: 200 });
+    if (url.endsWith(".fwsc")) return pkgStatus === 200 ? new Response(pkg as Uint8Array<ArrayBuffer>, { status: 200 }) : new Response("", { status: pkgStatus });
     return new Response("", { status: 404 });
   }) as typeof fetch;
   const app = startApp(root, {
@@ -132,5 +132,44 @@ describe("the page", () => {
     expect($("#packages").textContent).toContain("No package");
     $<HTMLInputElement>("#backup").click();
     expect($<HTMLButtonElement>("#install").disabled).toBe(true);
+  });
+
+  it("the package is gone (a newer release replaced the site): reload, nothing sent", async () => {
+    const { app, dev, $ } = setup({}, catalog(), undefined, 404);
+    await app.ready;
+    await app.connect();
+    $<HTMLInputElement>("#backup").click();
+    await app.install();
+    expect($("#error").textContent).toContain("reload the page");
+    expect(dev.upgrades).toBe(0);
+  });
+
+  it("another firmware's update loader: said so at Connect, nothing offered", async () => {
+    const { app, $ } = setup({ identity: "ota-SMK-37 Pro_016", name: "SMK-37 Pro" });
+    await app.ready;
+    await app.connect();
+    expect($("#device").textContent).toContain("another firmware");
+    expect($("#device").textContent).not.toContain("Install finishes it");
+    $<HTMLInputElement>("#backup").click();
+    expect($<HTMLButtonElement>("#install").disabled).toBe(true);
+  });
+
+  it("the keyboard changed since Connect: refused before the confirm dialog", async () => {
+    const { app, dev, confirms, $ } = setup();
+    await app.ready;
+    await app.connect();
+    $<HTMLInputElement>("#backup").click();
+    dev.boot("ota-SMK-37 Pro_016", "SMK-37 Pro");
+    await app.install();
+    expect(confirms).toHaveLength(0);
+    expect($("#error").textContent).toContain("another firmware");
+    expect(dev.upgrades).toBe(0);
+  });
+
+  it("the backup instructions are on the site itself, not in the private repo", () => {
+    const { $ } = setup();
+    const href = $<HTMLAnchorElement>('label.check a').getAttribute("href")!;
+    expect(href).not.toMatch(/^https?:/);
+    expect(href).toBe("backup.txt");
   });
 });

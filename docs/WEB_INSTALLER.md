@@ -36,15 +36,19 @@ Agents never run it against a real keyboard (CLAUDE.md).
    and `SHA256SUMS` in a folder, then
    `cd web && node scripts/make-catalog.ts --version X.Y --dir FOLDER --out public/catalog.json --files public/firmware/knobi-six/X.Y`
    and `npm run dev` (without `?mock`), in Chrome; delete `public/catalog.json` and `public/firmware/` afterwards
-   (never commit them).
+   (`web/.gitignore` keeps them out of git; never commit them).
 2. Tag `vX.Y` (no `-`: prereleases never deploy). `release.yml` builds, tests and releases; its `site` job then waits
    for your approval, builds the page and `catalog.json` from the release, refuses any `-local` or `cpu1` file, and
    pushes to `knobi-flash`. Each deploy replaces the site with that release.
-3. Redeploy an existing release (a page fix): Actions → release → Run workflow, `deploy_tag` = `vX.Y`.
+3. Redeploy an existing release (the site was lost, or `base.json`'s descriptions changed at that tag): Actions →
+   release → Run workflow, `deploy_tag` = `vX.Y`. It builds the page **from the tag**, so the page always matches the
+   published source archive; a fix to the page itself needs a new release tag. The run also builds the firmware of the
+   branch it is started from, which must succeed.
 
 ## What a deploy publishes
 
-`index.html` and `assets/` (the page, with source maps), `catalog.json`, `firmware/knobi-six/X.Y/` with the three
+`index.html` and `assets/` (the page, with source maps), `backup.txt` (`docs/BACKUP.md`, which the page's backup
+checkbox links to: the source repo is private), `catalog.json`, `firmware/knobi-six/X.Y/` with the three
 `.fwsc` packages, `SHA256SUMS` and `knobi-six-X.Y-src.tar.gz` (`git archive` of the tag: the GPL source, with the
 installer's own under `web/`), `README.md`, `LICENSE`.
 
