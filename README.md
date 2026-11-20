@@ -10,6 +10,8 @@ the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md),
 > **Status: in development, not installable yet.** Phases 1, 2 (2A, 2B) and 3 (the sequencer) are built; nothing has
 > been tried on a keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
 
+The browser installer, knobi-flash (Web MIDI; not published yet): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
+
 ## Build and test
 
 Linux on x86-64, or macOS with Docker; Python 3 with Pillow; JieLi's toolchain and three files of the AC79 SDK.
