@@ -402,8 +402,10 @@ void kc_param_set(kc_t *k, uint16_t id, int32_t v)
     if (kc_param_info(id, NULL)) return;
     was = kc_bind(k);
     kc_apply_pending(k);                        /* (an edit after a set program: on that program) */
-    if (kc_pend_live(k)) k->pend_p.v[id] = param_clamp(id, v);   /* (the engine still busy: the program set takes it) */
-    else ctl_set(&eng_edit, id, v, 0);
+    if (kc_pend_live(k)) {                      /* (the engine still busy: the program set takes it, edited) */
+        int16_t c = param_clamp(id, v);
+        if (k->pend_p.v[id] != c) k->pend_p.v[id] = c, k->pend_edited = 1;
+    } else ctl_set(&eng_edit, id, v, 0);
     kc_unbind(was);
 }
 int32_t kc_param_get(const kc_t *k, uint16_t id)

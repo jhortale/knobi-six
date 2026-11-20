@@ -25,7 +25,9 @@
  *   create_recreate       create / destroy / create any number of times, several alive at once: each a fresh instance
  *   no_mutable_globals    the core's object (../build/unit/knobi_core.o, -O0) has no writable data but the binding's
  *                         pthread key (kc_key*: made once, read-only after): nm / objdump
- *   param_while_pending   kc_param_set after a kc_program_set the engine could not take yet edits the program set
+ *   param_while_pending   kc_param_set after a kc_program_set the engine could not take yet edits the program set,
+ *                         and the program is edited (plugin plan Task 7: the panel's EDITED light); the same value
+ *                         again is no edit
  *   bank_validated        kc_bank_set refuses a bank with an entry the firmware would not store; kc_bank_in_use
  *   program_pending       (plugin plan Task 6) a program change the engine cannot take yet (a load still held):
  *                         kc_program_get already reports its number with the previous edit buffer, and
@@ -852,23 +854,27 @@ static void param_while_pending(void)
     program_t p;
     int16_t buf[2 * KC_BLOCK];
     int32_t num = -1, v0, v1;
-    int bad = 0;
+    int bad = 0, ed = -1, ed0 = -1;
     if (!k) { printf("param_while_pending: no instance\n"); CHECK(0); return; }
     program_init(&q);
     q.v[P_FLT_FREQ] = 30;
     seq_clear(&t);
     kc_program_select(k, 7);                    /* (a load queued: the engine's buffer busy until the next block) */
     if (kc_program_set(k, 123, &q, &t, 0)) bad++;
+    kc_param_set(k, P_FLT_FREQ, 30);            /* (the value it has: no edit) */
+    kc_program_get(k, NULL, NULL, NULL, &ed0);
     kc_param_set(k, P_FLT_FREQ, 77);            /* (on program 123: the one set) */
     v0 = kc_param_get(k, P_FLT_FREQ);
     kc_param_set(k, P_FLT_RESO, 100000);       /* (clamped) */
     v1 = kc_param_get(k, P_FLT_RESO);
     kc_render(k, buf, KC_BLOCK);
-    kc_program_get(k, &num, &p, NULL, NULL);
+    kc_program_get(k, &num, &p, NULL, &ed);
     if (v0 != 77 || num != 123 || p.v[P_FLT_FREQ] != 77 || kc_param_get(k, P_FLT_FREQ) != 77) bad++;
+    if (ed0 != 0 || ed != 1) bad++;             /* (an edit made while the load waited is an edit) */
     if (v1 != param_get(P_FLT_RESO)->max || p.v[P_FLT_RESO] != v1) bad++;
-    printf("param_while_pending: get %d (77), after the load %d on program %d; RESO %d / %d (max %d): %d wrong\n", v0,
-           p.v[P_FLT_FREQ], num, v1, p.v[P_FLT_RESO], param_get(P_FLT_RESO)->max, bad);
+    printf("param_while_pending: get %d (77), after the load %d on program %d; RESO %d / %d (max %d); edited %d "
+           "(the same value: %d): %d wrong\n", v0, p.v[P_FLT_FREQ], num, v1, p.v[P_FLT_RESO],
+           param_get(P_FLT_RESO)->max, ed, ed0, bad);
     CHECK(bad == 0);
     kc_destroy(k);
 }
