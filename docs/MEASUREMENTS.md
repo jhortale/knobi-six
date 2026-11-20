@@ -1,8 +1,31 @@
 # Measurements
 
+## First device run (SMK-37 Pro, João, 2026-11-19)
+
+The first numbers from a keyboard. [SMOKE_TEST.md](SMOKE_TEST.md) §2, all 12 items passed. Package: the
+`knobi-six-pro` artifact of CI run 44450085801 (`phase1`, commit e54c5d4, Phases 1-3 merged), `knobi-six.fwsc`
+652,625 B, SHA-256 `121f6ff150533af6301328342821d779bea04854e5ad1d39d735fa9bfa43458a`; identity `SMK-37 Pro_956`;
+one core (the default package, no DUAL CORE). Read off the Globals CPU line while holding 6 notes:
+
+| patch, 6 voices held | CPU | PEAK | VOX | SHED | closest model figure, 240 MHz emu / 360 MHz hw |
+|---|---|---|---|---|---|
+| INIT chord | 45 % | 45 % | 6/6 | 0 | 46.2 % / 43.6 % (init chord, Phase 2 Task 3) |
+| heavy: VCO1 sync, X-Mod FILTER ENV and VCO2 up (to VCO1 and F FREQ), resonance high on K3, 6 notes high up | 60 % | 60 % | 6/6 | 0 | 63.8 % / 60.7 % (musical stress C5..C7, Task 11) |
+
+- **NVOICE stays 6.** PEAK is well under the CPU guard's 80 % on both; no voice shed, no crackle (by ear).
+- **The clock is still open.** Both rows fit the emu model at 240 MHz and the hw model at 360 MHz about equally
+  (the heavy patch was set by hand, not the harness's musical stress patch, so its row is a rough match). The
+  CPU1 probe (§5) or a timer read would settle it; until then neither cycle model can be called the right one.
+- WRITE (with notes held and with USB MIDI notes arriving): a short fade gap, no stuck notes; the program came back
+  after a power cycle. Rescue screen (OCTAVE- at power-on): shows.
+- The keyboard ran a non-stock build before (`SMK-37 Pro_900`, port "X0X FM-1", USB 1209:0001); the full flash was
+  read twice and verified (`verify_dump.py` OK, `trimdat` at 0xC1224) before the install, which João ran himself.
+- Not run yet: the CPU1 probe (§5) and the sequencer (§6).
+
 ## Phase 3 status (the sequencer)
 
-Emulator and host-test evidence only: **nothing has run on a keyboard**. The sequencer's own cost is small beside the
+Emulator and host-test evidence only: **the sequencer has not been tried on a keyboard** (the Phase 3 build passed
+SMOKE_TEST §2 on 2026-11-19, "First device run" above; §6 not run yet). The sequencer's own cost is small beside the
 voices, and a WRITE with a sequence works end to end in the emulator; what is left is the device ([SMOKE_TEST.md](SMOKE_TEST.md)
 §6, and "What only the device can confirm" below).
 
@@ -129,6 +152,8 @@ answer") exist for the first block. A fail on any of the first four means DUAL C
 5. **The real speed-up**: `LOAD 1C / 2C` on the probe's test patch (the emulator says -35 to -43 %, the device
    likely less; cache and flash contention).
 6. **The real clock** (240 vs 360 MHz) and the real single-core CPU % for the NVOICE decision; Phase 1's open item.
+   The single-core CPU % is in (2026-11-19, "First device run" at the top: 45 % / 60 %, NVOICE stays 6); the clock
+   is still open.
 7. **The WRITE gap** with CPU1 on: whether the flash gate holds up under a real erase and write (the emulator cannot
    turn the XIP flash off).
 8. **MIDI clock jitter on USB**: clock out is sent from the main loop (within a few ms of its time), clock in is
