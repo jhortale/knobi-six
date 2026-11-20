@@ -188,6 +188,8 @@ struct kc {
     uint32_t base_pw;                           /* eng_pw when base was taken */
     uint8_t forced_edit;                        /* loaded as edited (kc_program_set) */
     uint8_t pend;                               /* a kc_program_set the engine could not take yet */
+    uint32_t loads;                             /* program loads asked for: kc_program_set / select, MIDI program change
+                                                 * (kc_program_loads, kc_program_mark_stored) */
     int32_t pend_n;
     uint8_t pend_edited;
     program_t pend_p;
@@ -253,8 +255,14 @@ static void kc_apply_pending(kc_t *k)
 
 static void kc_pass(kc_t *k)                   /* app.c app_main's pass, without the panel, the keys and the screen */
 {
-    kc_apply_pending(k);
-    controls_poll(0, &eng_edit, &k->screen);
+    {
+        uint32_t pw;
+        int32_t want;
+        kc_apply_pending(k);                    /* (a kc_program_set: counted when it was asked for) */
+        pw = eng_pw, want = ctl_prog_want;
+        controls_poll(0, &eng_edit, &k->screen);   /* (MIDI: a program change queued or deferred here) */
+        if (eng_pw != pw || (ctl_prog_want >= 0 && ctl_prog_want != want)) k->loads++;
+    }
     kc_track_load(k);
     if (edit_seq_ver() != k->seq_sent && eng_seq_load(edit_seq()) == 0) k->seq_sent = edit_seq_ver();
     ctl_arp_out();                              /* (the ring read; the notes not sent) */
@@ -268,7 +276,10 @@ static void kc_block_n(kc_t *k, int16_t *to, uint32_t n)
     int32_t out[2u * KC_BLOCK];
     while (k->mq_r != k->mq_w) {                /* app.c midi_in */
         const uint8_t *m = k->mq[k->mq_r % KC_MIDI_QUEUE];
+        const uint32_t pw = eng_pw;
+        const int32_t want = ctl_prog_want;
         controls_midi(m[0], m[1], m[2]);
+        if (eng_pw != pw || (ctl_prog_want >= 0 && ctl_prog_want != want)) k->loads++;   /* (a program change) */
         kc_track_load(k);
         k->mq_r++;
     }
@@ -424,6 +435,7 @@ int kc_program_set(kc_t *k, int32_t number, const program_t *p, const seq_t *s, 
     k->pend_p = q, k->pend_s = t;
     program_set_seq_gen(&k->pend_p, 0);
     k->pend = 1, k->pend_n = number, k->pend_edited = (uint8_t)(edited != 0);
+    k->loads++;
     was = kc_bind(k);
     ctl_prog_want = -1, ctl_want_factory = 0;   /* (a program change still deferred is older: this load wins) */
     kc_apply_pending(k);
@@ -449,17 +461,21 @@ int kc_program_select(kc_t *k, int32_t number)
     if (number < 0 || number >= (int32_t)PROG_COUNT) return -1;
     was = kc_bind(k);
     k->pend = 0;                                /* (a later load wins) */
+    k->loads++;
     ctl_prog_select(number);                    /* (the engine busy: retried by the next pass, controls_poll) */
     kc_track_load(k);
     kc_unbind(was);
     return 0;
 }
 
-int kc_program_mark_stored(kc_t *k, int32_t number, const program_t *p, const seq_t *s)
+uint32_t kc_program_loads(const kc_t *k) { return k->loads; }
+
+int kc_program_mark_stored(kc_t *k, int32_t number, const program_t *p, const seq_t *s, uint32_t loads)
 {
     kc_binding_t was;
     int same;
     if (number < 0 || number >= (int32_t)PROG_COUNT || !p || !s) return -1;
+    if (loads != k->loads) return -2;           /* (a load since p + s were read: it is the program in play now) */
     was = kc_bind(k);
     kc_apply_pending(k);
     if (ctl_prog_want >= 0) { kc_unbind(was); return -1; }   /* (a program change on its way: content not known) */

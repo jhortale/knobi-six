@@ -35,7 +35,9 @@
  *   program_mark_stored   (plugin WRITE) kc_program_mark_stored: the number moves, "edited" clears, no load: the
  *                         sequence keeps playing, no note released; an edit made after what was written stays edited
  *                         (program value, or the sequence); a kc_program_set not taken yet: that load marked; refused
- *                         while a program change waits (its content not known yet)
+ *                         while a program change waits (its content not known yet); a load since the snapshot
+ *                         (kc_program_loads: a MIDI program change, kc_program_set, kc_program_select): -2, nothing
+ *                         renamed
  *   first_render_no_alloc (macOS) the core as a dylib (dlopen'd, as in the plugin bundle): a thread's first kc_render
  *                         allocates nothing (malloc zone statistics; a lazily allocated thread-local would)
  * Sample-accurate events (plan Task 3, kc_render_exact):
@@ -959,7 +961,7 @@ static void program_mark_stored(void)
     (void)kc_notes(k, notes, KC_LOG);
     kc_program_get(k, &num, &w, &ws, &ed);
     if (ed != 1 || !kc_seq_playing(k)) bad++, printf("  before: edited %d, playing %d\n", ed, kc_seq_playing(k));
-    r = kc_program_mark_stored(k, 77, &w, &ws);   /* (WRITE to 77: the edit buffer as written) */
+    r = kc_program_mark_stored(k, 77, &w, &ws, kc_program_loads(k));   /* (WRITE to 77: the edit buffer as written) */
     kc_program_get(k, &num, NULL, NULL, &ed);
     if (r != 0 || num != 77 || ed != 0) bad++, printf("  marked: %d, number %d, edited %d\n", r, num, ed);
     for (i = 0; i < 4; i++) kc_render(k, buf, KC_BLOCK);   /* (no load: the player runs on) */
@@ -970,27 +972,55 @@ static void program_mark_stored(void)
     if (ed != 0) bad++;
     /* an edit after the snapshot: the mark keeps it edited */
     kc_param_set(k, P_FLT_FREQ, 90);
-    r = kc_program_mark_stored(k, 78, &w, &ws);
+    r = kc_program_mark_stored(k, 78, &w, &ws, kc_program_loads(k));
     kc_program_get(k, &num, NULL, NULL, &ed);
     if (r != 1 || num != 78 || ed != 1 || kc_param_get(k, P_FLT_FREQ) != 90) bad++, printf("  later edit: %d %d %d\n", r, num, ed);
     /* the sequence changed after the snapshot: edited too */
     kc_program_get(k, NULL, &w, &ws, NULL);
     ws.step[0].vels[0] = 50;                    /* (what was "written" differs from the edit buffer's sequence) */
-    r = kc_program_mark_stored(k, 79, &w, &ws);
+    r = kc_program_mark_stored(k, 79, &w, &ws, kc_program_loads(k));
     kc_program_get(k, &num, NULL, NULL, &ed);
     if (r != 1 || num != 79 || ed != 1) bad++, printf("  sequence differs: %d %d %d\n", r, num, ed);
     /* a load waiting: refused, nothing changed */
     kc_program_select(k, 5);
     kc_program_select(k, 6);                    /* (the engine busy with 5: 6 deferred) */
-    r = kc_program_pending(k) ? kc_program_mark_stored(k, 80, &w, &ws) : -2;
+    r = kc_program_pending(k) ? kc_program_mark_stored(k, 80, &w, &ws, kc_program_loads(k)) : -2;
     if (r != -1) bad++, printf("  pending: %d\n", r);
-    if (kc_program_mark_stored(k, 500, &w, &ws) != -1) bad++;
+    if (kc_program_mark_stored(k, 500, &w, &ws, kc_program_loads(k)) != -1) bad++;
+    {                                           /* a load after the snapshot (what was written): not renamed. A MIDI
+                                                 * program change, a kc_program_set, a kc_program_select between the
+                                                 * snapshot and the mark: -2, the instance keeps the load's number */
+        static const uint8_t pc[2] = {0xC0, 21};
+        uint32_t at;
+        int32_t n0;
+        for (i = 0; i < 4; i++) kc_render(k, buf, KC_BLOCK);
+        kc_program_get(k, NULL, &w, &ws, NULL);
+        at = kc_program_loads(k);
+        kc_midi(k, pc, 2);
+        kc_render(k, buf, KC_BLOCK), kc_render(k, buf, KC_BLOCK);
+        r = kc_program_mark_stored(k, 90, &w, &ws, at);
+        kc_program_get(k, &num, NULL, NULL, &ed);
+        if (r != -2 || num != 21 || ed != 0) bad++, printf("  PC after the snapshot: %d, number %d, edited %d\n", r, num, ed);
+        kc_program_get(k, NULL, &w, &ws, NULL);
+        at = kc_program_loads(k);
+        kc_program_set(k, 22, &w, &ws, 1);
+        r = kc_program_mark_stored(k, 91, &w, &ws, at);
+        kc_program_get(k, &num, NULL, NULL, &ed);
+        if (r != -2 || num != 22 || ed != 1) bad++, printf("  set after the snapshot: %d, number %d, edited %d\n", r, num, ed);
+        for (i = 0; i < 3; i++) kc_render(k, buf, KC_BLOCK);
+        at = kc_program_loads(k);
+        kc_program_select(k, 23);
+        for (i = 0; i < 3; i++) kc_render(k, buf, KC_BLOCK);
+        r = kc_program_mark_stored(k, 92, &w, &ws, at);
+        kc_program_get(k, &n0, NULL, NULL, NULL);
+        if (r != -2 || n0 != 23) bad++, printf("  select after the snapshot: %d, number %d\n", r, n0);
+    }
     {                                           /* a kc_program_set the engine has not taken yet: that one marked */
         kc_t *j = kc_create();
         if (!j) bad++;
         else {
             kc_program_set(j, 9, &w, &ws, 1);   /* (pending: the engine holds kc_create's load; edited) */
-            r = kc_program_mark_stored(j, 10, &w, &ws);
+            r = kc_program_mark_stored(j, 10, &w, &ws, kc_program_loads(j));
             kc_program_get(j, &num, NULL, NULL, &ed);
             if (r != 0 || num != 10 || ed != 0) bad++, printf("  pending set: %d %d %d\n", r, num, ed);
             for (i = 0; i < 3; i++) kc_render(j, buf, KC_BLOCK);
