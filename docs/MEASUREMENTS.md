@@ -1,8 +1,59 @@
 # Measurements
 
+## First device run (SMK-37 Pro, João, 2026-11-19)
+
+The first numbers from a keyboard. [SMOKE_TEST.md](SMOKE_TEST.md) §2, all 12 items passed. Package: the
+`knobi-six-pro` artifact of CI run 44450085801 (`phase1`, commit e54c5d4, Phases 1-3 merged), `knobi-six.fwsc`
+652,625 B, SHA-256 `121f6ff150533af6301328342821d779bea04854e5ad1d39d735fa9bfa43458a`; identity `SMK-37 Pro_956`;
+one core (the default package, no DUAL CORE). Read off the Globals CPU line while holding 6 notes:
+
+| patch, 6 voices held | CPU | PEAK | VOX | SHED | closest model figure, 240 MHz emu / 360 MHz hw |
+|---|---|---|---|---|---|
+| INIT chord | 45 % | 45 % | 6/6 | 0 | 46.2 % / 43.6 % (init chord, Phase 2 Task 3) |
+| heavy: VCO1 sync, X-Mod FILTER ENV and VCO2 up (to VCO1 and F FREQ), resonance high on K3, 6 notes high up | 60 % | 60 % | 6/6 | 0 | 63.8 % / 60.7 % (musical stress C5..C7, Task 11) |
+
+- **NVOICE stays 6.** PEAK is well under the CPU guard's 80 % on both; no voice shed, no crackle (by ear).
+- **The clock is still open.** Both rows fit the emu model at 240 MHz and the hw model at 360 MHz about equally
+  (the heavy patch was set by hand, not the harness's musical stress patch, so its row is a rough match). The
+  CPU1 probe (§5) or a timer read would settle it; until then neither cycle model can be called the right one.
+- WRITE (with notes held and with USB MIDI notes arriving): a short fade gap, no stuck notes; the program came back
+  after a power cycle. Rescue screen (OCTAVE- at power-on): shows.
+- The keyboard ran a non-stock build before (`SMK-37 Pro_900`, port "X0X FM-1", USB 1209:0001); the full flash was
+  read twice and verified (`verify_dump.py` OK, `trimdat` at 0xC1224) before the install, which João ran himself.
+- The sequencer (§6): S1-S13 passed on 2026-11-20 (below, "Sequencer on the device"); S14 not run (it needs a
+  local build with the imported bank).
+
+### CPU1 probe on the device (SMOKE_TEST §5, 2026-11-20): passed
+
+Package: the `knobi-six-cpu1probe` artifact of the same CI run 44450085801 (newer than the Phase 2 run §5 names),
+`knobi-six-cpu1probe.fwsc` 652,737 B, SHA-256 `997dab6dbdb6b97eb5c5a09968863bf2c1ffdcae9c2634d6841b3c717ffa4a7f`.
+All five steps passed, read off the Globals probe lines (photos kept by João):
+
+| step | PING | ERR / MISREAD | FPU / DUAL=SINGLE | LOAD 1C / 2C / JOB | PROBE, C1, DUAL | CPU line |
+|---|---|---|---|---|---|---|
+| A, 75 s after power-on | 75 | 0 / 0 | OK / OK | 59 / 38 / 24 % | 15 %, IDLE, OFF | 10 % / PEAK 15 % (idle) |
+| B, 11 min idle | 672 | 0 / 0 | OK / OK | 58 / 38 / 24 % | 15 %, IDLE, OFF | 10 % / 15 % |
+| C, ~18 min playing, one core (chords, heavy patch, program changes, WRITE) | 1755 | 0 / 0 | OK / OK | 58 / 39 / 26 % | 16 %, IDLE, OFF | 56 % / 60 % (playing) |
+| D, ~11 min playing, DUAL CORE on | 2542 | 0 / 0 | OK / OK | 58 / 39 / 26 % | 15 %, IDLE, ON 16 % | 35 % / 45 % (playing) |
+| E, after a power cycle | 51 | 0 / 0 | OK / OK | 58 / 38 / 24 % | 15 %, IDLE, OFF | 5 % / 15 % |
+
+- **CPU1 is usable on this unit**: it starts, no shared-RAM misread in ~42 min (the known `00200000` fault did not
+  show at the stock supply), its FPU agrees with CPU0's, DUAL = SINGLE throughout. By ear the sound with DUAL CORE on
+  was the same as with it off, no crackle.
+- **Speed-up 1C → 2C: -33 to -36 %** on the probe's test patch (the musical stress patch, 6 notes), against the
+  emulator's -35 to -43 % (its probe run: 45 → 26 %, -42 %). The CPU line while playing went from PEAK 60 % (C) to
+  45 % (D); both include the probe's own ~15 %, and C and D were not the same notes, so that pair is rough.
+- **The clock: most likely 240 MHz.** The emulator (which models 240 MHz) gives LOAD 1C 45 % for the same test patch
+  ("Phase 2 Task 4" below); the device gives 58-59 %, i.e. ~1.3x the emulator's cycles at 240 MHz, inside the hw
+  model's range (~1.4x). At 360 MHz it would be ~2x, beyond either model. Inferred, not read off a timer.
+- PROBE (the probe's own time in the interrupt, peak): 15-16 % on the device vs ~8 % in the emulator. Only the probe
+  build pays it.
+- The default package still renders on one core; whether DUAL CORE goes into the default build is João's decision.
+
 ## Phase 3 status (the sequencer)
 
-Emulator and host-test evidence only: **nothing has run on a keyboard**. The sequencer's own cost is small beside the
+Emulator and host-test evidence below; **on a keyboard since 2026-11-20**: SMOKE_TEST §6 S1-S13 passed ("Sequencer
+on the device" under "First device run" above). The sequencer's own cost is small beside the
 voices, and a WRITE with a sequence works end to end in the emulator; what is left is the device ([SMOKE_TEST.md](SMOKE_TEST.md)
 §6, and "What only the device can confirm" below).
 
@@ -68,7 +119,27 @@ job that already took 19 to 38 min on earlier runs).
 450 ms and the others to 300 ms. These are `tests/wav_check.py` readings of the host's WAV, where an erase costs what the
 model says it costs.
 
+### Sequencer on the device (SMOKE_TEST §6, 2026-11-20): S1-S13 passed
+
+The regular `knobi-six-pro` package of CI run 44450085801 (the same as §2), João's SMK-37 Pro.
+
+- Recording (notes, rests, chords, ties, `<` erasing the last step), playback with BPM and DIVISION changed live,
+  transpose, REC tapped while playing, arp / sequencer exclusion: as specified.
+- WRITE with a sequence, playing and stopped: STORED, the sequence plays on, no stuck note; the gap **felt short**
+  (not timed). After a power cycle the program came back with its sequence; a program change loads its own.
+- MIDI in while recording, MIDI out to Ableton (every note ended, none hanging after a stop mid-chord), MIDI CLOCK IN
+  from Ableton (start on the downbeat, stop, continue): passed by ear and in Ableton's recorded clip.
+- **CPU (S13)**: a heavy patch (cutoff fader 25, resonance fader 62, sync, X-Mod), a 6-note chord each step at
+  250 BPM 1/16: CPU 70 %, PEAK 70 %, SHED 0. The same patch with the six notes held by hand: CPU 65 %, PEAK 75 %,
+  SHED 0. **The sequencer adds nothing measurable**, as the emulator said. (That patch costs more than §2 item 9's
+  60 %: its filter settings differ. At PEAK 75 % it is the closest the device came to the CPU guard's 80 %.)
+
 ### What only the device can confirm (Phase 3)
+
+**Device run 2026-11-20** (above): 1 partly (sequences stored, read back and kept across power cycles; no power cut
+during a WRITE tried, wear not tested); 2 felt short, not timed, no compacting WRITE seen; 3 MIDI clock in from
+Ableton stayed in time by ear, jitter not measured; 4 not run (S14 needs a local build); 5 the sequencer adds
+nothing measurable (S13).
 
 1. **The sequence store on the real flash**, including a power cut during WRITE (tested on the host by cutting at
    every flash operation: the old pair or the new, never a mix), weak cells, wear.
@@ -118,6 +189,10 @@ this material was taken). Noted so it is looked at, not blamed or cleared withou
 
 ### What only the device can confirm
 
+**Answered on the device 2026-11-20** ("CPU1 probe on the device" at the top): 1-4 passed on this unit, 5 is
+-33 to -36 %, 6 most likely 240 MHz; 7 not separately confirmed (a WRITE was part of the step D routine and nothing
+was heard or counted, but the gap was not measured with CPU1 on).
+
 None of this is answerable on the computer or in the emulator; the probe package and its procedure
 ([SMOKE_TEST.md](SMOKE_TEST.md) §5, [research/second-core.md](research/second-core.md) "What only the hardware can
 answer") exist for the first block. A fail on any of the first four means DUAL CORE stays off on this unit.
@@ -129,6 +204,8 @@ answer") exist for the first block. A fail on any of the first four means DUAL C
 5. **The real speed-up**: `LOAD 1C / 2C` on the probe's test patch (the emulator says -35 to -43 %, the device
    likely less; cache and flash contention).
 6. **The real clock** (240 vs 360 MHz) and the real single-core CPU % for the NVOICE decision; Phase 1's open item.
+   The single-core CPU % is in (2026-11-19, "First device run" at the top: 45 % / 60 %, NVOICE stays 6); the clock:
+   most likely 240 MHz, from the probe's LOAD 1C (2026-11-20, inferred, not timed).
 7. **The WRITE gap** with CPU1 on: whether the flash gate holds up under a real erase and write (the emulator cannot
    turn the XIP flash off).
 8. **MIDI clock jitter on USB**: clock out is sent from the main loop (within a few ms of its time), clock in is

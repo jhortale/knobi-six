@@ -8,6 +8,15 @@ Package: `build/device/knobi-six.fwsc` from CI run 44024761787 (commit 42e58f4),
 SHA-256 `b030a94a5af41d9e295cf3df4c4093cef8b3879ea431ef1683125f764a5c4db4`. Never install a `-local` package
 (it contains your imported OB-6 bank) on a keyboard you lend or sell.
 
+**Run on hardware 2026-11-19 (João, SMK-37 Pro): all 12 passed**, with the later `knobi-six-pro` artifact of CI run
+44450085801 (`phase1`, commit e54c5d4, Phases 1-3), SHA-256
+`121f6ff150533af6301328342821d779bea04854e5ad1d39d735fa9bfa43458a`. Results in the table below and in
+[MEASUREMENTS.md](MEASUREMENTS.md) "First device run". Notes from that run:
+- A keyboard already on an smk37-base-family build shows the MIDI port **"X0X FM-1"** (not "SMK-37 Pro-Private"):
+  pass `--port "FM-1"` to `uboot_key.py` and `fm1_install.py` (and unplug any real FM-1 first).
+- The tools need `mido` / `python-rtmidi` in the Python that runs them (the macOS system `python3` has neither):
+  run them with the jl-uboot-tool venv's Python, or install both there.
+
 ## 0. Before anything is written
 
 1. Note what runs now: `python3 tools/fm1_install.py --info` (read only). Write down the model and version.
@@ -25,23 +34,24 @@ connected until it finishes. The first start clears the previous firmware's stor
 
 | # | Check | Expect | Result |
 |---|---|---|---|
-| 1 | Power on | Boot screen with the KNOBI-SIX wordmark, then Play; no red fault screen | |
-| 2 | Keys, velocity | INIT sound on every key; soft/hard playing changes level | |
-| 3 | Pitch / mod wheel | Bend ±2 st; mod wheel adds LFO depth only when an LFO destination is on | |
-| 4 | Encoders K2–K8, faders | Knobs on each screen move; faders follow the bottom strip; K1 = volume | |
-| 5 | Pads | Top row toggles (lit red), bottom row pressure → aftertouch (route AT → F FREQ to hear it) | |
-| 6 | Filter sweep | Cutoff fader sweeps smoothly, no crackle, no crash (this exercises the FPU in the interrupt) | |
-| 7 | Resonance at max | Rings but never whistles on its own | |
-| 8 | Globals → CPU line, INIT 6-note chord | Write down CPU %, PEAK %, VOX, SHED | |
-| 9 | Globals → CPU line, a heavy patch (sync + X-Mod + high resonance, 6 notes high up) | Note the numbers; if SHED climbs, voices drop with a short fade, never crackles | |
-| 10 | Program change, WRITE | WRITE gives a ~0.2 s gap (fade, silence, fade); power-cycle → program is back | |
-| 11 | USB MIDI | Notes from the Mac play; send notes during a WRITE — none stuck afterwards | |
-| 12 | Rescue path | Hold OCTAVE- while switching on → USB rescue screen (then power-cycle) | |
+| 1 | Power on | Boot screen with the KNOBI-SIX wordmark, then Play; no red fault screen | pass |
+| 2 | Keys, velocity | INIT sound on every key; soft/hard playing changes level | pass |
+| 3 | Pitch / mod wheel | Bend ±2 st; mod wheel adds LFO depth only when an LFO destination is on | pass |
+| 4 | Encoders K2–K8, faders | Knobs on each screen move; faders follow the bottom strip; K1 = volume | pass |
+| 5 | Pads | Top row toggles (lit red), bottom row pressure → aftertouch (route AT → F FREQ to hear it) | pass |
+| 6 | Filter sweep | Cutoff fader sweeps smoothly, no crackle, no crash (this exercises the FPU in the interrupt) | pass, no crackle, no crash |
+| 7 | Resonance at max | Rings but never whistles on its own | pass |
+| 8 | Globals → CPU line, INIT 6-note chord | Write down CPU %, PEAK %, VOX, SHED | CPU 45 %, PEAK 45 %, VOX 6/6, SHED 0 |
+| 9 | Globals → CPU line, a heavy patch (sync + X-Mod + high resonance, 6 notes high up) | Note the numbers; if SHED climbs, voices drop with a short fade, never crackles | CPU 60 %, PEAK 60 %, VOX 6/6, SHED 0; clean |
+| 10 | Program change, WRITE | WRITE gives a ~0.2 s gap (fade, silence, fade); power-cycle → program is back | pass: fade gap, program back after power cycle |
+| 11 | USB MIDI | Notes from the Mac play; send notes during a WRITE — none stuck afterwards | pass (Ableton loop, WRITE while playing): none stuck |
+| 12 | Rescue path | Hold OCTAVE- while switching on → USB rescue screen (then power-cycle) | pass |
 
 ## 3. Decide
 
 - Item 8 PEAK under ~50 % and 9 shedding rarely → keep 6 voices.
 - Item 9 shedding constantly on musical patches → switch to 4 voices (`NVOICE`, one line).
+- **2026-11-19: 6 voices kept** (item 8 PEAK 45 %, item 9 PEAK 60 % with no shedding).
 - Any red fault screen: photograph it (vector, PC, return address) — the PC is looked up in `build/device/app.dis`.
 
 ## 4. Going back
@@ -74,6 +84,12 @@ build.py refuses `--release` with it: a probe is never published.) Never install
 lend or sell.
 
 Install: `python3 tools/fm1_install.py knobi-six-cpu1probe.fwsc --yes`, USB and power connected until it finishes.
+
+**Run on hardware 2026-11-20 (João, SMK-37 Pro): passed, A to E**, with the `knobi-six-cpu1probe` artifact of CI run
+44450085801 (SHA-256 `997dab6dbdb6b97eb5c5a09968863bf2c1ffdcae9c2634d6841b3c717ffa4a7f`; the newer run supersedes
+the one named above). ERR 0 and MISREAD 0 throughout (~42 min), FPU and DUAL=SINGLE OK, `DUAL ON 16%` for ~11 min
+with the same sound; LOAD 1C 58 % / 2C 38-39 %. Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "CPU1 probe on the
+device".
 
 ### What the Globals screen shows (GLOBE)
 
@@ -119,32 +135,36 @@ reads). Stock: M-Vave's package or your dump, as in §4.
 
 ## 6. Sequencer (Phase 3: the step sequencer and its storage)
 
-Nothing here has run on a keyboard; the emulator and the host tests cover the logic and the flows
+Written before any keyboard run (the run is noted below); the emulator and the host tests cover the logic and the flows
 ([MEASUREMENTS.md](MEASUREMENTS.md) "Phase 3"), not the flash and not the ear. Same safety rules as §0 (**the backup
 first**, the way back ready, and **João installs it himself**: no agent runs `fm1_install.py`, flashes, or uses the
 USB rescue). **Package**: the `knobi-six-pro` artifact of the last green `phase3` CI run (the run and its SHA-256 are
 named in MEASUREMENTS.md "Phase 3" once the branch is final); a `-local` package (your imported OB-6 bank) only on your
 own keyboard. Run §2 first with it (items 1-12 are unchanged; item 10 now also stores a sequence, below).
 
+**Run on hardware 2026-11-20 (João, SMK-37 Pro): S1-S13 passed, S14 not run**, with the regular `knobi-six-pro`
+package of CI run 44450085801 (the one §2 passed with). Numbers in [MEASUREMENTS.md](MEASUREMENTS.md) "Sequencer on
+the device".
+
 Words, as in [CONTROLS.md](CONTROLS.md) "Sequencer": SEQ opens the Sequencer screen; SEQ REC arms recording (lit);
 `<` / `>` = DEC / INC on that screen while recording.
 
 | # | Check | Expect | Result |
 |---|---|---|---|
-| S1 | SEQ: the Sequencer screen; SEQ again: back | STOP, STEP --, LEN 0, XP 0 (a program with no sequence); `SEQ n KB / m KB` shows the store | |
-| S2 | **Record**: SEQ REC, then play C, E, G one at a time; `>`; two keys held and a third added, all let go; `<` | each key sounds as it is played; the grid gets a red dot a step, a dash for the rest, a stack of dots for the chord; `<` erases the last step | |
-| S3 | Record a tie: hold a note, press `>` twice, let go | the step plus two blue tie bars; SEQ REC again ends it (lit off) | |
-| S4 | **Play**: SEQ PLAY at 120 BPM, 1/16 | steps in time with BPM and DIVISION (change both while it plays), a short note each (gate half the step), the rest silent, the tie one long note with no retrigger, then it loops; STEP follows | |
-| S5 | **Transpose**: while it plays hold SEQ REC and press a key a fifth above C4 (G4); then C4 | from the next note it plays a fifth up; that key makes no sound and records nothing; C4 = back to normal. With UNISON on a key alone does it | |
-| S6 | SEQ REC **tapped** while it plays | it stops, recording arms (the screen says REC); a second tap ends it. The sequence is kept if no key was pressed | |
-| S7 | Arp and sequencer | SEQ PLAY with ARP on turns the arp off; ARP ON stops the sequence | |
-| S8 | **WRITE with a sequence** (record or load one, then WRITE, ENTER; once with it playing, once stopped) | the same fade, a gap and fade-in as item 10 but longer: **time it** (stopwatch or recording); STORED; the sequence plays on afterwards; no stuck note | |
-| S9 | **Power-cycle** | the program is back with its sequence (LEN, SEQ PLAY plays the same notes, ties and rests). A program change loads that program's own sequence and stops the playing one; a sequence edited and not written is gone after a program change | |
-| S10 | MIDI notes in while recording (a DAW or keyboard on USB) | recorded like the keys; with LOCAL OFF only the MIDI notes are | |
-| S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | |
-| S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | |
-| S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | |
-| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | |
+| S1 | SEQ: the Sequencer screen; SEQ again: back | STOP, STEP --, LEN 0, XP 0 (a program with no sequence); `SEQ n KB / m KB` shows the store | pass |
+| S2 | **Record**: SEQ REC, then play C, E, G one at a time; `>`; two keys held and a third added, all let go; `<` | each key sounds as it is played; the grid gets a red dot a step, a dash for the rest, a stack of dots for the chord; `<` erases the last step | pass (`<` erased the chord) |
+| S3 | Record a tie: hold a note, press `>` twice, let go | the step plus two blue tie bars; SEQ REC again ends it (lit off) | pass |
+| S4 | **Play**: SEQ PLAY at 120 BPM, 1/16 | steps in time with BPM and DIVISION (change both while it plays), a short note each (gate half the step), the rest silent, the tie one long note with no retrigger, then it loops; STEP follows | pass |
+| S5 | **Transpose**: while it plays hold SEQ REC and press a key a fifth above C4 (G4); then C4 | from the next note it plays a fifth up; that key makes no sound and records nothing; C4 = back to normal. With UNISON on a key alone does it | pass |
+| S6 | SEQ REC **tapped** while it plays | it stops, recording arms (the screen says REC); a second tap ends it. The sequence is kept if no key was pressed | pass |
+| S7 | Arp and sequencer | SEQ PLAY with ARP on turns the arp off; ARP ON stops the sequence | pass |
+| S8 | **WRITE with a sequence** (record or load one, then WRITE, ENTER; once with it playing, once stopped) | the same fade, a gap and fade-in as item 10 but longer: **time it** (stopwatch or recording); STORED; the sequence plays on afterwards; no stuck note | pass; the gap felt short (not timed) |
+| S9 | **Power-cycle** | the program is back with its sequence (LEN, SEQ PLAY plays the same notes, ties and rests). A program change loads that program's own sequence and stops the playing one; a sequence edited and not written is gone after a program change | pass |
+| S10 | MIDI notes in while recording (a DAW or keyboard on USB) | recorded like the keys; with LOCAL OFF only the MIDI notes are | pass |
+| S11 | MIDI out: PARAM TX = CC, LOCAL ON, SEQ PLAY | every note-on the DAW sees has its note-off, ties send nothing; stop mid-chord: no hanging note | pass (Ableton) |
+| S12 | **External clock**: MIDI CLOCK = IN from a DAW, SEQ PLAY (ARMED), the DAW starts / stops / continues | silent until it runs; Start: step 1 on the downbeat; Stop pauses and releases the notes; Continue goes on from the held step. CC 123 from the DAW: notes released, it plays on; CC 120 stops it | pass (Ableton) |
+| S13 | A heavy patch (the item 9 one) playing a 6-note chord each step, 250 BPM, 1/16 | the CPU line against the same patch with six held notes: PEAK about the same, SHED no higher | sequenced CPU 70 % / PEAK 70 %, held by hand 65 % / 75 %, SHED 0: no extra cost |
+| S14 | **Factory sequences** (a local build with your imported bank, your own keyboard): play a dozen programs' sequences, ones with chords, with long held notes, with gaps | **ties hold the note** (no retrigger, ends with the last tied step) and **rests are silent**; anything that sounds wrong: write down the program number | not run (needs a local build) |
 
 **Not part of the checklist**: `SEQ FULL: NOTHING STORED` needs the store to be full (about 76 KB: 76 full
 64-step six-note sequences, the largest there are; a sequence of 16 single-note steps takes 64 B, so every one of the
