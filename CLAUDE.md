@@ -13,7 +13,7 @@ magic, data family, IDENT 956): `docs/IDENTITY.md`.
 ## Never install on the keyboard without João
 
 Do not run `tools/fm1_install.py`, do not flash, do not use the USB rescue or `tools/backup/`. Nothing is installed on
-any keyboard. Builds, host tests and CI are fine. The web installer (`web/`) too: only its simulated keyboard (`?mock`,
+any keyboard. Builds, host tests and CI are fine. The web installer (`apps/installer/`, `packages/`) too: only its simulated keyboard (`?mock`,
 the tests), never a real one.
 
 ## Commands
@@ -24,7 +24,7 @@ MODEL=elite sh build.sh; MODEL=mke sh build.sh; sh build.sh    # all three, the 
 sh tests/run_tests.sh                       # host suite (needs a build first)
 tests/run_host.sh SCRIPT                    # the app on the computer, e.g. tests/scripts/diag.txt -> build/host/
 make -C tests unit                          # unit tests, tests/unit/test_*.c (created in Task 1)
-cd web && npm ci && npm run build && npm test   # knobi-flash, the web installer (docs/WEB_INSTALLER.md)
+pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace: knobi-flash and its packages (docs/MONOREPO.md)
 ```
 
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default
@@ -39,6 +39,9 @@ The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; nee
   screen, flash). Do not edit unless the plan says so. API: `docs/API.md`; chip rules: `docs/RULES.md` (no FPU, no
   libgcc, no 64-bit division, integers only; the audio interrupt is short, no flash, no screen).
 - `tools/build.py`: IDENT, DATA_FAMILY, package names. `tests/`: host tests and scripts.
+- The monorepo (`docs/MONOREPO.md`): `apps/` (the installer), `packages/` (`@knobi/*`: installer-core, web-midi,
+  device-sim, catalog, ui, tsconfig), `synths/<id>/` (per-synth metadata). Upstream's paths (`firmware/`, `tools/`,
+  `tests/`, `build.sh`) never move: `git merge upstream/main` must keep working.
 - Credits (`LICENSING.md`, README) stay as they are; add to them, never drop.
 
 ## Commits
