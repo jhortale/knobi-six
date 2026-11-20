@@ -5,8 +5,8 @@ import base from "../../catalog/base.json";
 import type { AppDeps } from "../ui/app.tsx";
 import type { Catalog } from "../catalog/schema.ts";
 import { loadPackage } from "@knobi/installer-core";
-import { FakeKeyboard } from "./fakeDevice.ts";
-import { makePackage } from "./makePackage.ts";
+import { FakeKeyboard } from "@knobi/device-sim";
+import { makePackage } from "@knobi/device-sim";
 
 const FILE = "firmware/knobi-six/0.0-mock/knobi-six-0.0-mock.fwsc";
 

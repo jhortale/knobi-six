@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeCatalog } from "../scripts/make-catalog.ts";
 import { validateCatalog } from "../src/catalog/load.ts";
-import { makePackage } from "./helpers/makePackage.ts";
+import { makePackage } from "@knobi/device-sim";
 
 const base = JSON.parse(readFileSync(new URL("../catalog/base.json", import.meta.url), "utf8"));
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");

@@ -1,0 +1,4 @@
+{
+  "extends": "@knobi/tsconfig/base.json",
+  "include": ["src", "test"]
+}

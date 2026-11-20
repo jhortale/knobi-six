@@ -7,11 +7,11 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { act } from "@testing-library/react";
 import { startApp, type App } from "../src/ui/app.tsx";
-import { FakeKeyboard, type FakeOpts } from "../src/dev/fakeDevice.ts";
+import { FakeKeyboard, type FakeOpts } from "@knobi/device-sim";
 import { DELAY } from "@knobi/installer-core";
 import { InstallError } from "@knobi/installer-core";
 import { loadPackage } from "@knobi/installer-core";
-import { makePackage } from "../src/dev/makePackage.ts";
+import { makePackage } from "@knobi/device-sim";
 import type { Catalog } from "../src/catalog/schema.ts";
 
 const base = JSON.parse(readFileSync(`${import.meta.dirname}/../catalog/base.json`, "utf8"));

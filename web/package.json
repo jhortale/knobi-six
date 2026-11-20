@@ -23,7 +23,8 @@
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vitest": "5.1.1",
-    "@knobi/tsconfig": "workspace:*"
+    "@knobi/tsconfig": "workspace:*",
+    "@knobi/device-sim": "workspace:*"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
