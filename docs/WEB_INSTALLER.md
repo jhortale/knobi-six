@@ -13,7 +13,7 @@ pnpm turbo run typecheck build test       # every package and the app; the app's
 
 Where things are:
 
-- `apps/installer/`: the page (React; behaviour in `src/ui/installer.ts`, drawn by `src/ui/Page.tsx`), the `?mock` page,
+- `apps/installer/`: the page (React; the installer itself is `@knobi/installer-ui`: behaviour in `installer.ts`, drawn by `InstallerPanel`; `src/ui/Page.tsx` is the page chrome), the `?mock` page,
   the site files (`site/`), the page and `dist/` tests.
 - `packages/ui/` (`@knobi/ui`): the shadcn/ui components (add one with `npx shadcn add NAME` in `packages/ui/`) and the
   KNOBI panel theme on Tailwind CSS v4 (`src/styles/globals.css`).

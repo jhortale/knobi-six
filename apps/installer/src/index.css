@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* The installer's styles: Tailwind and the KNOBI panel theme, from @knobi/ui. */
 @import "@knobi/ui/globals.css";
+/* the classes of the shared installer panel */
+@source "../../../packages/installer-ui/src";
 
 /* the cosmos behind the panel: deep black-blue with faint nebula dust. It is also the whole backdrop without WebGL
    or with prefers-reduced-motion before the field's still frame (@knobi/field draws on top, transparent). */

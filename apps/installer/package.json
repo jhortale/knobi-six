@@ -34,6 +34,7 @@
     "@knobi/web-midi": "workspace:*",
     "@knobi/catalog": "workspace:*",
     "@knobi/ui": "workspace:*",
-    "@knobi/field": "workspace:*"
+    "@knobi/field": "workspace:*",
+    "@knobi/installer-ui": "workspace:*"
   }
 }

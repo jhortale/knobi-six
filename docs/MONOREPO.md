@@ -21,6 +21,7 @@ packages/
                                           instruments.json: the protocols, keyboard families and instruments
   ui/             @knobi/ui               shadcn/ui components and the KNOBI panel theme (Tailwind v4)
   field/          @knobi/field            midi·chlorian's living field: particles behind the page (React Three Fiber)
+  installer-ui/   @knobi/installer-ui     the installer shared by the apps: Installer (behaviour) and InstallerPanel (React)
   tsconfig/       @knobi/tsconfig         shared TypeScript settings
 synths/
   knobi-six/      @knobi/synth-knobi-six  KNOBI-SIX's synth.json (identity, package names) and catalog entry

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The page's state → the living field's state.
 import { describe, expect, it } from "vitest";
-import { fieldModeOf, fieldTargetOf } from "../src/ui/field.ts";
-import type { InstallerState } from "../src/ui/installer.ts";
+import { fieldModeOf, fieldTargetOf } from "../src/index.ts";
+import type { InstallerState } from "../src/index.ts";
 
 const base: InstallerState = {
   catalogLoaded: true, device: { kind: "none" }, offers: [], selected: null, resume: false, backup: false,

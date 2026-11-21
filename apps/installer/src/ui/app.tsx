@@ -3,7 +3,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Page } from "./Page.tsx";
-import { Installer, type InstallerDeps } from "./installer.ts";
+import { Installer, type InstallerDeps } from "@knobi/installer-ui";
 
 export type AppDeps = InstallerDeps;
 

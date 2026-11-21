@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { act } from "@testing-library/react";
-import { startApp, type App } from "../src/ui/app.tsx";
+import { createRoot } from "react-dom/client";
+import { Installer, InstallerPanel, type InstallerDeps } from "../src/index.ts";
 import { FakeKeyboard, type FakeOpts } from "@knobi/device-sim";
 import { DELAY } from "@knobi/installer-core";
 import { InstallError } from "@knobi/installer-core";
@@ -15,7 +16,7 @@ import { makePackage } from "@knobi/device-sim";
 import { mergeCatalog, type Catalog } from "@knobi/catalog";
 
 const base = mergeCatalog(
-  JSON.parse(readFileSync(`${import.meta.dirname}/../../../packages/catalog/instruments.json`, "utf8")),
+  JSON.parse(readFileSync(`${import.meta.dirname}/../../catalog/instruments.json`, "utf8")),
   [JSON.parse(readFileSync(`${import.meta.dirname}/../../../synths/knobi-six/catalog.json`, "utf8"))]);
 const pkg = makePackage({ product: "SMK-37 Pro_956" });
 const { image } = loadPackage(pkg);
@@ -46,8 +47,7 @@ function setup(opts: Partial<FakeOpts> = {}, cat = catalog(), backendErr?: Error
     if (url.endsWith(".fwsc")) return pkgStatus === 200 ? new Response(pkg as Uint8Array<ArrayBuffer>, { status: 200 }) : new Response("", { status: pkgStatus });
     return new Response("", { status: 404 });
   }) as typeof fetch;
-  let app!: App;
-  act(() => { app = startApp(root, {
+  const installer = new Installer({
     backend: async () => {
       if (backendErr) throw backendErr;
       return dev;
@@ -57,7 +57,9 @@ function setup(opts: Partial<FakeOpts> = {}, cat = catalog(), backendErr?: Error
       confirms.push(t);
       return true;
     },
-  }); });
+  } satisfies InstallerDeps);
+  act(() => { createRoot(root).render(<InstallerPanel installer={installer} />); });
+  const app = { ready: installer.ready, connect: installer.connect, install: installer.install, installer };
   const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
   return { root, dev, app, confirms, $ };
 }
