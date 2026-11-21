@@ -1,6 +1,6 @@
 # midi-chlorian: the portal that publishes the synths, managed in Sanity
 
-Date: 2026-11-20. Status: draft for João's approval. Roadmap step 2 of
+Date: 2026-11-20. Status: approved by João, 2026-11-21. Roadmap step 2 of
 `docs/superpowers/specs/2026-11-20-monorepo-design.md`.
 
 ## Intent
