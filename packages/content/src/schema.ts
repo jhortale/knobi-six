@@ -7,7 +7,12 @@ export const synthType = defineType({
   title: "Synth",
   type: "document",
   fields: [
-    defineField({ name: "id", type: "slug", title: "Id (equals synths/<id>/)", validation: (r) => r.required() }),
+    defineField({
+      name: "id",
+      type: "string",
+      title: "Id (equals synths/<id>/)",
+      validation: (r) => r.required().regex(/^[a-z0-9-]+$/, { name: "id" }),
+    }),
     defineField({ name: "name", type: "string", validation: (r) => r.required() }),
     defineField({ name: "summary", type: "text", rows: 3, validation: (r) => r.required() }),
     defineField({ name: "description", type: "array", of: [defineArrayMember({ type: "block" })] }),

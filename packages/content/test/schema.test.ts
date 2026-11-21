@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { releaseType, schemaTypes } from "../src/schema.ts";
+import { releaseType, schemaTypes, synthType } from "../src/schema.ts";
 import { PUBLISHED_QUERY, type PublishedContent } from "../src/index.ts";
 import fixture from "./fixtures/published.json" with { type: "json" };
 
@@ -23,6 +23,13 @@ describe("schema", () => {
   });
   it("exports both types", () => {
     expect(schemaTypes.map((t) => t.name)).toEqual(["synth", "release"]);
+  });
+});
+
+describe("synth schema", () => {
+  it("stores id as a plain string, matching Synth.id", () => {
+    const id = (synthType.fields as { name: string; type: string }[]).find((f) => f.name === "id")!;
+    expect(id.type).toBe("string");
   });
 });
 
