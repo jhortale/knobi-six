@@ -11,6 +11,7 @@ the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md),
 > been tried on a keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
 
 The browser installer, knobi-flash (Web MIDI; not published yet): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
+The site, midi-chlorian (the synths, their releases and the installer): [docs/PORTAL.md](docs/PORTAL.md).
 
 This repository is also a monorepo for more synths and their platforms: the firmware stays at upstream's paths
 (`firmware/`, `tools/`, `tests/`, `build.sh`), and a pnpm + Turborepo workspace beside it holds the installer

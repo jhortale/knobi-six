@@ -41,8 +41,8 @@ workspace, on every push and pull request that touches it); `release.yml` publis
   screen, flash). Do not edit unless the plan says so. API: `docs/API.md`; chip rules: `docs/RULES.md` (no FPU, no
   libgcc, no 64-bit division, integers only; the audio interrupt is short, no flash, no screen).
 - `tools/build.py`: IDENT, DATA_FAMILY, package names. `tests/`: host tests and scripts.
-- The monorepo (`docs/MONOREPO.md`): `apps/` (the installer), `packages/` (`@knobi/*`: installer-core, web-midi,
-  device-sim, catalog, ui, tsconfig), `synths/<id>/` (per-synth metadata). Upstream's paths (`firmware/`, `tools/`,
+- The monorepo (`docs/MONOREPO.md`): `apps/` (the installer, the midi-chlorian portal: `docs/PORTAL.md`), `packages/` (`@knobi/*`: installer-core, web-midi,
+  device-sim, catalog, content, ui, field, tsconfig), `synths/<id>/` (per-synth metadata and the portal's Markdown content). Upstream's paths (`firmware/`, `tools/`,
   `tests/`, `build.sh`) never move: `git merge upstream/main` must keep working.
 - Credits (`LICENSING.md`, README) stay as they are; add to them, never drop.
 
