@@ -42,8 +42,6 @@ Everything the page offers comes from `packages/catalog/instruments.json` (proto
 - **An instrument of the same update protocol**: add it to `instruments.json`'s `instruments` (and its model to the family, or a new family
   with its `match` and `ports` patterns); its packages then appear for devices of that model.
 - **Another synth of yours**: a folder `synths/<id>/` with `synth.json` (identity, package names per model, IDENT),
-  `catalog.json` (its firmware entry) and a `package.json` (`@knobi/synth-<id>`); see `docs/MONOREPO.md`. A release
-  built by CI is added by the generator (`--synth <id>`); a release committed under `synths/<id>/releases/<version>/`
-  (its `catalog.json` lists it with `sha256`) is checked and kept on every deploy. Other people's firmwares are never
-  committed here: that is not this repository's job.
+  `catalog.json` (its firmware entry) and a `package.json` (`@knobi/synth-<id>`); see `docs/MONOREPO.md`. Its releases, and how it reaches
+  the site, are the portal's: `docs/PORTAL.md` ("Adding a synth"). Other people's firmwares are never committed here.
 - **Another update protocol** needs code: a new `protocols` entry and an updater for it.

@@ -31,7 +31,8 @@ pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default
 `~/.jieli/toolchain`, `tools/get_toolchain.sh`), `AC79_SDK` (default `~/fw-AC79_AIoT_SDK`) and Pillow. CI:
 `.github/workflows/build.yml` (push to `main`, pull requests into `main`, manual dispatch), `web.yml` (the TypeScript
-workspace, on every push and pull request that touches it); `release.yml` publishes on `v*` tags.
+workspace, on every push and pull request that touches it); `release.yml` builds and publishes on `<synth>-v<version>` tags (e.g. `knobi-six-v1.0`; old `v*` tags do nothing) and opens the
+release PR; `portal.yml` deploys midi-chlorian on push to `main` (docs/PORTAL.md).
 
 ## Where things live
 
