@@ -25,7 +25,7 @@ MODEL=elite sh build.sh; MODEL=mke sh build.sh; sh build.sh    # all three, the 
 sh tests/run_tests.sh                       # host suite (needs a build first)
 tests/run_host.sh SCRIPT                    # the app on the computer, e.g. tests/scripts/diag.txt -> build/host/
 make -C tests unit                          # unit tests, tests/unit/test_*.c (created in Task 1)
-pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace: knobi-flash and its packages (docs/MONOREPO.md)
+pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace: the installer, the midi-chlorian portal and their packages (docs/MONOREPO.md, docs/PORTAL.md)
 ```
 
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default

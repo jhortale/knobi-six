@@ -10,7 +10,7 @@ the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md),
 > **Status: in development, not installable yet.** Phases 1, 2 (2A, 2B) and 3 (the sequencer) are built; nothing has
 > been tried on a keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
 
-The browser installer, knobi-flash (Web MIDI; not published yet): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
+The browser installer (Web MIDI; its development page is knobi-flash, the public one is on the site below): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
 The site, midi-chlorian (the synths, their releases and the installer): [docs/PORTAL.md](docs/PORTAL.md).
 
 This repository is also a monorepo for more synths and their platforms: the firmware stays at upstream's paths
