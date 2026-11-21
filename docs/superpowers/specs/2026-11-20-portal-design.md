@@ -210,3 +210,44 @@ packages/
 - How `InstallerPanel` is cut out of today's `Page` (props, layout), as long as `apps/installer` keeps working.
 - The Studio's desk structure and field validation details.
 - Which job attaches the source archive and notes to the GitHub release (today's `release.yml` does it).
+
+## Amendment, 2026-11-21: Markdown with frontmatter instead of Sanity (João)
+
+João chose to keep the content in the repo, as Markdown files with YAML frontmatter, instead of Sanity: simpler (no
+outside service, tokens, webhook or Studio), versioned with the code, free. This amendment **replaces** every
+Sanity-specific part above (the Sanity dataset, tokens, webhook, `repository_dispatch`, `apps/studio`, the Studio
+schema); everything else stands: the static portal on GitHub Pages at `jhortale/midi-chlorian`, files only from CI
+release assets re-checked on every deploy, published releases never change, repo-owned safety data, the
+`<synth>-v<version>` tags, the installer unchanged.
+
+### Content files
+
+- `synths/<id>/synth.md`: frontmatter `name`, `summary`, `order` (number), `image` (optional, a path inside
+  `synths/<id>/`), `origin` (`own`; `external` reserved, not shown); the body (Markdown) is the description.
+  `synth.json` and `catalog.json` keep their roles (identity, package names, licence, install warning).
+- `synths/<id>/releases/<version>.md`: frontmatter `version`, `date`, `tag`, `current` (boolean, optional), `source`
+  {`file`, `sha256`, `size`}, `builds` (the same keyboard/desktop build entries as the Sanity model above); the body
+  is the release notes.
+- Parsed with `yaml` 2.9.1; Markdown rendered to HTML **at build time** with `marked` 18.2.1, raw HTML in the
+  Markdown escaped (not passed through). A synth or release whose file does not validate stops the build with an
+  error naming the file.
+
+### Flows (replacing "Tag → draft", "Review → publish", "Publish → deploy")
+
+1. **Tag → release PR.** On `<synth>-v<version>`, `release.yml` builds, tests, uploads the files to the GitHub
+   release (refusing to replace existing assets), verifies them (uploader `github-actions[bot]`, `SHA256SUMS`,
+   identity, loader mark, release names only), writes `synths/<synth>/releases/<version>.md` with every CI-owned
+   field filled and a first draft of the notes, and opens a pull request `release/<tag>` into `main` with the
+   workflow's token. It refuses when that file already exists on `main` (a published release never changes).
+2. **Review → publish.** João edits the notes (and `current`) in the PR and merges it. Because a PR opened by the
+   workflow's own token does not trigger other workflows, its required checks never run: **release PRs are merged
+   with the admin bypass** (they only add one Markdown file). A GitHub App token can replace this later.
+3. **Merge → deploy.** `portal.yml` runs on pushes to `main` that touch `synths/**`, the portal or its packages, and
+   on manual dispatch; it builds the site from `main` and deploys it.
+4. **Edits after publishing.** A check in `web.yml` refuses any change to the CI-owned frontmatter of an existing
+   release file (only `notes`, i.e. the body, and `current` may change).
+
+### What goes away
+
+`apps/studio`, the Sanity dependencies and schema, `SANITY_WRITE_TOKEN`, `SANITY_READ_TOKEN`, the webhook and its
+GitHub token, the `sanity-publish` event. Review Focus items about Sanity become the same checks on the Markdown files.
