@@ -28,12 +28,17 @@ complete source under the same licence too.
 | `tools/backup/jl-uboot-tool-macos/`: a macOS SCSI port and a patch for [jl-uboot-tool](https://github.com/kagaimiq/jl-uboot-tool) (Copyright (c) 2023 Andrey Grigoryev, kagaimiq), which they extend | MIT, as jl-uboot-tool | the files' headers |
 | The second core's files listed above (`firmware/hal/fm1_cpu1*`, `fm1_flash_access.h`): file-level copyleft, compatible with the GPL-3.0 of the whole (MPL-2.0 section 3.3); changes to them stay MPL-2.0 | MPL-2.0 | `LICENSES/MPL-2.0.txt` |
 | knobi-flash's page (`apps/installer/`, `packages/ui/`): the shadcn/ui components in `packages/ui/src/components/` and `cn` in `packages/ui/src/lib/utils.ts`, copied in by the shadcn CLI; React, React DOM, Radix UI, Tailwind CSS, class-variance-authority, clsx, tailwind-merge, lucide-react, bundled into the published page | MIT | <https://ui.shadcn.com>, each package's licence in `node_modules` |
+| midi·chlorian's living field (`packages/field/`): three.js, React Three Fiber (and its dependencies), bundled into the published page | MIT | each package's licence in `node_modules` |
+| Quicksand (weight 600), turned into the outlines of the midi·chlorian wordmark (`packages/ui/src/components/logo.tsx`, `docs/design/portal/logo/`) | SIL OFL 1.1 | `assets/fonts/Quicksand-LICENSE.txt` |
 | JieLi AC79 SDK: `uboot.boot`, `cfg_tool.bin`, `eq_cfg_hw.bin` are read from your SDK checkout at build time and placed in the package; no SDK files are in this tree | Apache-2.0 | <https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK> |
 
 ## The logo
 
 Dinghy's logo (the designburg signet, all rights reserved, not under the GPL) is not in this repository: it marks
 Dinghy itself, and a fork uses its own. SMK BASE and KNOBI-SIX have none.
+
+The midi·chlorian logo (a cell that is also a 5-pin MIDI connector, and the wordmark: `docs/design/portal/logo/`,
+`packages/ui/src/components/logo.tsx`) is part of this repository, under its GPL-3.0-only like the rest of the portal.
 
 ## Trademarks
 

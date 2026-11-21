@@ -79,3 +79,54 @@
     @apply text-link underline-offset-2 hover:underline;
   }
 }
+
+/* ---------------------------------------------------------------------------------------- midi·chlorian ---
+   The instrument panel over the living field (@knobi/field): smoked glass, so the field shows through the whole
+   page. The blur keeps the text's contrast (WCAG AA) whatever drifts behind it; without backdrop-filter, or with
+   prefers-reduced-transparency, the panel is near-opaque again. Unlayered: it wins over the card's bg-card. */
+.panel-glass {
+  background-color: rgb(24 25 30 / 0.9);
+  border-color: rgb(0 0 0 / 0.8);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .panel-glass {
+    background-color: rgb(20 21 27 / 0.28);
+    border-color: rgb(0 0 0 / 0.55);
+    backdrop-filter: blur(6px) saturate(1.3);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .panel-glass {
+    background-color: var(--card);
+    backdrop-filter: none;
+  }
+}
+
+/* the logo (components/logo.tsx): only transform and opacity move, so the compositor runs it */
+.mc-orbit {
+  transform-origin: 50% 50%;
+  animation: mc-sway 7s ease-in-out infinite alternate;
+}
+.mc-breathe {
+  background: radial-gradient(circle, rgb(255 255 255 / 0.9) 0 14%, rgb(95 227 255 / 0.45) 38%, transparent 70%);
+  animation: mc-breathe 4s ease-in-out infinite;
+}
+.mc-logo {
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+a:hover > .mc-logo,
+a:focus-visible > .mc-logo {
+  transform: scale(1.04);
+}
+@keyframes mc-sway {
+  from { transform: rotate(-9deg); }
+  to { transform: rotate(9deg); }
+}
+@keyframes mc-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-orbit, .mc-breathe { animation: none; }
+  .mc-logo { transition: none; }
+}

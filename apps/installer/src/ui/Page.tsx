@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The page: one column, the steps in order (docs/superpowers/specs/2026-11-20-web-installer-design.md), built from
 // shadcn/ui components in the KNOBI-SIX panel style (src/index.css). The behaviour is in installer.ts.
-import { useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@knobi/ui/components/alert";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -13,10 +13,15 @@ import { Card, CardContent } from "@knobi/ui/components/card";
 import { Checkbox } from "@knobi/ui/components/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@knobi/ui/components/collapsible";
 import { Label } from "@knobi/ui/components/label";
+import { Logo } from "@knobi/ui/components/logo";
 import { Progress } from "@knobi/ui/components/progress";
 import { RadioGroup, RadioGroupItem } from "@knobi/ui/components/radio-group";
 import { cn } from "@knobi/ui/lib/utils";
+import { fieldModeOf, fieldTargetOf } from "./field.ts";
 import { STEPS, type Installer, type InstallerState } from "./installer.ts";
+
+/** the living field behind the page (three.js): loaded after the page, only where WebGL2 exists */
+const LazyField = lazy(() => import("@knobi/field"));
 
 /** docs/BACKUP.md, published with the site (vite.config.ts) */
 export const BACKUP_URL = "backup.txt";
@@ -25,7 +30,7 @@ const kb = (n: number) => `${Math.round(n / 1024)} KB`;
 
 function Section({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <section className="border-b border-border py-4 last:border-b-0">
+    <section className="border-b border-white/10 py-4 last:border-b-0">
       <h2 className="mb-3 flex items-center gap-2 text-[15px] tracking-[0.08em] text-muted-foreground uppercase">
         <span className="grid size-[22px] place-items-center rounded-full bg-primary text-xs text-primary-foreground">{n}</span>
         {title}
@@ -35,7 +40,7 @@ function Section({ n, title, children }: { n: number; title: string; children: R
   );
 }
 
-function Device({ s }: { s: InstallerState }) {
+function Device({ s, ref }: { s: InstallerState; ref?: Ref<HTMLParagraphElement> }) {
   const d = s.device;
   let body: ReactNode;
   switch (d.kind) {
@@ -54,7 +59,7 @@ function Device({ s }: { s: InstallerState }) {
         ? "in update mode: the last install did not finish; Install finishes it" : "running"})</>;
       break;
   }
-  return <p id="device" className="mt-3" aria-live="polite">{body}</p>;
+  return <p ref={ref} id="device" className="mt-3" aria-live="polite">{body}</p>;
 }
 
 function Packages({ s, installer }: { s: InstallerState; installer: Installer }) {
@@ -70,7 +75,7 @@ function Packages({ s, installer }: { s: InstallerState; installer: Installer })
         disabled={s.busy} className="gap-2">
         {s.offers.map((o, i) => (
           <Label key={`${o.firmware.id}-${o.release.version}-${o.pkg.file}`} htmlFor={`pkg-${i}`}
-            className={cn("flex cursor-pointer items-start gap-3 rounded-md border bg-secondary p-3 font-normal leading-snug",
+            className={cn("flex cursor-pointer items-start gap-3 rounded-md border bg-black/25 p-3 font-normal leading-snug",
               s.selected === i && "border-primary", !o.exact && "opacity-85")}>
             <RadioGroupItem id={`pkg-${i}`} value={String(i)} className="mt-0.5" />
             <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -111,21 +116,60 @@ function Steps({ s }: { s: InstallerState }) {
   );
 }
 
+function Backdrop({ s, frame, device, progress }: {
+  s: InstallerState; frame: HTMLElement | null; device: HTMLElement | null; progress: HTMLElement | null;
+}) {
+  const [on] = useState(() => typeof window !== "undefined" && "WebGL2RenderingContext" in window);
+  if (!on) return null;
+  const mode = fieldModeOf(s);
+  return (
+    <Suspense fallback={null}>
+      <LazyField mode={mode} progress={s.pct} frame={frame}
+        target={fieldTargetOf(mode) === "progress" ? progress : device} accent="#2f6be0" />
+    </Suspense>
+  );
+}
+
 export function Page({ installer }: { installer: Installer }) {
   const s = useSyncExternalStore(installer.subscribe, installer.getState);
+  // the field's anchors: the panel it hugs, the rows the colony gathers at
+  const [frame, setFrame] = useState<HTMLElement | null>(null);
+  const [device, setDevice] = useState<HTMLElement | null>(null);
+  const [progress, setProgress] = useState<HTMLElement | null>(null);
   const canInstall = !s.busy && s.device.kind === "found" && s.selected !== null && s.backup;
   const copyLog = () => void navigator.clipboard?.writeText(s.log.join("\n")).catch(() => {});
 
   return (
-    <div className="mx-auto max-w-[760px] px-4 pt-6 pb-12">
-      <header className="pt-4" style={{ borderTop: "10px solid", borderImage: "var(--wood) 1" }}>
-        <h1 className="text-[28px] tracking-[0.12em]">KNOBI-FLASH</h1>
-        <p className="mt-1 mb-5 text-sm text-muted-foreground">
-          Firmware installer for the M-VAVE SMK-37 family. Unofficial · not made by M-VAVE or Sequential.
+    <>
+    <Backdrop s={s} frame={frame} device={device} progress={progress} />
+    <div className="relative z-[1] mx-auto max-w-[760px] px-4 pt-6 pb-12">
+      <header className="pb-5">
+        {/* the brand is the page's title: the logo, then where we are */}
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="m-0">
+            <a href="./" className="text-foreground hover:no-underline"><Logo size={52} /></a>
+            <span className="sr-only">: install KNOBI-SIX (knobi-flash)</span>
+          </h1>
+          <span className="hidden text-right text-xs text-muted-foreground sm:block">
+            Firmwares for MIDI keyboards,<br />installed from the browser</span>
+        </div>
+        <nav aria-label="Breadcrumb" className="mt-5">
+          <ol className="flex flex-wrap items-center gap-x-2 text-sm tracking-[0.06em] text-muted-foreground">
+            <li><a href="./" className="text-muted-foreground hover:text-foreground">midi·chlorian</a></li>
+            <li aria-hidden="true" className="opacity-50">/</li>
+            <li>KNOBI-SIX</li>
+            <li aria-hidden="true" className="opacity-50">/</li>
+            <li aria-current="page" className="text-foreground">Install</li>
+          </ol>
+        </nav>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Firmware installer for the M-VAVE SMK-37 family (knobi-flash). Unofficial · not made by M-VAVE or Sequential.
         </p>
       </header>
 
-      <Card className="gap-0 rounded border-[6px] border-black py-1 shadow-none">
+      {/* the walnut cheek on top of the instrument panel */}
+      <div aria-hidden="true" className="h-2.5 rounded-t-sm" style={{ background: "var(--wood)" }} />
+      <Card ref={setFrame} className="panel-glass gap-0 rounded-t-none rounded-b border-[6px] border-t-0 py-1 shadow-none">
         <CardContent className="px-5">
           <Section n={1} title="Connect">
             <div className="flex flex-wrap items-center gap-3">
@@ -137,7 +181,7 @@ export function Page({ installer }: { installer: Installer }) {
                 <Label htmlFor="search-all" className="font-normal text-muted-foreground">search all MIDI ports</Label>
               </div>
             </div>
-            <Device s={s} />
+            <Device s={s} ref={setDevice} />
           </Section>
 
           <Section n={2} title="Firmware">
@@ -162,10 +206,10 @@ export function Page({ installer }: { installer: Installer }) {
           <Section n={4} title="Install">
             <Button id="install" disabled={!canInstall} onClick={() => void installer.install()}>Install</Button>
             <Steps s={s} />
-            <Progress value={s.pct} aria-label="write progress"
-              className="h-1.5 rounded-sm border border-black bg-[#120606] [&>[data-slot=progress-indicator]]:bg-led" />
+            <Progress ref={setProgress} value={s.pct} aria-label="write progress"
+              className="h-1.5 rounded-sm border border-black bg-black/45 [&>[data-slot=progress-indicator]]:bg-led" />
             {s.error && (
-              <Alert id="error" variant="destructive" className="mt-3 border-l-[3px] border-led bg-led-off text-foreground">
+              <Alert id="error" variant="destructive" className="mt-3 border-l-[3px] border-led bg-led-off/60 text-foreground">
                 <AlertTitle>Stopped</AlertTitle>
                 <AlertDescription className="text-foreground [overflow-wrap:anywhere]">
                   <p>{s.error.message}</p>
@@ -182,7 +226,7 @@ export function Page({ installer }: { installer: Installer }) {
                   onClick={copyLog}>Copy log</Button>
               </div>
               <CollapsibleContent forceMount className="data-[state=closed]:hidden">
-                <pre id="log" className="mt-2 max-h-56 overflow-auto rounded-sm bg-black p-2 text-xs whitespace-pre-wrap">
+                <pre id="log" className="mt-2 max-h-56 overflow-auto rounded-sm bg-black/55 p-2 text-xs whitespace-pre-wrap">
                   {s.log.join("\n")}
                 </pre>
               </CollapsibleContent>
@@ -209,5 +253,6 @@ export function Page({ installer }: { installer: Installer }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </>
   );
 }
