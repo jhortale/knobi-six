@@ -1,6 +1,6 @@
 {
   "what": "A six-voice polysynth inspired by the OB-6, running on the keyboard itself: two oscillators with sub and noise, a filter that sweeps from low-pass to high-pass, two envelopes, LFO and cross-mod, arpeggiator, step sequencer and patch memory, every knob shown on the screen.",
-  "author": "João Marcelo Apelian Hortale",
+  "author": "Lennox Hortale",
   "kinds": [
     "synth"
   ],
