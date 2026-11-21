@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* midi-chlorian's styles: Tailwind and the KNOBI panel theme, from @knobi/ui. */
+@import "@knobi/ui/globals.css";
+/* the classes of the shared installer panel */
+@source "../../../packages/installer-ui/src";
+
+/* the cosmos: deep black-blue with faint nebula dust, the backdrop of every page (on a synth page @knobi/field draws
+   its particles on top, transparent; without WebGL or with prefers-reduced-motion this is all there is) */
+body {
+  background:
+    radial-gradient(ellipse 70% 55% at 18% 12%, rgb(88 60 190 / 0.16), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 85% 85%, rgb(30 150 170 / 0.12), transparent 70%),
+    radial-gradient(ellipse 40% 35% at 70% 30%, rgb(60 200 140 / 0.06), transparent 70%),
+    #04060c;
+  background-attachment: fixed;
+}

@@ -1,0 +1,137 @@
+# midi-chlorian, the portal: builds the site from `main` and deploys it to jhortale/midi-chlorian (branch gh-pages,
+# https://jhortale.github.io/midi-chlorian/). Published = merged into main (docs/PORTAL.md). The site's data (content.json,
+# catalog.json, firmware/, synth images) is built by packages/content's site CLI from the GitHub releases named by the
+# release files on main, every file re-checked; the repository at the deployed commit is published beside it as
+# source/midi-chlorian-src-<commit>.tar.gz with LICENSE and a README (the GPL source of what is served); the app shell is built by vite; prerender.ts then writes a page per synth
+# and 404.html from the published content.json. The guards over the merged tree refuse a -local or cpu1 file and any
+# token. Never runs on a pull request.
+name: portal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'synths/**'
+      - 'apps/portal/**'
+      - 'packages/installer-*/**'
+      - 'packages/ui/**'
+      - 'packages/catalog/**'
+      - 'packages/content/**'
+      - 'packages/field/**'
+      - 'packages/web-midi/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - 'docs/BACKUP.md'
+      - '.github/workflows/portal.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: portal
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # a manual run on another branch builds nothing: the site is what main says
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false         # no step needs git credentials
+
+      - uses: pnpm/action-setup@v4          # the version from package.json's packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: The app (type check, vite build, tests of the portal and what it is built from)
+        run: pnpm turbo run build test --filter @knobi/portal...
+
+      - name: The site's data from the releases (downloads, re-checks every file, refuses -local, cpu1 and tokens)
+        env:
+          GH_TOKEN: ${{ github.token }}      # gh release download, gh api; GITHUB_REPOSITORY is set by Actions
+        run: node packages/content/src/cli/site.ts --out site-data
+
+      - name: The data into the app's dist (never over an app file)
+        run: |
+          set -eu
+          ( cd site-data && find . -type f ) | while IFS= read -r f; do
+            if [ -e "apps/portal/dist/$f" ]; then
+              echo "::error::site-data/$f would overwrite apps/portal/dist/$f"
+              exit 1
+            fi
+          done
+          cp -R site-data/. apps/portal/dist/
+
+      - name: A page per synth and 404.html, from the published content.json
+        run: node apps/portal/scripts/prerender.ts --dist apps/portal/dist --content apps/portal/dist/content.json
+
+      - name: The source of this site (the repository at the deployed commit), LICENSE and README
+        run: |
+          set -eu
+          dist=apps/portal/dist
+          # the OB-6 factory bank (Sequential's data) is never committed, so it is never in the archive
+          test -z "$(git ls-files firmware/gen/factory_bank.h)"
+          short=$(git rev-parse --short=12 HEAD)
+          mkdir -p "$dist/source"
+          git archive --format=tar.gz --prefix=midi-chlorian-src/ -o "$dist/source/midi-chlorian-src-$short.tar.gz" HEAD
+          cat > "$dist/source/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>midi-chlorian, source</title>
+          <h1>midi-chlorian, source (GPL-3.0-only)</h1>
+          <p>The complete source of this site at commit $short, including the installer, the firmware and LICENSING.md (credits):
+          <a href="midi-chlorian-src-$short.tar.gz">midi-chlorian-src-$short.tar.gz</a>.
+          Each release's own source is next to its packages on its synth's page.</p>
+          HTML
+          cp LICENSE "$dist/LICENSE"
+          cp apps/portal/site/README.md "$dist/README.md"
+
+      - name: Last guard over the merged site (no -local or cpu1 file, no token)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          dist=apps/portal/dist
+          bad=$(find "$dist" \( -iname '*-local*' -o -iname '*cpu1*' \) -print)
+          if [ -n "$bad" ]; then
+            echo "::error::the site must not contain a -local or cpu1 file:"
+            echo "$bad"
+            exit 1
+          fi
+          # the source archive is the repository (it holds the strings below in this very workflow): skipped here, not scanned
+          hits=$(grep -rlF --exclude='*.tar.gz' -e 'ghp_' -e 'github_pat_' -e '-----BEGIN' "$dist" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::the site must not contain a token or a key:"
+            echo "$hits"
+            exit 1
+          fi
+          if [ -n "${GH_TOKEN:-}" ]; then
+            hits=$(grep -rlF --exclude='*.tar.gz' -e "$GH_TOKEN" "$dist" || true)
+            if [ -n "$hits" ]; then
+              echo "::error::the site contains the workflow's token (files listed, value not shown):"
+              echo "$hits"
+              exit 1
+            fi
+          fi
+          touch "$dist/.nojekyll"
+
+      - name: Deploy to jhortale/midi-chlorian (gh-pages)
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453  # v4.1.0
+        with:
+          deploy_key: ${{ secrets.MIDI_CHLORIAN_DEPLOY_KEY }}
+          external_repository: jhortale/midi-chlorian
+          publish_branch: gh-pages
+          publish_dir: apps/portal/dist
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: '41898282+github-actions[bot]@users.noreply.github.com'

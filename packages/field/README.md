@@ -13,7 +13,7 @@ import type { FieldMode } from "@knobi/field/tuning";       // types and tuning,
 ```
 
 `frame` is the opaque panel: the colony gathers just outside its left and right edges, at the height of `target`.
-In the installer, `apps/installer/src/ui/field.ts` maps the page's state to a mode and picks the row.
+In the installer, `packages/installer-ui/src/field.ts` maps the page's state to a mode and picks the row.
 
 ## Motion
 

@@ -1,0 +1,103 @@
+{
+  "generated": "2026-11-21T00:00:00.000Z",
+  "synths": [
+    {
+      "id": "knobi-six",
+      "name": "KNOBI-SIX",
+      "summary": "OB-6-inspired six-voice polysynth for the SMK-37",
+      "order": 1,
+      "descriptionHtml": "<p>KNOBI-SIX is a standalone, OB-6-inspired six-voice polyphonic synthesizer that runs on the M-VAVE SMK-37 Pro\nkeyboard itself: no computer needed once it is installed.</p>\n",
+      "keyboards": [
+        "mke-p37",
+        "smk37-elite",
+        "smk37-pro"
+      ],
+      "releases": [
+        {
+          "version": "1.0",
+          "date": "2026-11-20",
+          "tag": "knobi-six-v1.0",
+          "current": true,
+          "notesHtml": "<ul>\n<li>First public release: six voices, arpeggiator, 64-step sequencer.</li>\n<li>Programs survive reinstalls of the same version.</li>\n</ul>\n",
+          "source": {
+            "file": "knobi-six-1.0-src.tar.gz",
+            "sha256": "28ef0abba6c45aff3669e3066301241d14009d76262cea7bd8069e634eaf9863",
+            "size": 41,
+            "url": "firmware/knobi-six/1.0/knobi-six-1.0-src.tar.gz"
+          },
+          "builds": [
+            {
+              "kind": "keyboard",
+              "instrument": "smk37-elite",
+              "identity": "SMK-37 Elite_956",
+              "file": "knobi-six-1.0-elite.fwsc",
+              "sha256": "2264b8bb43f3f98b814f068435bc1167cb000a91a4d5950dacc603e51eed5ac3",
+              "size": 8212,
+              "url": "firmware/knobi-six/1.0/knobi-six-1.0-elite.fwsc"
+            },
+            {
+              "kind": "keyboard",
+              "instrument": "mke-p37",
+              "identity": "MKE-P37_956",
+              "file": "knobi-six-1.0-mke.fwsc",
+              "sha256": "8793ee98110a9cfda4da716ca60d9ae6ea005bc61a8a3fdd5e03c79d09cce3bd",
+              "size": 8212,
+              "url": "firmware/knobi-six/1.0/knobi-six-1.0-mke.fwsc"
+            },
+            {
+              "kind": "keyboard",
+              "instrument": "smk37-pro",
+              "identity": "SMK-37 Pro_956",
+              "file": "knobi-six-1.0.fwsc",
+              "sha256": "67e0b62445cc2ec6b7bac5efec9beadc6da83dfc446275f060419e15818e1528",
+              "size": 8212,
+              "url": "firmware/knobi-six/1.0/knobi-six-1.0.fwsc"
+            }
+          ]
+        },
+        {
+          "version": "0.9",
+          "date": "2026-11-14",
+          "tag": "knobi-six-v0.9",
+          "current": false,
+          "notesHtml": "<p>Beta for testers.</p>\n",
+          "source": {
+            "file": "knobi-six-0.9-src.tar.gz",
+            "sha256": "151bcf3e3b027d91e75aedabce14e7be81d3a624a588ad7498a7d3c0fd7127ed",
+            "size": 41,
+            "url": "firmware/knobi-six/0.9/knobi-six-0.9-src.tar.gz"
+          },
+          "builds": [
+            {
+              "kind": "keyboard",
+              "instrument": "smk37-elite",
+              "identity": "SMK-37 Elite_956",
+              "file": "knobi-six-0.9-elite.fwsc",
+              "sha256": "d92dc6c98e27952c08412c44a57eccf9caed5df8cea37c1ea7f4ab539343de88",
+              "size": 8212,
+              "url": "firmware/knobi-six/0.9/knobi-six-0.9-elite.fwsc"
+            },
+            {
+              "kind": "keyboard",
+              "instrument": "mke-p37",
+              "identity": "MKE-P37_956",
+              "file": "knobi-six-0.9-mke.fwsc",
+              "sha256": "d63e15151e586ae61c89f7d4eae388b15d01187b5afcefd08333337b89918fb0",
+              "size": 8212,
+              "url": "firmware/knobi-six/0.9/knobi-six-0.9-mke.fwsc"
+            },
+            {
+              "kind": "keyboard",
+              "instrument": "smk37-pro",
+              "identity": "SMK-37 Pro_956",
+              "file": "knobi-six-0.9.fwsc",
+              "sha256": "ea76d14ca6d68326f6b23741c474743d3ca01db9f2012b575f3d126edd4bf101",
+              "size": 8212,
+              "url": "firmware/knobi-six/0.9/knobi-six-0.9.fwsc"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

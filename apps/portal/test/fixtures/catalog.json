@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "protocols": {
+    "felucca-ota": {
+      "ownLoader": "ota-(FM-1|SMK-37 Pro|SMK-37 Elite|MKE-P37)_9\\d\\d"
+    }
+  },
+  "families": {
+    "smk37": {
+      "name": "M-VAVE SMK-37 family",
+      "models": [
+        "SMK-37 Pro",
+        "SMK-37 Elite",
+        "MKE-P37"
+      ],
+      "match": "SMK-37[ +].*|MKE-P37|STARRYKEY-37.*",
+      "ports": "fm-1|smk|elite|mke-p37|starry|felucca|sloop|clipper|melodee|fomni|x0x|makkuro|maku|rainbow|snoop|vector|vox|ota|composite|sinco|usb-midi"
+    }
+  },
+  "instruments": [
+    {
+      "id": "smk37-pro",
+      "name": "M-VAVE SMK-37 Pro",
+      "family": "smk37",
+      "model": "SMK-37 Pro",
+      "protocol": "felucca-ota"
+    },
+    {
+      "id": "smk37-elite",
+      "name": "M-VAVE SMK-37 Elite",
+      "family": "smk37",
+      "model": "SMK-37 Elite",
+      "protocol": "felucca-ota"
+    },
+    {
+      "id": "mke-p37",
+      "name": "MKE-P37",
+      "family": "smk37",
+      "model": "MKE-P37",
+      "protocol": "felucca-ota"
+    }
+  ],
+  "firmwares": [
+    {
+      "id": "knobi-six",
+      "name": "KNOBI-SIX",
+      "summary": "OB-6-inspired six-voice polysynth for the SMK-37",
+      "license": "GPL-3.0-only",
+      "notes": [
+        "Replaces the stored firmware and its saved data; calibration is not written."
+      ],
+      "releases": [
+        {
+          "version": "1.0",
+          "date": "2026-11-20",
+          "source": "firmware/knobi-six/1.0/knobi-six-1.0-src.tar.gz",
+          "packages": [
+            {
+              "instrument": "smk37-elite",
+              "file": "firmware/knobi-six/1.0/knobi-six-1.0-elite.fwsc",
+              "identity": "SMK-37 Elite_956",
+              "sha256": "2264b8bb43f3f98b814f068435bc1167cb000a91a4d5950dacc603e51eed5ac3",
+              "size": 8212
+            },
+            {
+              "instrument": "mke-p37",
+              "file": "firmware/knobi-six/1.0/knobi-six-1.0-mke.fwsc",
+              "identity": "MKE-P37_956",
+              "sha256": "8793ee98110a9cfda4da716ca60d9ae6ea005bc61a8a3fdd5e03c79d09cce3bd",
+              "size": 8212
+            },
+            {
+              "instrument": "smk37-pro",
+              "file": "firmware/knobi-six/1.0/knobi-six-1.0.fwsc",
+              "identity": "SMK-37 Pro_956",
+              "sha256": "67e0b62445cc2ec6b7bac5efec9beadc6da83dfc446275f060419e15818e1528",
+              "size": 8212
+            }
+          ]
+        },
+        {
+          "version": "0.9",
+          "date": "2026-11-14",
+          "source": "firmware/knobi-six/0.9/knobi-six-0.9-src.tar.gz",
+          "packages": [
+            {
+              "instrument": "smk37-elite",
+              "file": "firmware/knobi-six/0.9/knobi-six-0.9-elite.fwsc",
+              "identity": "SMK-37 Elite_956",
+              "sha256": "d92dc6c98e27952c08412c44a57eccf9caed5df8cea37c1ea7f4ab539343de88",
+              "size": 8212
+            },
+            {
+              "instrument": "mke-p37",
+              "file": "firmware/knobi-six/0.9/knobi-six-0.9-mke.fwsc",
+              "identity": "MKE-P37_956",
+              "sha256": "d63e15151e586ae61c89f7d4eae388b15d01187b5afcefd08333337b89918fb0",
+              "size": 8212
+            },
+            {
+              "instrument": "smk37-pro",
+              "file": "firmware/knobi-six/0.9/knobi-six-0.9.fwsc",
+              "identity": "SMK-37 Pro_956",
+              "sha256": "ea76d14ca6d68326f6b23741c474743d3ca01db9f2012b575f3d126edd4bf101",
+              "size": 8212
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "generated": "2026-11-21T00:00:00.000Z"
+}

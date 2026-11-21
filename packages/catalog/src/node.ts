@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The Node-only side of @knobi/catalog: the repository's synths (synths/<id>/synth.json and catalog.json) and the base
 // catalog built from them. Every error names the file it is about.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { loadPackage, modelOf } from "@knobi/installer-core";
 import { mergeCatalog } from "./load.ts";
 import type { Catalog } from "./schema.ts";
 
@@ -79,4 +81,75 @@ export function loadBaseCatalog(root: string): Catalog {
     return fw;
   });
   return mergeCatalog(instruments, firmwares);
+}
+
+/** One verified release package: the file in the release directory and what the catalog knows about it. */
+export interface CheckedPackage {
+  /** the file name inside the release directory */
+  name: string;
+  /** the instrument id in the base catalog */
+  instrument: string;
+  /** the package's product, e.g. "SMK-37 Pro_956" */
+  identity: string;
+  sha256: string;
+  size: number;
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The release rules for one synth's directory of files: only X.Y versions; every .fwsc named as synth.json says
+ * (never -local, cpu1 or a dev build), with a matching SHA256SUMS line, passing loadPackage (identity, loader mark) and
+ * carrying the synth's identity. The -src.tar.gz must be named <synth>-<version>-src.tar.gz and match its SHA256SUMS line. Throws a message naming the file.
+ */
+export function checkReleaseFiles(repoRoot: string, synth: string, version: string, dir: string): CheckedPackage[] {
+  const meta = readSynth(repoRoot, synth);
+  const cat = loadBaseCatalog(repoRoot);
+  if (!/^\d+(\.\d+)*$/.test(version)) {
+    throw new Error(`version ${version}: a prerelease or not a version; only X.Y release tags are published`);
+  }
+  const suffixes = Object.keys(meta.models).sort((a, b) => b.length - a.length).map(esc).join("|");
+  const [pre, post] = meta.packageName.replace("{version}", "\u0000").split("\u0000");
+  const nameRe = new RegExp(`^${esc(pre).replace("\\{suffix\\}", "")}${esc(version)}` +
+    `${esc(post).replace("\\{suffix\\}", `(${suffixes})`)}$`);
+  const sums = new Map<string, string>();
+  const sumsPath = join(dir, "SHA256SUMS");
+  if (existsSync(sumsPath)) {
+    for (const line of readFileSync(sumsPath, "utf8").split("\n")) {
+      const m = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim());
+      if (m) sums.set(m[2], m[1]);
+    }
+  }
+  const out: CheckedPackage[] = [];
+  for (const f of readdirSync(dir).sort()) {
+    if (f === "SHA256SUMS") continue;
+    if (f.endsWith("-src.tar.gz")) {
+      // the GPL source: only `<synth>-<version>-src.tar.gz`, and its hash must be in SHA256SUMS like the packages'
+      if (f !== `${meta.id}-${version}-src.tar.gz`) {
+        throw new Error(`${f}: not the source archive of ${meta.id} ${version} (${meta.id}-${version}-src.tar.gz; refused)`);
+      }
+      const h = createHash("sha256").update(readFileSync(join(dir, f))).digest("hex");
+      if (sums.get(f) !== h) throw new Error(`${f}: its SHA256SUMS line is missing or does not match`);
+      continue;
+    }
+    const m = nameRe.exec(f);
+    if (!m) throw new Error(`${f}: not a release package of ${meta.id} ${version} (refused: never published)`);
+    const raw = new Uint8Array(readFileSync(join(dir, f)));
+    const h = createHash("sha256").update(raw).digest("hex");
+    if (sums.get(f) !== h) throw new Error(`${f}: its SHA256SUMS line is missing or does not match`);
+    let product: string;
+    try {
+      product = loadPackage(raw).product;
+    } catch (e) {
+      throw new Error(`${f}: ${(e as Error).message}`);
+    }
+    const model = modelOf(product);
+    const inst = cat.instruments.find((i) => i.model === model);
+    if (!inst) throw new Error(`${f}: ${product}: no instrument in the catalog for ${model}`);
+    const want = `${meta.models[m[1] ?? ""]}_${meta.ident}`;
+    if (product !== want) throw new Error(`${f}: identity ${product}, expected ${want}`);
+    out.push({ name: f, instrument: inst.id, identity: product, sha256: h, size: raw.length });
+  }
+  if (!out.length) throw new Error(`${dir}: no ${meta.id} ${version} packages`);
+  return out;
 }

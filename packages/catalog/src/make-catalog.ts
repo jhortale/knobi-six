@@ -9,9 +9,8 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { loadPackage, modelOf } from "@knobi/installer-core";
 import { validateCatalog } from "./load.ts";
-import { loadBaseCatalog, readSynth, repoRootFrom } from "./node.ts";
+import { checkReleaseFiles, loadBaseCatalog, readSynth, repoRootFrom } from "./node.ts";
 import type { Catalog, Package } from "./schema.ts";
 
 export interface MakeOpts {
@@ -30,7 +29,6 @@ export interface MakeOpts {
 }
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** where another synth's committed release package lives in the repository */
 export const committedPath = (repoRoot: string, synth: string, version: string, file: string) =>
@@ -39,43 +37,9 @@ export const committedPath = (repoRoot: string, synth: string, version: string, 
 export async function makeCatalog(o: MakeOpts): Promise<Catalog> {
   const meta = readSynth(o.repoRoot, o.synth);
   const cat = loadBaseCatalog(o.repoRoot);
-  if (!/^\d+(\.\d+)*$/.test(o.version)) {
-    throw new Error(`version ${o.version}: a prerelease or not a version; only X.Y release tags are published`);
-  }
-  const suffixes = Object.keys(meta.models).sort((a, b) => b.length - a.length).map(esc).join("|");
-  const [pre, post] = meta.packageName.replace("{version}", "\u0000").split("\u0000");
-  const nameRe = new RegExp(`^${esc(pre).replace("\\{suffix\\}", "")}${esc(o.version)}` +
-    `${esc(post).replace("\\{suffix\\}", `(${suffixes})`)}$`);
-  const sums = new Map<string, string>();
-  const sumsPath = join(o.dir, "SHA256SUMS");
-  if (existsSync(sumsPath)) {
-    for (const line of readFileSync(sumsPath, "utf8").split("\n")) {
-      const m = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim());
-      if (m) sums.set(m[2], m[1]);
-    }
-  }
-  const packages: Package[] = [];
-  for (const f of readdirSync(o.dir).sort()) {
-    if (f === "SHA256SUMS" || f.endsWith("-src.tar.gz")) continue;
-    const m = nameRe.exec(f);
-    if (!m) throw new Error(`${f}: not a release package of ${meta.id} ${o.version} (refused: never published)`);
-    const raw = new Uint8Array(readFileSync(join(o.dir, f)));
-    const h = sha256(raw);
-    if (sums.get(f) !== h) throw new Error(`${f}: its SHA256SUMS line is missing or does not match`);
-    let product: string;
-    try {
-      product = loadPackage(raw).product;
-    } catch (e) {
-      throw new Error(`${f}: ${(e as Error).message}`);
-    }
-    const model = modelOf(product);
-    const inst = cat.instruments.find((i) => i.model === model);
-    if (!inst) throw new Error(`${f}: ${product}: no instrument in the catalog for ${model}`);
-    const want = `${meta.models[m[1] ?? ""]}_${meta.ident}`;
-    if (product !== want) throw new Error(`${f}: identity ${product}, expected ${want}`);
-    packages.push({ instrument: inst.id, file: `${o.filesPrefix}/${f}`, identity: product, sha256: h, size: raw.length });
-  }
-  if (!packages.length) throw new Error(`${o.dir}: no ${meta.id} ${o.version} packages`);
+  const packages: Package[] = checkReleaseFiles(o.repoRoot, o.synth, o.version, o.dir).map((p) => ({
+    instrument: p.instrument, file: `${o.filesPrefix}/${p.name}`, identity: p.identity, sha256: p.sha256, size: p.size,
+  }));
   for (const fw of cat.firmwares) {
     if (fw.id === meta.id) continue;
     for (const r of fw.releases) {

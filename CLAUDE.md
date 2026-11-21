@@ -25,13 +25,14 @@ MODEL=elite sh build.sh; MODEL=mke sh build.sh; sh build.sh    # all three, the 
 sh tests/run_tests.sh                       # host suite (needs a build first)
 tests/run_host.sh SCRIPT                    # the app on the computer, e.g. tests/scripts/diag.txt -> build/host/
 make -C tests unit                          # unit tests, tests/unit/test_*.c (created in Task 1)
-pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace: knobi-flash and its packages (docs/MONOREPO.md)
+pnpm install && pnpm turbo run typecheck build test   # the TypeScript workspace: the installer, the midi-chlorian portal and their packages (docs/MONOREPO.md, docs/PORTAL.md)
 ```
 
 The toolchain is Linux x86-64 only: on the Mac `build.sh` runs it in Docker; needs `JIELI_TOOLCHAIN` (default
 `~/.jieli/toolchain`, `tools/get_toolchain.sh`), `AC79_SDK` (default `~/fw-AC79_AIoT_SDK`) and Pillow. CI:
 `.github/workflows/build.yml` (push to `main`, pull requests into `main`, manual dispatch), `web.yml` (the TypeScript
-workspace, on every push and pull request that touches it); `release.yml` publishes on `v*` tags.
+workspace, on every push and pull request that touches it); `release.yml` builds and publishes on `<synth>-v<version>` tags (e.g. `knobi-six-v1.0`; old `v*` tags do nothing) and opens the
+release PR; `portal.yml` deploys midi-chlorian on push to `main` (docs/PORTAL.md).
 
 ## Where things live
 
@@ -41,8 +42,8 @@ workspace, on every push and pull request that touches it); `release.yml` publis
   screen, flash). Do not edit unless the plan says so. API: `docs/API.md`; chip rules: `docs/RULES.md` (no FPU, no
   libgcc, no 64-bit division, integers only; the audio interrupt is short, no flash, no screen).
 - `tools/build.py`: IDENT, DATA_FAMILY, package names. `tests/`: host tests and scripts.
-- The monorepo (`docs/MONOREPO.md`): `apps/` (the installer), `packages/` (`@knobi/*`: installer-core, web-midi,
-  device-sim, catalog, ui, tsconfig), `synths/<id>/` (per-synth metadata). Upstream's paths (`firmware/`, `tools/`,
+- The monorepo (`docs/MONOREPO.md`): `apps/` (the installer, the midi-chlorian portal: `docs/PORTAL.md`), `packages/` (`@knobi/*`: installer-core, web-midi,
+  device-sim, catalog, content, ui, field, tsconfig), `synths/<id>/` (per-synth metadata and the portal's Markdown content). Upstream's paths (`firmware/`, `tools/`,
   `tests/`, `build.sh`) never move: `git merge upstream/main` must keep working.
 - Credits (`LICENSING.md`, README) stay as they are; add to them, never drop.
 

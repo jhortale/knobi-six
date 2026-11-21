@@ -1,0 +1,7 @@
+{
+  "extends": "@knobi/tsconfig/react.json",
+  "compilerOptions": {
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src", "test", "scripts", "vite.config.ts"]
+}

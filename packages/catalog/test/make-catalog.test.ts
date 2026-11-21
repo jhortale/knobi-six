@@ -124,6 +124,14 @@ describe("makeCatalog", () => {
     expect(JSON.parse(readFileSync(join(site, "catalog.json"), "utf8")).firmwares).toHaveLength(2);
   });
 
+  it("requires the source archive's SHA256SUMS line and refuses any other -src.tar.gz name", async () => {
+    const src = { "knobi-six-1.0-src.tar.gz": new TextEncoder().encode("the GPL source") };
+    await expect(makeCatalog(opts(release(src)))).resolves.toBeDefined();
+    await expect(makeCatalog(opts(release(src, (s) => { delete s["knobi-six-1.0-src.tar.gz"]; })))).rejects.toThrow(/src\.tar\.gz.*SHA256SUMS/);
+    await expect(makeCatalog(opts(release(src, (s) => { s["knobi-six-1.0-src.tar.gz"] = "0".repeat(64); })))).rejects.toThrow(/src\.tar\.gz.*SHA256SUMS/);
+    await expect(makeCatalog(opts(release({ "evil-9.9-src.tar.gz": new TextEncoder().encode("x") })))).rejects.toThrow(/evil-9\.9-src\.tar\.gz/);
+  });
+
   it("prints its usage", () => {
     const out = execFileSync("node", ["src/make-catalog.ts", "--help"], { cwd: join(import.meta.dirname, ".."), encoding: "utf8" });
     expect(out).toContain("--synth");

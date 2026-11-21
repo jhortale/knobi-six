@@ -12,7 +12,8 @@ firmware/ tools/ tests/ build.sh …   upstream's layout (fc79/smk37-base, with 
 package.json pnpm-workspace.yaml     the TypeScript workspace root (pnpm 12, Turborepo); scripts only
 pnpm-lock.yaml turbo.json
 apps/
-  installer/      @knobi/installer        knobi-flash, the web installer page (published by release.yml)
+  installer/      @knobi/installer        knobi-flash, the web installer page (its development page; the portal embeds the installer)
+  portal/         @knobi/portal           midi-chlorian, the site: home and a page per synth (deployed by portal.yml; docs/PORTAL.md)
 packages/
   installer-core/ @knobi/installer-core   the Felucca-family update protocol (a port of tools/fm1_install.py)
   web-midi/       @knobi/web-midi         the browser's Web MIDI as an installer-core backend
@@ -21,6 +22,8 @@ packages/
                                           instruments.json: the protocols, keyboard families and instruments
   ui/             @knobi/ui               shadcn/ui components and the KNOBI panel theme (Tailwind v4)
   field/          @knobi/field            midi·chlorian's living field: particles behind the page (React Three Fiber)
+  installer-ui/   @knobi/installer-ui     the installer shared by the apps: Installer (behaviour) and InstallerPanel (React)
+  content/        @knobi/content          the Markdown content reader, release files, the site builder (docs/PORTAL.md)
   tsconfig/       @knobi/tsconfig         shared TypeScript settings
 synths/
   knobi-six/      @knobi/synth-knobi-six  KNOBI-SIX's synth.json (identity, package names) and catalog entry
@@ -70,4 +73,4 @@ pnpm --filter @knobi/catalog test         # one package
 
 Its firmware app on the shared SMK platform is roadmap step 4 (it needs `build.sh` to build another app than
 `firmware/src/app.c`). The desktop plugin and the shared engine are step 3 (the deferred `plugin` branch); the portal
-(Sanity) is step 2.
+(`apps/portal/`, Markdown content in `synths/`: `docs/PORTAL.md`) is step 2, built.
