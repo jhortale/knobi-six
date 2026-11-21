@@ -1,6 +1,6 @@
 # The TypeScript workspace (apps/, packages/, synths/; docs/MONOREPO.md): knobi-flash's protocol port checked against
 # tools/fm1_install.py, the type check, the build and the tests (against a simulated keyboard), on every push and pull
-# request that touches it. No JieLi toolchain needed. (release.yml deploys the installer on release tags.)
+# request that touches it. No JieLi toolchain needed. (release.yml builds the releases; a pull request may not change a published release's CI-owned fields.)
 name: web
 
 on:
@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                   # the release check diffs against the pull request's base
 
       - uses: pnpm/action-setup@v4          # the version from package.json's packageManager
 
@@ -47,3 +49,7 @@ jobs:
 
       - name: Type check, build, tests (the installer's tests run after its build, so dist.test.ts checks the site)
         run: pnpm turbo run typecheck build test
+
+      - name: A published release never changes (its CI-owned frontmatter; the notes and current may)
+        if: github.event_name == 'pull_request'
+        run: .github/scripts/check-release-edits.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"

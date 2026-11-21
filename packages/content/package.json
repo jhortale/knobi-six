@@ -13,12 +13,14 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@knobi/device-sim": "workspace:*",
     "@knobi/tsconfig": "workspace:*",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vitest": "5.1.1"
   },
   "dependencies": {
+    "@knobi/catalog": "workspace:*",
     "marked": "18.2.1",
     "yaml": "2.9.1"
   }

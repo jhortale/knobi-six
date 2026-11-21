@@ -1,27 +1,62 @@
-# KNOBI-SIX: build the packages on GitHub, run the host tests, and on a tag vX.Y publish the release with a build
-# attestation (actions/attest-build-provenance): the Firmware Hub shows "Built from source" for exactly these files.
-# The JieLi toolchain comes from pkgman.jieliapp.com (tools/get_toolchain.sh), the AC79 SDK from gitee.com, as in
-# sloopDX's and OberVave's workflows. Run by hand (workflow_dispatch) for a test build without a release.
+# KNOBI-SIX: build the packages on GitHub, run the host tests, and on a tag <synth>-v<version> (e.g. knobi-six-v1.0)
+# publish the release with a build attestation (actions/attest-build-provenance), then open a pull request that adds
+# synths/<synth>/releases/<version>.md (release-pr.ts) for João to review and merge: the midi-chlorian portal publishes
+# what is on main. Tags with anything after the version (knobi-six-v1.0-rc1) and the old v* tags do nothing: the `meta`
+# job parses the tag and every later job waits for it. A published release never changes: the upload is refused when
+# the GitHub release already has assets. The JieLi toolchain comes from pkgman.jieliapp.com (tools/get_toolchain.sh),
+# the AC79 SDK from gitee.com, as in sloopDX's and OberVave's workflows. Run by hand (workflow_dispatch) for a test
+# build without a release (no upload, no pull request).
 name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['*-v*']
   workflow_dispatch:
-    inputs:
-      deploy_tag:
-        description: 'Redeploy knobi-flash for this existing release tag (e.g. v1.0); empty: a test build only'
-        required: false
-        default: ''
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      synth: ${{ steps.tag.outputs.synth }}
+      version: ${{ steps.tag.outputs.version }}
+      ok: ${{ steps.tag.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Parse the tag (a manual run is a test build, no tag)
+        id: tag
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            node packages/content/src/cli/parse-tag.ts "$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
   firmware:
+    needs: meta
+    if: needs.meta.outputs.ok == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write          # the release on a tag
       id-token: write          # the attestation's signing identity
       attestations: write
+    env:
+      V: ${{ needs.meta.outputs.version }}
     steps:
+      - name: Only knobi-six is built from this repository
+        if: github.ref_type == 'tag' && needs.meta.outputs.synth != 'knobi-six'
+        run: |
+          echo "::error::${{ needs.meta.outputs.synth }}: no firmware build in this repository (only knobi-six); nothing was published"
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -56,7 +91,6 @@ jobs:
       - name: Release packages (tags only)
         if: github.ref_type == 'tag'
         run: |
-          V="${GITHUB_REF_NAME#v}"
           MODEL=elite sh build.sh --release "$V"
           MODEL=mke sh build.sh --release "$V"
           sh build.sh --release "$V"
@@ -66,7 +100,6 @@ jobs:
       - name: Source archive (tags only; the GPL source next to the packages on knobi-flash)
         if: github.ref_type == 'tag'
         run: |
-          V="${GITHUB_REF_NAME#v}"
           # the OB-6 factory bank (Sequential's data) is never committed, so it is never in the archive
           test -z "$(git ls-files firmware/gen/factory_bank.h)"
           git archive --format=tar.gz --prefix="knobi-six-$V/" -o "build/knobi-six-$V-src.tar.gz" "$GITHUB_REF_NAME"
@@ -89,9 +122,28 @@ jobs:
 
       - name: Attest the packages (tags only)
         if: github.ref_type == 'tag'
+        continue-on-error: true            # the release does not depend on it (a private repository may not attest)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: build/knobi-six-[0-9]*.fwsc
+
+      - name: A published release never changes (refused when the release already has assets)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if out=$(gh release view "$TAG" --json assets --jq '.assets | length' 2>&1); then
+            n=$out
+          elif echo "$out" | grep -qi 'not found'; then
+            n=0                            # no release yet: the next step creates it
+          else
+            echo "$out"; exit 1
+          fi
+          if [ "$n" != 0 ]; then
+            echo "::error::release $TAG already has $n assets; a published release never changes"
+            exit 1
+          fi
 
       - name: Release (tags only)
         if: github.ref_type == 'tag'
@@ -104,24 +156,26 @@ jobs:
             build/knobi-six-*-src.tar.gz
           generate_release_notes: true
 
-  # knobi-flash: the page, catalog.json, the packages and the source archive, pushed to the public jhortale/knobi-flash
-  # (GitHub Pages). Release tags without '-' only (never a prerelease), or a manual redeploy of an existing tag; every
-  # deploy waits for João's approval in the 'knobi-flash' environment. Setup: docs/WEB_INSTALLER.md.
-  site:
-    needs: firmware
-    if: >-
-      (github.ref_type == 'tag' && !contains(github.ref_name, '-')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_tag != '' && !contains(inputs.deploy_tag, '-'))
+  # The release file for the portal: a pull request release/<tag> into main with synths/<synth>/releases/<version>.md
+  # (CI-owned fields filled, a first draft of the notes). João edits the notes and merges it with the admin bypass: a
+  # pull request opened with the workflow's token does not start other workflows, so its checks never run.
+  release-pr:
+    needs: [meta, firmware]
+    if: needs.meta.outputs.ok == 'true' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    environment: knobi-flash
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     env:
-      TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.deploy_tag }}
+      TAG: ${{ github.ref_name }}
+      SYNTH: ${{ needs.meta.outputs.synth }}
+      V: ${{ needs.meta.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: main
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -130,47 +184,34 @@ jobs:
           node-version: '24'
           cache: pnpm
 
-      - name: The release files (this run's, or the existing release's on a redeploy)
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - run: pnpm install --frozen-lockfile
+
+      - name: The release's assets (with their uploaders) and files
         run: |
-          mkdir -p release
-          if [ "${{ github.ref_type }}" = tag ]; then
-            echo "from this run"
-          else
-            gh release download "$TAG" -D release -p 'knobi-six-*.fwsc' -p SHA256SUMS -p 'knobi-six-*-src.tar.gz'
-          fi
+          gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq '.assets' > assets.json
+          gh release download "$TAG" -D release
 
-      - uses: actions/download-artifact@v4
-        if: github.ref_type == 'tag'
-        with:
-          name: knobi-six-release
-          path: release
-
-      - name: Build the installer and the catalog
+      - name: The release file (verifies the uploaders, the hashes, the identities; refuses an existing file)
         run: |
-          V="${TAG#v}"
-          D=apps/installer/dist
-          pnpm install --frozen-lockfile
-          pnpm turbo run build test --filter @knobi/installer...
-          mkdir -p "$D/firmware/knobi-six/$V"
-          mv "release/knobi-six-$V-src.tar.gz" "$D/firmware/knobi-six/$V/"
-          node packages/catalog/src/make-catalog.ts --synth knobi-six --version "$V" --dir release \
-            --out "$D/catalog.json" --files "$D/firmware/knobi-six/$V" \
-            --source "firmware/knobi-six/$V/knobi-six-$V-src.tar.gz"
-          cp apps/installer/site/README.md apps/installer/site/LICENSE "$D/"
-          touch "$D/.nojekyll"
+          node packages/content/src/cli/release-pr.ts --tag "$TAG" --dir release --assets assets.json \
+            --out "synths/$SYNTH/releases/$V.md"
 
-      - name: Nothing that must never be published
+      - name: Commit, push, open the pull request
         run: |
-          bad=$(find apps/installer/dist \( -iname '*-local*' -o -iname '*cpu1*' \) -print)
-          if [ -n "$bad" ]; then echo "refused: $bad"; exit 1; fi
-
-      - uses: peaceiris/actions-gh-pages@v4
-        with:
-          deploy_key: ${{ secrets.KNOBI_FLASH_DEPLOY_KEY }}
-          external_repository: jhortale/knobi-flash
-          publish_branch: gh-pages
-          publish_dir: apps/installer/dist
-          force_orphan: true
-          commit_message: knobi-flash for KNOBI-SIX ${{ env.TAG }}
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "release/$TAG"
+          git add "synths/$SYNTH/releases/$V.md"
+          git commit -m "docs(release): $SYNTH $V release file"
+          git push origin "release/$TAG"
+          {
+            echo "Release file for \`$TAG\`, written by the release workflow from the release's assets (uploader, SHA256SUMS,"
+            echo "identity and loader mark verified). The CI-owned fields (version, date, tag, source, builds) are not edited."
+            echo
+            echo "1. Review and rewrite the release notes (the Markdown body); set \`current\` if this is the one to show."
+            echo "2. Merge with the **admin bypass**: this pull request was opened with the workflow's token, so the"
+            echo "   checks do not run on it (it adds one Markdown file)."
+            echo
+            echo "Merging publishes it: the portal deploys what is on \`main\`."
+          } > pr-body.md
+          gh pr create --base main --head "release/$TAG" --title "Release $SYNTH $V" --body-file pr-body.md

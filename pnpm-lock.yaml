@@ -302,6 +302,9 @@ importers:
 
   packages/content:
     dependencies:
+      '@knobi/catalog':
+        specifier: workspace:*
+        version: link:../catalog
       marked:
         specifier: 18.2.1
         version: 18.2.1
@@ -309,6 +312,9 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
     devDependencies:
+      '@knobi/device-sim':
+        specifier: workspace:*
+        version: link:../device-sim
       '@knobi/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
