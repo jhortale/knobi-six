@@ -2,7 +2,7 @@
 // midi·chlorian's chrome around every page: the logo (home), the unofficial notice, a breadcrumb, the footer.
 import type { ReactNode } from "react";
 import { Logo } from "@knobi/ui/components/logo";
-import { homeHref, type Site } from "./routes.ts";
+import { fileHref, homeHref, type Site } from "./routes.ts";
 
 export const TAGLINE = "Firmwares for MIDI keyboards, installed from the browser";
 export const UNOFFICIAL = "Unofficial · not made by M-VAVE or Sequential";
@@ -41,7 +41,8 @@ export function Layout({ site, crumb, footer, children }: {
 
       <footer className="mt-8 text-xs text-muted-foreground">
         {footer ? `${footer} and midi-chlorian are` : "midi-chlorian and its synths are"} free software (GPL-3.0-only).
-        Each release links its complete source. M-VAVE, SMK-37, MKE-P37 and OB-6 belong to their owners.
+        Each release links its complete source; the source of this site: <a data-source href={fileHref(site, "source/")}>Source (GPL-3.0)</a>.
+        M-VAVE, SMK-37, MKE-P37 and OB-6 belong to their owners.
       </footer>
     </div>
   );

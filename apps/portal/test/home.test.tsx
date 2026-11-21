@@ -42,6 +42,9 @@ describe("home", () => {
     expect(text(root)).toContain("Unofficial · not made by M-VAVE or Sequential");
     expect(text(root)).toContain("USB data cable");
     expect(text($("footer"))).toContain("GPL-3.0-only");
+    const src = $("footer a[data-source]")!;
+    expect(text(src)).toBe("Source (GPL-3.0)");
+    expect(src.getAttribute("href")).toBe("/midi-chlorian/source/");
     expect(text($("footer"))).toContain("M-VAVE, SMK-37, MKE-P37 and OB-6 belong to their owners");
     expect(root.innerHTML.toLowerCase()).not.toContain("knobi-flash");
     expect(document.title).toBe("midi·chlorian");

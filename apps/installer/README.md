@@ -1,7 +1,8 @@
 # knobi-flash
 
-The browser installer for KNOBI-SIX (Web MIDI), published at <https://jhortale.github.io/knobi-flash/> from the
-public repo `jhortale/knobi-flash`. Design: `docs/superpowers/specs/2026-11-20-web-installer-design.md`.
+The browser installer for KNOBI-SIX (Web MIDI): the development harness of the installer, not a published site (`?mock`
+runs it against a simulated keyboard). The public site is midi-chlorian (`apps/portal/`, [docs/PORTAL.md](../../docs/PORTAL.md)),
+whose synth pages embed the same installer. Design: `docs/superpowers/specs/2026-11-20-web-installer-design.md`.
 
 ```sh
 pnpm install                              # at the repository root

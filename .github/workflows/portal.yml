@@ -1,7 +1,8 @@
 # midi-chlorian, the portal: builds the site from `main` and deploys it to jhortale/midi-chlorian (branch gh-pages,
 # https://jhortale.github.io/midi-chlorian/). Published = merged into main (docs/PORTAL.md). The site's data (content.json,
 # catalog.json, firmware/, synth images) is built by packages/content's site CLI from the GitHub releases named by the
-# release files on main, every file re-checked; the app shell is built by vite; prerender.ts then writes a page per synth
+# release files on main, every file re-checked; the repository at the deployed commit is published beside it as
+# source/midi-chlorian-src-<commit>.tar.gz with LICENSE and a README (the GPL source of what is served); the app shell is built by vite; prerender.ts then writes a page per synth
 # and 404.html from the published content.json. The guards over the merged tree refuse a -local or cpu1 file and any
 # token. Never runs on a pull request.
 name: portal
@@ -41,6 +42,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+          persist-credentials: false         # no step needs git credentials
 
       - uses: pnpm/action-setup@v4          # the version from package.json's packageManager
 
@@ -73,6 +75,27 @@ jobs:
       - name: A page per synth and 404.html, from the published content.json
         run: node apps/portal/scripts/prerender.ts --dist apps/portal/dist --content apps/portal/dist/content.json
 
+      - name: The source of this site (the repository at the deployed commit), LICENSE and README
+        run: |
+          set -eu
+          dist=apps/portal/dist
+          # the OB-6 factory bank (Sequential's data) is never committed, so it is never in the archive
+          test -z "$(git ls-files firmware/gen/factory_bank.h)"
+          short=$(git rev-parse --short=12 HEAD)
+          mkdir -p "$dist/source"
+          git archive --format=tar.gz --prefix=midi-chlorian-src/ -o "$dist/source/midi-chlorian-src-$short.tar.gz" HEAD
+          cat > "$dist/source/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>midi-chlorian, source</title>
+          <h1>midi-chlorian, source (GPL-3.0-only)</h1>
+          <p>The complete source of this site at commit $short, including the installer, the firmware and LICENSING.md (credits):
+          <a href="midi-chlorian-src-$short.tar.gz">midi-chlorian-src-$short.tar.gz</a>.
+          Each release's own source is next to its packages on its synth's page.</p>
+          HTML
+          cp LICENSE "$dist/LICENSE"
+          cp apps/portal/site/README.md "$dist/README.md"
+
       - name: Last guard over the merged site (no -local or cpu1 file, no token)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,14 +108,15 @@ jobs:
             echo "$bad"
             exit 1
           fi
-          hits=$(grep -rlF -e 'ghp_' -e 'github_pat_' -e '-----BEGIN' "$dist" || true)
+          # the source archive is the repository (it holds the strings below in this very workflow): skipped here, not scanned
+          hits=$(grep -rlF --exclude='*.tar.gz' -e 'ghp_' -e 'github_pat_' -e '-----BEGIN' "$dist" || true)
           if [ -n "$hits" ]; then
             echo "::error::the site must not contain a token or a key:"
             echo "$hits"
             exit 1
           fi
           if [ -n "${GH_TOKEN:-}" ]; then
-            hits=$(grep -rlF -e "$GH_TOKEN" "$dist" || true)
+            hits=$(grep -rlF --exclude='*.tar.gz' -e "$GH_TOKEN" "$dist" || true)
             if [ -n "$hits" ]; then
               echo "::error::the site contains the workflow's token (files listed, value not shown):"
               echo "$hits"
@@ -102,7 +126,7 @@ jobs:
           touch "$dist/.nojekyll"
 
       - name: Deploy to jhortale/midi-chlorian (gh-pages)
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453  # v4.1.0
         with:
           deploy_key: ${{ secrets.MIDI_CHLORIAN_DEPLOY_KEY }}
           external_repository: jhortale/midi-chlorian

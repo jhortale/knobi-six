@@ -63,11 +63,22 @@ A release file's CI-owned frontmatter (`version`, `date`, `tag`, `source`, `buil
 `.github/scripts/check-release-edits.sh` on every pull request and refuses a change to them; only the notes and `current` may
 change. To correct a release, publish a new version.
 
+## What a deploy publishes
+
+`portal.yml` publishes to `jhortale/midi-chlorian` (branch `gh-pages`, orphan): the app, a page per synth and `404.html`,
+`content.json` and `catalog.json`, `firmware/<synth>/<version>/` (packages, `SHA256SUMS`, the release's source archive),
+synth images, and **the source of the site itself**: `source/midi-chlorian-src-<commit>.tar.gz` (`git archive` of the whole
+repository at the deployed commit, which holds no token and no OB-6 factory bank; the build asserts the latter), a
+`source/index.html` that links it (every page's footer links `source/`), `LICENSE` (GPL-3.0) and a `README.md` (unofficial,
+GPL-3.0-only, where the source is, credits via `LICENSING.md` inside the archive; its text is `apps/portal/site/README.md`).
+The site's JavaScript is built from `main`, so this archive is the source that matches it, and it may differ from a
+release's `-src.tar.gz`. A release's `SHA256SUMS` covers the packages **and** `<synth>-<version>-src.tar.gz`.
+
 ## Never on the site
 
 A `-local` or `cpu1` file, any token or key. The site builder checks the data and `portal.yml` checks the merged site once
-more (`-local`/`cpu1` file names, `ghp_`, `github_pat_`, `-----BEGIN`, and the workflow's own token); either one stops the
-deploy. Every file on the site comes from a release asset of `jhortale/knobi-six` uploaded by `github-actions[bot]`.
+more (`-local`/`cpu1` file names, `ghp_`, `github_pat_`, `-----BEGIN`, and the workflow's own token; the source archive is
+skipped by the text scan, it being the repository itself); either one stops the deploy. Every file on the site comes from a release asset of `jhortale/knobi-six` uploaded by `github-actions[bot]`.
 
 ## Working on it
 

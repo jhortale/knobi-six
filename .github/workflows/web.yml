@@ -1,4 +1,4 @@
-# The TypeScript workspace (apps/, packages/, synths/; docs/MONOREPO.md): knobi-flash's protocol port checked against
+# The TypeScript workspace (apps/, packages/, synths/; docs/MONOREPO.md): the installer's protocol port checked against
 # tools/fm1_install.py, the type check, the build and the tests (against a simulated keyboard), on every push and pull
 # request that touches it. No JieLi toolchain needed. (release.yml builds the releases; a pull request may not change a published release's CI-owned fields.)
 name: web
@@ -19,6 +19,7 @@ on:
       - 'docs/IDENTITY.md'
       - 'docs/BACKUP.md'
       - '.github/workflows/web.yml'
+      - '.github/scripts/**'
   pull_request:
     paths: *paths
   workflow_dispatch:
