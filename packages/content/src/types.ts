@@ -1,18 +1,4 @@
-// The content model (docs/superpowers/specs/2026-11-20-portal-design.md). Browser-safe: types only.
-
-/** Portable Text blocks, kept opaque here: the site renders them, this package never reads inside. */
-export type PortableText = Array<Record<string, unknown>>;
-
-export interface Synth {
-  _id: string;
-  id: string;
-  name: string;
-  summary: string;
-  description?: PortableText;
-  image?: unknown;
-  origin: "own" | "external";
-  order: number;
-}
+// The content model (docs/superpowers/specs/2026-11-20-portal-design.md, amendment 2026-11-21). Browser-safe: types only.
 
 export interface KeyboardBuild {
   kind: "keyboard";
@@ -41,19 +27,28 @@ export interface ReleaseSource {
   size: number;
 }
 
-export interface Release {
-  _id: string;
-  synth: { _ref: string };
+export interface SynthDoc {
+  id: string;
+  name: string;
+  summary: string;
+  order: number;
+  image?: string;
+  origin: "own" | "external";
+  descriptionHtml: string;
+}
+
+export interface ReleaseDoc {
+  synth: string;
   version: string;
   date: string;
   tag: string;
-  notes?: PortableText;
   current?: boolean;
   source: ReleaseSource;
   builds: Build[];
+  notesHtml: string;
 }
 
-export interface PublishedContent {
-  synths: Synth[];
-  releases: Release[];
+export interface Content {
+  synths: SynthDoc[];
+  releases: ReleaseDoc[];
 }

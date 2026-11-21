@@ -6,24 +6,20 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema.ts",
     "./node": "./src/node.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@sanity/client": "8.17.0"
-  },
-  "peerDependencies": {
-    "sanity": "6.24.0"
-  },
   "devDependencies": {
     "@knobi/tsconfig": "workspace:*",
     "@types/node": "24.19.2",
-    "sanity": "6.24.0",
     "typescript": "7.0.2",
     "vitest": "5.1.1"
+  },
+  "dependencies": {
+    "marked": "18.2.1",
+    "yaml": "2.9.1"
   }
 }
