@@ -200,6 +200,15 @@ describe("buildSiteData", () => {
     expect(existsSync(join(f.out, "catalog.json"))).toBe(false);
   });
 
+  it("refuses an output directory that is not empty, leaving its files untouched", async () => {
+    const f = await fixture(["1.0"]);
+    mkdirSync(join(f.out, "firmware/knobi-six/0.5"), { recursive: true });
+    writeFileSync(join(f.out, "firmware/knobi-six/0.5/old.fwsc"), "stale");
+    await expect(build(f)).rejects.toThrow(/not empty/);
+    expect(readFileSync(join(f.out, "firmware/knobi-six/0.5/old.fwsc"), "utf8")).toBe("stale");
+    expect(existsSync(join(f.out, "catalog.json"))).toBe(false);
+  });
+
   it("refuses a synth image that is missing", async () => {
     const f = await fixture(["1.0"], { image: true });
     rmSync(join(f.repo, "synths/knobi-six/panel.png"));
@@ -267,6 +276,47 @@ describe("site CLI (offline overrides)", () => {
     writeFileSync(p, readFileSync(p, "utf8") + "\nleaked tok3n-1234\n");
     expect(() => run(f, [], { GH_TOKEN: "tok3n-1234" })).toThrow(/token|secret/i);
     expect(existsSync(join(f.out, "content.json"))).toBe(false);
+  });
+
+  it("refuses an existing non-empty --out, before anything, leaving its files", async () => {
+    const f = await fixture(["1.0"], { current: ["1.0"] });
+    writeFileSync(join(f.out, "keep.txt"), "mine");
+    expect(() => run(f)).toThrow(/not empty/);
+    expect(readdirSync(f.out)).toEqual(["keep.txt"]);
+    expect(readFileSync(join(f.out, "keep.txt"), "utf8")).toBe("mine");
+  });
+
+  it("a failing build leaves an absent --out absent and no staging directory", async () => {
+    const f = await fixture(["1.0"], { current: ["1.0"] });
+    const parent = tmp("parent");
+    const out = join(parent, "site");
+    const p = join(f.repo, "synths/knobi-six/releases/1.0.md");
+    writeFileSync(p, readFileSync(p, "utf8") + "\nleaked tok3n-1234\n");
+    f.out = out;
+    expect(() => run(f, [], { GH_TOKEN: "tok3n-1234" })).toThrow();
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("a failing build never deletes a pre-existing empty --out, nor leaves staging beside it", async () => {
+    const f = await fixture(["1.0"], { current: ["1.0"] });
+    const p = join(f.repo, "synths/knobi-six/releases/1.0.md");
+    writeFileSync(p, readFileSync(p, "utf8") + "\nleaked tok3n-1234\n");
+    const parent = tmp("parent");
+    const out = join(parent, "site");
+    mkdirSync(out);
+    f.out = out;
+    expect(() => run(f, [], { GH_TOKEN: "tok3n-1234" })).toThrow();
+    expect(readdirSync(parent)).toEqual(["site"]);
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  it("builds into a fresh --out that does not exist yet, and into an existing empty one", async () => {
+    const f = await fixture(["1.0"], { current: ["1.0"] });
+    const parent = tmp("parent");
+    f.out = join(parent, "new/site");
+    run(f);
+    expect(existsSync(join(f.out, "catalog.json"))).toBe(true);
+    expect(readdirSync(join(parent, "new"))).toEqual(["site"]);
   });
 
   it("fails with a usage message without --out", () => {

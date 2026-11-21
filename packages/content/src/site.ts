@@ -79,7 +79,15 @@ const copyInto = (from: string, to: string) => {
   copyFileSync(from, to);
 };
 
+/** Refuses an output directory that holds anything: whatever is in it would be published without being checked. */
+export function assertEmptyOut(outDir: string): void {
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    throw new Error(`${outDir}: exists and is not empty (refused: files already in it would reach the site unchecked)`);
+  }
+}
+
 export async function buildSiteData(o: SiteOpts): Promise<{ catalog: Catalog; portal: PortalContent }> {
+  assertEmptyOut(o.outDir);
   const catalog = loadBaseCatalog(o.repoRoot);
   const generated = new Date().toISOString();
   catalog.generated = generated;

@@ -5,12 +5,12 @@
 // directory / asset list instead of the network for that tag.
 //   node packages/content/src/cli/site.ts --out DIR [--repo-root DIR] [--release TAG=DIR]... [--assets TAG=FILE]...
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { repoRootFrom } from "@knobi/catalog/node";
 import { readContent } from "../read.ts";
-import { buildSiteData, findForbiddenFiles, scanForTokens } from "../site.ts";
+import { assertEmptyOut, buildSiteData, findForbiddenFiles, scanForTokens } from "../site.ts";
 import type { AssetInfo } from "../site.ts";
 
 const USAGE = "usage: node site.ts --out DIR [--repo-root DIR] [--release TAG=DIR]... [--assets TAG=FILE]...";
@@ -41,10 +41,16 @@ async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return a.help ? 0 : 2;
   }
+  const out = resolve(a.out);
+  assertEmptyOut(out); // before any download: --out is never a directory that already holds files
   const repoRoot = a.repoRoot || repoRootFrom(process.cwd());
   const repo = process.env.GITHUB_REPOSITORY || "jhortale/knobi-six";
   const content = readContent(repoRoot);
   const scratch = mkdtempSync(join(tmpdir(), "site-releases-"));
+  // built in a fresh sibling of --out and renamed into place only after every check: the only directory this tool
+  // ever deletes is one it created itself
+  mkdirSync(dirname(out), { recursive: true });
+  const staging = mkdtempSync(join(dirname(out), `.${basename(out)}-staging-`));
   const releaseDirs: Record<string, string> = {};
   const assets: Record<string, AssetInfo[]> = {};
   try {
@@ -60,17 +66,17 @@ async function main(argv: string[]): Promise<number> {
         ? readFileSync(a.assets[tag]!, "utf8")
         : execFileSync("gh", ["api", `repos/${repo}/releases/tags/${tag}`, "--jq", ".assets"], { encoding: "utf8" }));
     }
-    try {
-      await buildSiteData({ repoRoot, content, releaseDirs, assets, outDir: a.out });
-      const bad = [
-        ...scanForTokens(a.out, [process.env.GH_TOKEN, process.env.GITHUB_TOKEN].filter((s): s is string => !!s)),
-        ...findForbiddenFiles(a.out).map((f) => `${f}: a -local or cpu1 file`),
-      ];
-      if (bad.length) throw new Error(`refused, the site must not contain:\n  ${bad.join("\n  ")}`);
-    } catch (e) {
-      rmSync(a.out, { recursive: true, force: true }); // never leave a half-checked site to be deployed
-      throw e;
-    }
+    await buildSiteData({ repoRoot, content, releaseDirs, assets, outDir: staging });
+    const bad = [
+      ...scanForTokens(staging, [process.env.GH_TOKEN, process.env.GITHUB_TOKEN].filter((s): s is string => !!s)),
+      ...findForbiddenFiles(staging).map((f) => `${f}: a -local or cpu1 file`),
+    ];
+    if (bad.length) throw new Error(`refused, the site must not contain:\n  ${bad.join("\n  ")}`);
+    if (existsSync(out)) rmdirSync(out); // empty: checked at the start (rmdir refuses anything else)
+    renameSync(staging, out);
+  } catch (e) {
+    rmSync(staging, { recursive: true, force: true }); // only ever the directory created above
+    throw e;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
