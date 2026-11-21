@@ -13,6 +13,7 @@ package.json pnpm-workspace.yaml     the TypeScript workspace root (pnpm 12, Tur
 pnpm-lock.yaml turbo.json
 apps/
   installer/      @knobi/installer        knobi-flash, the web installer page (published by release.yml)
+  portal/         @knobi/portal           midi-chlorian, the site: home and a page per synth (fixtures and ?mock for dev)
 packages/
   installer-core/ @knobi/installer-core   the Felucca-family update protocol (a port of tools/fm1_install.py)
   web-midi/       @knobi/web-midi         the browser's Web MIDI as an installer-core backend

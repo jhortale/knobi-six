@@ -1,0 +1,42 @@
+{
+  "name": "@knobi/portal",
+  "private": true,
+  "version": "0.0.0",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "description": "midi-chlorian, the site: the home page and a page per synth with its installer, downloads and releases.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node scripts/prerender.ts --dist dist --content test/fixtures/content.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fixtures": "node scripts/make-fixtures.ts"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "jsdom": "26.1.0",
+    "tailwindcss": "4.3.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1",
+    "@knobi/tsconfig": "workspace:*",
+    "@knobi/device-sim": "workspace:*",
+    "@knobi/synth-knobi-six": "workspace:*"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@knobi/catalog": "workspace:*",
+    "@knobi/content": "workspace:*",
+    "@knobi/installer-core": "workspace:*",
+    "@knobi/installer-ui": "workspace:*",
+    "@knobi/ui": "workspace:*",
+    "@knobi/web-midi": "workspace:*"
+  }
+}
