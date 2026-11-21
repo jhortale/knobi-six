@@ -10,3 +10,7 @@ node_modules/
 .turbo/
 apps/*/dist/
 packages/*/dist/
+
+# local scratch from tools and design handoffs (never committed)
+.claude/tmp/
+.fuse_hidden*

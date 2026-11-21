@@ -20,12 +20,13 @@ packages/
   catalog/        @knobi/catalog          catalog.json: types, checks, queries ("."), synths and the generator ("./node");
                                           instruments.json: the protocols, keyboard families and instruments
   ui/             @knobi/ui               shadcn/ui components and the KNOBI panel theme (Tailwind v4)
+  field/          @knobi/field            midi·chlorian's living field: particles behind the page (React Three Fiber)
   tsconfig/       @knobi/tsconfig         shared TypeScript settings
 synths/
   knobi-six/      @knobi/synth-knobi-six  KNOBI-SIX's synth.json (identity, package names) and catalog entry
 ```
 
-Dependencies only point one way: `installer-core` ← `web-midi`, `device-sim`, `catalog`; `ui` stands alone; apps use
+Dependencies only point one way: `installer-core` ← `web-midi`, `device-sim`, `catalog`; `ui` and `field` stand alone; apps use
 them all (`device-sim` only as a devDependency).
 
 ## Commands
