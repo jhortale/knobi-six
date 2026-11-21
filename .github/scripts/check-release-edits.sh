@@ -8,7 +8,12 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 status=0
-for f in $(git diff --name-only --diff-filter=M "$base" "$head" -- 'synths/*/releases/*.md'); do
+# captured first: a failing git diff inside the for list would not stop the script (an unknown base must fail)
+files=$(git diff --name-only --diff-filter=M "$base" "$head" -- 'synths/*/releases/*.md') || {
+  echo "check-release-edits: git diff $base $head failed" >&2
+  exit 1
+}
+for f in $files; do
   git show "$base:$f" > "$tmp/before.md"
   git show "$head:$f" > "$tmp/after.md"
   if ! out=$(node "$root/packages/content/src/cli/check-release-edits.ts" "$tmp/before.md" "$tmp/after.md" 2>&1); then
