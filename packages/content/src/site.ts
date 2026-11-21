@@ -92,6 +92,8 @@ export async function buildSiteData(o: SiteOpts): Promise<{ catalog: Catalog; po
   const generated = new Date().toISOString();
   catalog.generated = generated;
   const synths: PortalSynth[] = [];
+  // only what the release files say is published: a catalog.json's own releases never reach the site
+  for (const f of catalog.firmwares) f.releases = [];
 
   for (const synth of o.content.synths) {
     const rels = o.content.releases.filter((r) => r.synth === synth.id).sort(newestFirst);

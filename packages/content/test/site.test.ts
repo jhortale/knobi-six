@@ -41,7 +41,7 @@ function releaseDir(version: string, over: Files = {}): string {
   const sums: string[] = [];
   for (const [n, b] of Object.entries(files)) {
     writeFileSync(join(dir, n), b);
-    if (n.endsWith(".fwsc")) sums.push(`${sha(b)}  ${n}\n`);
+    if (n.endsWith(".fwsc") || n.endsWith("-src.tar.gz")) sums.push(`${sha(b)}  ${n}\n`);
   }
   writeFileSync(join(dir, "SHA256SUMS"), sums.join(""));
   return dir;
@@ -191,6 +191,20 @@ describe("buildSiteData", () => {
     expect(portal.synths).toHaveLength(1);
     expect(portal.synths[0]!.releases).toEqual([]);
     expect(portal.synths[0]!.keyboards).toEqual([]);
+  });
+
+  it("publishes no releases for a firmware without a synth.md or origin external, whatever its catalog.json holds", async () => {
+    const f = await fixture(["1.0"]);
+    const d = join(f.repo, "synths/extra");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "synth.json"), JSON.stringify({ id: "extra", name: "Extra", ident: "957",
+      packageName: "extra-{version}{suffix}.fwsc", models: { "": "SMK-37 Pro" }, platforms: {} }));
+    writeFileSync(join(d, "catalog.json"), JSON.stringify({ id: "extra", name: "Extra", summary: "s", license: "GPL-3.0-only",
+      notes: [], releases: [{ version: "2.0", date: "2026-11-01", packages: [{ instrument: "smk37-pro",
+        file: "firmware/extra/2.0/extra-2.0.fwsc", identity: "SMK-37 Pro_957", sha256: "0".repeat(64), size: 1 }] }] }));
+    const { catalog } = await build(f);
+    expect(catalog.firmwares.find((x) => x.id === "extra")!.releases).toEqual([]);
+    expect(JSON.parse(readFileSync(join(f.out, "catalog.json"), "utf8")).firmwares.find((x: { id: string }) => x.id === "extra").releases).toEqual([]);
   });
 
   it("refuses a -local file in the release directory", async () => {
