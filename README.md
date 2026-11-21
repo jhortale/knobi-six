@@ -7,8 +7,11 @@ running on the keyboard itself. The design is in
 the OB-6 reference it follows in [docs/ob6-reference.md](docs/ob6-reference.md), the work plan in
 [docs/superpowers/plans/2026-11-16-standalone-phase1.md](docs/superpowers/plans/2026-11-16-standalone-phase1.md).
 
-> **Status: in development, not installable yet.** Phases 1, 2 (2A, 2B) and 3 (the sequencer) are built; nothing has
-> been tried on a keyboard. Do not install it. Its identity (name, data, `SMK-37 Pro_956`): [docs/IDENTITY.md](docs/IDENTITY.md).
+> **Status: beta.** Phases 1, 2 (2A, 2B) and 3 (the sequencer) are built and have passed the smoke test
+> ([docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) §2, §5, §6) on one SMK-37 Pro; the Elite and MKE-P37 builds have not been
+> tried on a keyboard yet. Unofficial firmware, free and without warranty: back up your keyboard first
+> ([docs/BACKUP.md](docs/BACKUP.md)) and install it at your own risk. Its identity (name, data, `SMK-37 Pro_956`):
+> [docs/IDENTITY.md](docs/IDENTITY.md).
 
 The browser installer, knobi-flash (Web MIDI; not published yet): [docs/WEB_INSTALLER.md](docs/WEB_INSTALLER.md).
 

@@ -1,8 +1,9 @@
 {
-  "what": "The smallest firmware for the M-Vave SMK-37 to build your own on: a sine on the keys and pads with velocity, USB MIDI in and out, and every control shown on the screen. The update path, USB rescue, audio, pads, LEDs and flash storage are done; the app is one short file.",
-  "author": "fc79",
+  "what": "A six-voice polysynth inspired by the OB-6, running on the keyboard itself: two oscillators with sub and noise, a filter that sweeps from low-pass to high-pass, two envelopes, LFO and cross-mod, arpeggiator, step sequencer and patch memory, every knob shown on the screen.",
+  "author": "Lennox Hortale",
   "kinds": [
-    "other"
+    "synth"
   ],
-  "image": "docs/card.png"
+  "image": "synths/knobi-six/card.png",
+  "sounds": "none - all synthesised"
 }
