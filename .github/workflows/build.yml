@@ -1,5 +1,6 @@
 # KNOBI-SIX: device build + host tests + the CPU gate (fm1-emu job) + the second core in fm1-emu (cpu1-emu job, KNOBI_CPU1=1,
-# never the default) on every push to main (the trunk) and the phase branches, on every pull request into main, and on
+# never the default; only on main, on demand, or when the second core changes: see the changes job) on every push to main
+# (the trunk) and the phase branches, on every pull request into main, and on
 # demand; uploads the package, map and disassembly. (release.yml
 # publishes tagged releases.) Toolchain and SDK as in release.yml.
 name: build
@@ -114,7 +115,27 @@ jobs:
   # pinned, dual core): start + ping, nostart, hang, flaky core 1; Task 3: the voices on two cores bit-exact with one,
   # a hung voice job, WRITE + autosave with DUAL CORE on (tests/cpu1_emu/); Task 4: the CPU1 probe package (its own
   # artifact, knobi-six-cpu1probe) and its image in the emulator, plain and with a flaky core 1. Builds and emulates only.
+  # cpu1-emu takes ~21 min and used most of November's Actions minutes, so it runs only on main, on manual dispatch,
+  # and when a push or pull request touches the second core or what decides the image (.github/scripts/cpu1-changed.sh).
+  # Elsewhere it is skipped, which counts as passing for main's required check.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      cpu1: ${{ steps.cpu1.outputs.cpu1 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: cpu1
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: echo "cpu1=$(sh .github/scripts/cpu1-changed.sh "$EVENT" "$REF" "$BASE")" | tee -a "$GITHUB_OUTPUT"
+
   cpu1-emu:
+    needs: changes
+    if: needs.changes.outputs.cpu1 == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
