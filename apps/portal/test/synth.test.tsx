@@ -111,6 +111,39 @@ describe("synth page: install", () => {
     await until(() => text($("#packages")).includes("KNOBI-SIX 1.0"));
   });
 
+  it("the release cannot be switched while an install runs: no switch, and the install reaches Done", async () => {
+    const { $, dev } = await page();
+    $("#connect")!.click();
+    await until(() => text($("#device")).includes("SMK-37 Pro_016"));
+    $("#backup")!.click();
+    await until(() => !$<HTMLButtonElement>("#install")!.disabled);
+    $("#install")!.click();
+    const other = () => $<HTMLButtonElement>("[data-release='0.9'] button[data-install-release]")!;
+    await until(() => other().disabled);
+    other().click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(text($("[data-selected-release]"))).toContain("1.0");
+    await until(() => text($("#result")).includes("SMK-37 Pro_956"), 8000);
+    expect(dev.bad).toBe(0);
+    expect(text($("[data-selected-release]"))).toContain("1.0");
+    await until(() => !other().disabled);   // free again once it is done
+  });
+
+  it("while an older release installs, \"install the current\" is disabled too", async () => {
+    const { $ } = await page();
+    $("[data-release='0.9'] button[data-install-release]")!.click();
+    await until(() => !!$("[data-use-current]"));
+    $("#connect")!.click();
+    await until(() => text($("#packages")).includes("KNOBI-SIX 0.9"));
+    $("#backup")!.click();
+    await until(() => !$<HTMLButtonElement>("#install")!.disabled);
+    $("#install")!.click();
+    await until(() => $<HTMLButtonElement>("[data-use-current]")!.disabled);
+    $("[data-use-current]")!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(text($("[data-selected-release]"))).toContain("0.9");
+  });
+
   it("the backup instructions link points at the site's backup.txt", async () => {
     const { $ } = await page();
     expect($("label[for=backup] a")!.getAttribute("href")).toBe("/midi-chlorian/backup.txt");

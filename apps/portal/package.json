@@ -7,7 +7,7 @@
   "description": "midi-chlorian, the site: the home page and a page per synth with its installer, downloads and releases.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && node scripts/prerender.ts --dist dist --content test/fixtures/content.json",
+    "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "fixtures": "node scripts/make-fixtures.ts"

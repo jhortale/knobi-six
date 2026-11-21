@@ -2,7 +2,7 @@
 // A synth's page: its header and side box, "Install on my keyboard" (the shared installer, offering only the selected
 // release: the current one, or an older one picked with its "Install <version>"), the downloads of that release, and
 // the releases with their notes (the current one open, the older ones folded).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Catalog } from "@knobi/catalog";
 import type { PortalRelease, PortalSynth } from "@knobi/content";
 import { Installer, InstallerPanel, type InstallerDeps } from "@knobi/installer-ui";
@@ -23,6 +23,8 @@ export function size(n: number): string {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const noSubscribe = () => () => {};
 
 const dirOf = (url: string) => url.slice(0, url.lastIndexOf("/") + 1);
 
@@ -66,8 +68,8 @@ function Downloads({ site, synth, release, catalog }: { site: Site; synth: Porta
   );
 }
 
-function Releases({ releases, selected, onInstall }: {
-  releases: PortalRelease[]; selected: string; onInstall: (version: string) => void;
+function Releases({ releases, selected, busy, onInstall }: {
+  releases: PortalRelease[]; selected: string; busy: boolean; onInstall: (version: string) => void;
 }) {
   return (
     <section className={panel}>
@@ -83,7 +85,7 @@ function Releases({ releases, selected, onInstall }: {
           <div className="notes mt-2 text-sm [&_a]:underline [&_ul]:list-disc [&_ul]:pl-5"
             dangerouslySetInnerHTML={{ __html: r.notesHtml }} />
           {r.version !== selected && (
-            <Button data-install-release variant="secondary" size="sm" className="mt-2 border"
+            <Button data-install-release variant="secondary" size="sm" className="mt-2 border" disabled={busy}
               onClick={() => onInstall(r.version)}>Install {r.version}</Button>
           )}
         </details>
@@ -109,7 +111,10 @@ export function SynthPage({ site, synth, catalog, deps }: {
     return new Installer({ ...deps, catalogUrl, fetch: releaseFetch(deps.fetch, site.base, catalogUrl, synth.id, version) });
   }, [version, synth.id, site.base, deps]);
 
+  // while it writes, the release stays: switching would remount the panel and leave the install running unseen
+  const busy = useSyncExternalStore(installer?.subscribe ?? noSubscribe, () => installer?.getState().busy ?? false);
   const pick = (v: string) => {
+    if (busy) return;
     setVersion(v);
     install.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   };
@@ -146,7 +151,8 @@ export function SynthPage({ site, synth, catalog, deps }: {
               {synth.name} {release.version}
               {release.current ? " (the current release)" : <>
                 , an older release ·{" "}
-                <button data-use-current type="button" className="cursor-pointer text-primary underline"
+                <button data-use-current type="button" disabled={busy}
+                  className="cursor-pointer text-primary underline disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => current && pick(current.version)}>install the current {current?.version} instead</button>
               </>}
             </p>
@@ -156,7 +162,7 @@ export function SynthPage({ site, synth, catalog, deps }: {
       </section>
 
       {release && <Downloads site={site} synth={synth} release={release} catalog={catalog} />}
-      {synth.releases.length > 0 && <Releases releases={synth.releases} selected={version!} onInstall={pick} />}
+      {synth.releases.length > 0 && <Releases releases={synth.releases} selected={version!} busy={busy} onInstall={pick} />}
     </div>
   );
 }
