@@ -97,14 +97,15 @@ jobs:
           MODEL=mke sh build.sh --release "$V"
           sh build.sh --release "$V"
           ls -l build/knobi-six-"$V"*.fwsc
-          (cd build && sha256sum knobi-six-"$V"*.fwsc > SHA256SUMS)
 
-      - name: Source archive (tags only; the GPL source next to the packages on knobi-flash)
+      - name: Source archive and SHA256SUMS (tags only; the GPL source next to the packages on the portal)
         if: needs.meta.outputs.release == 'true'
         run: |
           # the OB-6 factory bank (Sequential's data) is never committed, so it is never in the archive
           test -z "$(git ls-files firmware/gen/factory_bank.h)"
           git archive --format=tar.gz --prefix="knobi-six-$V/" -o "build/knobi-six-$V-src.tar.gz" "$GITHUB_REF_NAME"
+          # SHA256SUMS covers every file of the release: the packages and the source archive
+          (cd build && sha256sum knobi-six-"$V"*.fwsc "knobi-six-$V-src.tar.gz" > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:

@@ -36,7 +36,7 @@ function releaseDir(over: Files = {}, drop: string[] = [], sums?: (s: Record<str
   const s: Record<string, string> = {};
   for (const [n, b] of Object.entries(files)) {
     writeFileSync(join(dir, n), b);
-    if (n.endsWith(".fwsc")) s[n] = sha(b);
+    if (n.endsWith(".fwsc") || n.endsWith("-src.tar.gz")) s[n] = sha(b);
   }
   sums?.(s);
   writeFileSync(join(dir, "SHA256SUMS"), Object.entries(s).map(([n, h]) => `${h}  ${n}\n`).join(""));
@@ -87,6 +87,9 @@ describe("verifyReleaseDir", () => {
     ["a cpu1 file", () => releaseDir({ "knobi-six-cpu1probe.fwsc": makePackage({ product: "SMK-37 Pro_956" }) }), /cpu1probe/],
     ["a wrong hash", () => releaseDir({}, [], (s) => { s["knobi-six-1.0.fwsc"] = "0".repeat(64); }), /SHA256SUMS/],
     ["a wrong identity", () => releaseDir({ "knobi-six-1.0.fwsc": makePackage({ product: "SMK-37 Pro_900" }) }), /SMK-37 Pro_900/],
+    ["a source archive without a SHA256SUMS line", () => releaseDir({}, [], (s) => { delete s["knobi-six-1.0-src.tar.gz"]; }), /knobi-six-1\.0-src\.tar\.gz.*SHA256SUMS/],
+    ["a source archive whose SHA256SUMS line is wrong", () => releaseDir({}, [], (s) => { s["knobi-six-1.0-src.tar.gz"] = "0".repeat(64); }), /knobi-six-1\.0-src\.tar\.gz.*SHA256SUMS/],
+    ["another source archive", () => releaseDir({ "evil-9.9-src.tar.gz": "x" }), /evil-9\.9-src\.tar\.gz/],
     ["a missing source archive", () => releaseDir({}, ["knobi-six-1.0-src.tar.gz"]), /knobi-six-1\.0-src\.tar\.gz/],
   ];
   it.each(refusals)("refuses %s", async (_n, dir, msg) => {

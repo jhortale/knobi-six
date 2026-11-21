@@ -100,7 +100,7 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
  * The release rules for one synth's directory of files: only X.Y versions; every .fwsc named as synth.json says
  * (never -local, cpu1 or a dev build), with a matching SHA256SUMS line, passing loadPackage (identity, loader mark) and
- * carrying the synth's identity. SHA256SUMS and the -src.tar.gz are skipped. Throws a message naming the file.
+ * carrying the synth's identity. The -src.tar.gz must be named <synth>-<version>-src.tar.gz and match its SHA256SUMS line. Throws a message naming the file.
  */
 export function checkReleaseFiles(repoRoot: string, synth: string, version: string, dir: string): CheckedPackage[] {
   const meta = readSynth(repoRoot, synth);
@@ -122,7 +122,16 @@ export function checkReleaseFiles(repoRoot: string, synth: string, version: stri
   }
   const out: CheckedPackage[] = [];
   for (const f of readdirSync(dir).sort()) {
-    if (f === "SHA256SUMS" || f.endsWith("-src.tar.gz")) continue;
+    if (f === "SHA256SUMS") continue;
+    if (f.endsWith("-src.tar.gz")) {
+      // the GPL source: only `<synth>-<version>-src.tar.gz`, and its hash must be in SHA256SUMS like the packages'
+      if (f !== `${meta.id}-${version}-src.tar.gz`) {
+        throw new Error(`${f}: not the source archive of ${meta.id} ${version} (${meta.id}-${version}-src.tar.gz; refused)`);
+      }
+      const h = createHash("sha256").update(readFileSync(join(dir, f))).digest("hex");
+      if (sums.get(f) !== h) throw new Error(`${f}: its SHA256SUMS line is missing or does not match`);
+      continue;
+    }
     const m = nameRe.exec(f);
     if (!m) throw new Error(`${f}: not a release package of ${meta.id} ${version} (refused: never published)`);
     const raw = new Uint8Array(readFileSync(join(dir, f)));
