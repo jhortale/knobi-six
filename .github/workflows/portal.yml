@@ -1,5 +1,5 @@
-# midi-chlorian, the portal: builds the site from `main` and deploys it to jhortale/midi-chlorian (branch gh-pages,
-# https://jhortale.github.io/midi-chlorian/). Published = merged into main (docs/PORTAL.md). The site's data (content.json,
+# midi-chlorian, the portal: builds the site from `main` and deploys it to this repository's GitHub Pages
+# (https://jhortale.github.io/midi-chlorian/, actions/deploy-pages). Published = merged into main (docs/PORTAL.md). The site's data (content.json,
 # catalog.json, firmware/, synth images) is built by packages/content's site CLI from the GitHub releases named by the
 # release files on main, every file re-checked; the repository at the deployed commit is published beside it as
 # source/midi-chlorian-src-<commit>.tar.gz with LICENSE and a README (the GPL source of what is served); the app shell is built by vite; prerender.ts then writes a page per synth
@@ -38,6 +38,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      pages: write             # actions/deploy-pages
+      id-token: write          # its OIDC token
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,13 +130,11 @@ jobs:
           fi
           touch "$dist/.nojekyll"
 
-      - name: Deploy to jhortale/midi-chlorian (gh-pages)
-        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453  # v4.1.0
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
         with:
-          deploy_key: ${{ secrets.MIDI_CHLORIAN_DEPLOY_KEY }}
-          external_repository: jhortale/midi-chlorian
-          publish_branch: gh-pages
-          publish_dir: apps/portal/dist
-          force_orphan: true
-          user_name: 'github-actions[bot]'
-          user_email: '41898282+github-actions[bot]@users.noreply.github.com'
+          path: apps/portal/dist
+
+      - name: Deploy to GitHub Pages
+        id: pages
+        uses: actions/deploy-pages@v4

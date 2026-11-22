@@ -50,7 +50,7 @@ describe.skipIf(!existsSync(dist))("dist/", () => {
     expect(readFileSync(join(dist, "backup.txt"), "utf8")).toContain("Backing up the SMK-37's flash");
   });
 
-  it("links nothing in the private repo", () => {
+  it("links nothing at the repository's old name (knobi-six)", () => {
     for (const f of files(dist).filter((x) => !x.endsWith(".map"))) {
       expect(readFileSync(f, "utf8").includes("github.com/jhortale/knobi-six"), f).toBe(false);
     }

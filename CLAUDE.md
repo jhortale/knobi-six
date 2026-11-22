@@ -1,7 +1,7 @@
 # KNOBI-SIX
 
 Standalone OB-6-inspired polysynth firmware for the M-VAVE SMK-37 Pro. A clone of fc79/smk37-base (remote `upstream`);
-`origin` is the private repo jhortale/knobi-six. Trunk: `main` (the default branch; work lands there through pull
+`origin` is the public repo jhortale/midi-chlorian (renamed from knobi-six; site: https://jhortale.github.io/midi-chlorian/). Trunk: `main` (the default branch; work lands there through pull
 requests). `phase1` is where Phases 1-3 were built, kept as it was when `main` started from it (2026-11-20).
 
 ## Binding documents

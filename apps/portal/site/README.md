@@ -17,7 +17,7 @@ The site, the installer and the firmware are free software under the GNU General
 (`LICENSE`). The complete source of the deployed site, the whole repository at the deployed commit, is
 `source/midi-chlorian-src-<commit>.tar.gz` (linked from every page's footer, `source/`). Each release's own source is
 published next to its packages: `firmware/knobi-six/<version>/knobi-six-<version>-src.tar.gz`. The upstream repository
-is <https://github.com/jhortale/knobi-six>.
+is <https://github.com/jhortale/midi-chlorian>.
 
 ## Credits
 
