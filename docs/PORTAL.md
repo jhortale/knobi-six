@@ -2,7 +2,7 @@
 
 The site at <https://jhortale.github.io/midi-chlorian/>: a home page, a page per synth (description, the installer,
 downloads, releases and their notes). Static, built from this repository's `main` by `.github/workflows/portal.yml` and
-published to the public repo `jhortale/midi-chlorian` (branch `gh-pages`). Design: `docs/superpowers/specs/2026-11-20-portal-design.md`
+published by this repository's GitHub Pages (`actions/deploy-pages`). Design: `docs/superpowers/specs/2026-11-20-portal-design.md`
 (and its amendment of 2026-11-21: the content is Markdown with frontmatter, no Sanity).
 
 ## What lives where
@@ -21,14 +21,11 @@ so in notes and descriptions **do not use `#anchor` links or relative links**: w
 
 ## One-time setup (João)
 
-1. Create the **public** repo `jhortale/midi-chlorian` (empty). Settings → Pages: deploy from branch `gh-pages`, `/`.
-2. Make a deploy key: `ssh-keygen -t ed25519 -N "" -C midi-chlorian-deploy -f midi-chlorian-deploy`.
-   In `jhortale/midi-chlorian` → Settings → Deploy keys: add `midi-chlorian-deploy.pub`, **allow write access**.
-   In `jhortale/knobi-six` → Settings → Secrets and variables → Actions: secret `MIDI_CHLORIAN_DEPLOY_KEY` = the
-   private key `midi-chlorian-deploy`. Then delete both files.
-3. In `jhortale/knobi-six` → Settings → Actions → General → Workflow permissions: tick **Allow GitHub Actions to create and
+1. `jhortale/midi-chlorian` (this repository, public; renamed from `knobi-six` on 2026-11-21, GitHub redirects the old
+   name) → Settings → Pages → Source: **GitHub Actions**.
+2. In `jhortale/knobi-six` → Settings → Actions → General → Workflow permissions: tick **Allow GitHub Actions to create and
    approve pull requests**. The release workflow's `release-pr` job needs it to open the release PR.
-4. Branch protection on `main` stays as it is; release PRs are merged with the admin bypass (below).
+3. Branch protection on `main` stays as it is; release PRs are merged with the admin bypass (below).
 
 ## The release flow
 
@@ -65,7 +62,7 @@ change. To correct a release, publish a new version.
 
 ## What a deploy publishes
 
-`portal.yml` publishes to `jhortale/midi-chlorian` (branch `gh-pages`, orphan): the app, a page per synth and `404.html`,
+`portal.yml` publishes to this repository's GitHub Pages: the app, a page per synth and `404.html`,
 `content.json` and `catalog.json`, `firmware/<synth>/<version>/` (packages, `SHA256SUMS`, the release's source archive),
 synth images, and **the source of the site itself**: `source/midi-chlorian-src-<commit>.tar.gz` (`git archive` of the whole
 repository at the deployed commit, which holds no token and no OB-6 factory bank; the build asserts the latter), a
@@ -78,7 +75,7 @@ release's `-src.tar.gz`. A release's `SHA256SUMS` covers the packages **and** `<
 
 A `-local` or `cpu1` file, any token or key. The site builder checks the data and `portal.yml` checks the merged site once
 more (`-local`/`cpu1` file names, `ghp_`, `github_pat_`, `-----BEGIN`, and the workflow's own token; the source archive is
-skipped by the text scan, it being the repository itself); either one stops the deploy. Every file on the site comes from a release asset of `jhortale/knobi-six` uploaded by `github-actions[bot]`.
+skipped by the text scan, it being the repository itself); either one stops the deploy. Every file on the site comes from a release asset of `jhortale/midi-chlorian` uploaded by `github-actions[bot]`.
 
 ## Working on it
 

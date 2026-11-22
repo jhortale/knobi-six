@@ -44,7 +44,7 @@ async function main(argv: string[]): Promise<number> {
   const out = resolve(a.out);
   assertEmptyOut(out); // before any download: --out is never a directory that already holds files
   const repoRoot = a.repoRoot || repoRootFrom(process.cwd());
-  const repo = process.env.GITHUB_REPOSITORY || "jhortale/knobi-six";
+  const repo = process.env.GITHUB_REPOSITORY || "jhortale/midi-chlorian";
   const content = readContent(repoRoot);
   const scratch = mkdtempSync(join(tmpdir(), "site-releases-"));
   // built in a fresh sibling of --out and renamed into place only after every check: the only directory this tool
